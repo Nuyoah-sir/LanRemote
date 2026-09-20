@@ -46,7 +46,8 @@ dotnet test LanRemote.sln -c Debug --no-build
 M0 仓库骨架 —— **已完成**（build PASS / 87 tests PASS）
 M1 设备身份与安全存储 —— **已完成**（build PASS / 175 tests PASS）
 M1.1 Security Hardening —— **已完成**（build PASS / 189 tests PASS，git 基线 `664e558`）
-M2 网卡筛选 + UDP 发现 —— 下一步（用户要求 M1.1 后停止，等指令）
+M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last code commit `104f296`）
+M2 网卡筛选 + UDP 发现 —— 下一步（M1 系列已封板，不要再打磨 M1）
 M3~M11 —— 未开始
 
 ## M1 关键存储事实（后续里程碑会依赖）
@@ -60,3 +61,6 @@ M3~M11 —— 未开始
 - 证书加载用 `X509CertificateLoader.LoadPkcs12(pfx, pwd, EphemeralKeySet)`（ADR-018，取代 ADR-016）；
   **M3 必须补真实 SslStream 握手集成测试**才能确认这个策略够用，没测出来之前不许改回 PersistKeySet
 - `DpapiSecretVault.UpdateAsync` 是 copy-on-write：先落盘成功才替换缓存，失败时磁盘与内存同时保持旧状态
+- `ReadAsync` 只发 `Clone()`；证书已存在时加载走只读路径，**不重写 secrets.bin**
+- `TryDecodeExact` 失败时 out 是 `Array.Empty<byte>()`（已 ZeroMemory），不会返回部分解码的秘密字节
+- HANDOFF 记账用 `Last code commit` + `Working tree at validation`，**不写 HEAD hash**（避免自引用）
