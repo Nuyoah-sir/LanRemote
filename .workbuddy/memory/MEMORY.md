@@ -26,6 +26,17 @@ Windows 局域网屏幕共享与远程控制工具（自用）。**无账号、�
 `CryptographicOperations.FixedTimeEquals`、Windows DPAPI、.NET 自带 X509/SslStream。
 禁止自研算法、XOR 混淆、Base64 当加密、`Random()` 生成密码、MD5/SHA1 做认证。
 
+## 出验收包（两机验收用）
+
+```bash
+source scripts/env.sh
+dotnet publish src/LanRemote.App/LanRemote.App.csproj -c Release -r win-x64 \
+  --self-contained true -o artifacts/m2.1-acceptance
+python scripts/acceptance/make-package.py     # → LanRemote-<ver>-win-x64.zip
+```
+自包含包约 61 MiB / 444 条目，目标机无需装 runtime。手册 `docs/TWO_MACHINE_ACCEPTANCE.md`。
+两个 `.ps1` 必须是 **UTF-8 with BOM**（PS 5.1 否则中文乱码），用 `scripts/acceptance/add-bom.py` 加。
+
 ## 常用命令
 
 ```bash
@@ -49,7 +60,7 @@ M1.1 Security Hardening —— **已完成**（build PASS / 189 tests PASS，git
 M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last code commit `104f296`）
 M1.3 ECDSA Certificate KeyUsage Fix —— **已完成**（build PASS / 200 tests PASS，Last code commit `9e75fce`）
 M2 网卡筛选 + UDP 发现 —— **已完成**（build PASS / 382 tests PASS，Last code commit `857eaa6`）
-M2.1 Discovery Final Fix —— **code 已完成**（build PASS / 408 tests PASS，Last code commit `fb202eb`）
+M2.1 Discovery Final Fix —— **code 已完成**（build PASS / 408 tests PASS，Last code commit `313c542`）
   ⚠️ 两机手工 DoD **NOT RUN**（M2.1 修完仍是 NOT RUN，未验收不得进 M3）
 M3 TLS Host/Client + 同子网校验 —— 下一步（等两机验收回填后才能开工）
 M3~M11 —— 未开始
