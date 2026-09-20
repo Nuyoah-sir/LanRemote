@@ -12,8 +12,9 @@ namespace LanRemote.Security.Secrets;
 /// <list type="bullet">
 /// <item><description>所有访问都经过一把 <see cref="SemaphoreSlim"/>，避免并发创建/覆盖；</description></item>
 /// <item><description>写文件用「临时文件 + 原子替换」，避免写到一半断电留下残缺文件；</description></item>
-/// <item><description>外部拿不到可变的 <see cref="SecretBundle"/> 实例，只能通过投影函数读、通过
-/// <see cref="UpdateAsync{TResult}"/> 写，防止「改了但没落盘」；</description></item>
+/// <item><description>外部拿不到可变的 <see cref="SecretBundle"/> 实例：<see cref="ReadAsync{TResult}"/>
+/// 交给投影函数的是缓存实例的 <b>Clone()</b>，<see cref="UpdateAsync{TResult}"/> 则只把 working copy
+/// 交出去；因此任何一条路径上「顺手改一下 bundle」都影响不到缓存，更影响不到磁盘。</description></item>
 /// <item><description>日志只记录结构性事件（是否新建、版本号），绝不记录任何 secret 字段。</description></item>
 /// </list>
 /// </remarks>
@@ -39,12 +40,19 @@ public sealed class DpapiSecretVault
     public string SecretsFilePath => _paths.SecretsFilePath;
 
     /// <summary>
-    /// 只读访问：把 bundle 投影为调用方需要的值。
+    /// 只读访问：把 bundle 的副本投影为调用方需要的值。
     /// </summary>
     /// <typeparam name="TResult">投影结果类型。</typeparam>
-    /// <param name="projection">投影函数，在函数内不要保存 bundle 引用。</param>
+    /// <param name="projection">投影函数。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>投影结果。</returns>
+    /// <remarks>
+    /// <b>M1.2 修复</b>：投影函数拿到的是缓存实例的 <see cref="SecretBundle.Clone"/>。
+    /// 旧实现直接把缓存实例交出去，等于允许调用方在不经过 <see cref="UpdateAsync{TResult}"/> 的情况下
+    /// 改掉内存状态，造成「内存改了、磁盘没改」——正是 <see cref="UpdateAsync{TResult}"/> 里
+    /// 用 copy-on-write 修掉的那类撕裂状态。
+    /// 代价是每次读多一次浅拷贝（字段都是值/Guid/string，开销可忽略）。
+    /// </remarks>
     public async Task<TResult> ReadAsync<TResult>(
         Func<SecretBundle, TResult> projection,
         CancellationToken cancellationToken = default)
@@ -55,7 +63,7 @@ public sealed class DpapiSecretVault
         try
         {
             SecretBundle bundle = await EnsureLoadedCoreAsync(cancellationToken).ConfigureAwait(false);
-            return projection(bundle);
+            return projection(bundle.Clone());
         }
         finally
         {

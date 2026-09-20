@@ -166,6 +166,39 @@ public sealed class CrockfordBase32Tests
     }
 
     [Fact]
+    public void TryDecodeExact_MatchingLength_ReturnsDecodedBytes()
+    {
+        byte[] key = RandomNumberGenerator.GetBytes(16);
+        string encoded = CrockfordBase32.Encode(key);
+
+        Assert.True(CrockfordBase32.TryDecodeExact(encoded, 16, out byte[] decoded));
+        Assert.Equal(key, decoded);
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(15)]
+    [InlineData(17)]
+    [InlineData(32)]
+    public void TryDecodeExact_LengthMismatch_ReturnsEmptyInsteadOfPartialSecret(int actualLength)
+    {
+        // 一个「Base32 本身合法、但解码长度不是 16 字节」的输入。
+        // M1.2 语义：失败时不得把部分解码出的字节留给调用方（M4 校验访问密钥时会用到）。
+        string encoded = CrockfordBase32.Encode(RandomNumberGenerator.GetBytes(actualLength));
+
+        Assert.False(CrockfordBase32.TryDecodeExact(encoded, 16, out byte[] bytes));
+        Assert.Empty(bytes);
+        Assert.Same(Array.Empty<byte>(), bytes);
+    }
+
+    [Fact]
+    public void TryDecodeExact_MalformedInput_AlsoReturnsEmpty()
+    {
+        Assert.False(CrockfordBase32.TryDecodeExact("!!!", 16, out byte[] bytes));
+        Assert.Empty(bytes);
+    }
+
+    [Fact]
     public void Group_InsertsSeparators()
     {
         // 从左往右每 groupSize 个字符插入一个 '-'，最后一组拿到剩下的部分。

@@ -260,30 +260,63 @@ public sealed class DeviceCertificateTests : IDisposable
     }
 
     [Fact]
+    public async Task ExistingCertificate_LoadDoesNotRewriteSecretsFile()
+    {
+        (_, DeviceCertificateService firstBoot) = CreateServices();
+        DeviceCertificate first = await firstBoot.GetOrCreateAsync();
+
+        byte[] fileAfterCreation = await File.ReadAllBytesAsync(_root.Paths.SecretsFilePath);
+
+        // 模拟冷启动：全新的 vault + 全新的证书服务，只读磁盘。
+        (_, DeviceCertificateService secondBoot) = CreateServices();
+        DeviceCertificate second = await secondBoot.GetOrCreateAsync();
+
+        byte[] fileAfterSecondBoot = await File.ReadAllBytesAsync(_root.Paths.SecretsFilePath);
+
+        // 指纹必须一致，且 secrets.bin 必须 byte-for-byte 未被重写。
+        Assert.Equal(first.Sha256FingerprintHex, second.Sha256FingerprintHex);
+        Assert.Equal(fileAfterCreation, fileAfterSecondBoot);
+    }
+
+    [Fact]
     public async Task CertificateState_PartialStateDoesNotSilentlyReissue()
     {
-        (DpapiSecretVault firstVault, DeviceCertificateService first) = CreateServices();
-        string fingerprintBefore = (await first.GetOrCreateAsync()).Sha256FingerprintHex;
+        (DpapiSecretVault vault, DeviceCertificateService first) = CreateServices();
 
-        // 破坏成 partial state；磁盘上的原始 PFX 仍然在。
-        await firstVault.UpdateAsync(bundle => { bundle.CertificatePfxPassword = null; return true; });
+        // 1) 首次生成证书，记录指纹 A。
+        string fingerprintA = (await first.GetOrCreateAsync()).Sha256FingerprintHex;
 
-        (_, DeviceCertificateService second) = CreateServices();
-        await Assert.ThrowsAsync<InvalidDataException>(() => second.GetOrCreateAsync());
+        // 2) 只读取出「原来的」口令（绝不写日志）。
+        string originalPassword = await vault.ReadAsync(bundle => bundle.CertificatePfxPassword ?? string.Empty);
+        Assert.False(string.IsNullOrEmpty(originalPassword));
 
-        // 把口令补回去之后，恢复出来的仍是同一张证书，指纹不变。
-        await firstVault.UpdateAsync(
+        // 3) 把口令置空，制造 partial state。
+        await vault.UpdateAsync(
             bundle =>
             {
-                bundle.CertificatePfxPassword = SecretGenerator.NewPfxPassword();
+                bundle.CertificatePfxPassword = null;
                 return true;
             });
 
-        // 注意：上面的新口令与原来 PFX 的口令不符，因此重新导入会失败 ——
-        // 这正是 fail closed 期望的行为：状态损坏后不做「猜测式修复」。
-        (_, DeviceCertificateService third) = CreateServices();
-        await Assert.ThrowsAnyAsync<Exception>(() => third.GetOrCreateAsync());
+        // 4) 新服务加载必须显式失败，而不是悄悄重签一张。
+        (_, DeviceCertificateService broken) = CreateServices();
+        await Assert.ThrowsAsync<InvalidDataException>(() => broken.GetOrCreateAsync());
 
-        Assert.Equal(64, fingerprintBefore.Length);
+        // 5) 把「原来的」口令恢复回去。
+        await vault.UpdateAsync(
+            bundle =>
+            {
+                bundle.CertificatePfxPassword = originalPassword;
+                return true;
+            });
+
+        // 6) 新服务再加载，必须还是同一张证书 —— 这才是「没有被悄悄替换」的真正证明。
+        (_, DeviceCertificateService recovered) = CreateServices();
+        DeviceCertificate afterRecovery = await recovered.GetOrCreateAsync();
+
+        Assert.Equal(fingerprintA, afterRecovery.Sha256FingerprintHex);
+
+        // 口令属于秘密，不得出现在日志里。
+        Assert.False(_logs.Contains(originalPassword));
     }
 }

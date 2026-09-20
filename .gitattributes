@@ -1,0 +1,15 @@
+# git archive 导出排除项（源码审计包 / 分发 ZIP）
+#
+# .workbuddy 里存放的是本机施工记忆：包含测试机路径、设备码、证书指纹等开发环境信息。
+# 它们不是 Access Key，但也不属于产品源码必需内容。
+# 施工工具（记忆/交接）仍然需要它在 git 里，因此只从 archive 中排除，不从仓库删除。
+.workbuddy/ export-ignore
+
+# 二进制产物不做行尾规范化
+*.zip  binary
+*.pfx  binary
+*.p12  binary
+*.key  binary
+*.bin  binary
+*.png  binary
+*.jpg  binary

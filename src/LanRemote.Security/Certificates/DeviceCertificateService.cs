@@ -63,9 +63,21 @@ public sealed class DeviceCertificateService : IDisposable
         _logger = logger;
     }
 
-    /// <summary>取得设备证书；首次调用会创建并持久化。</summary>
+    /// <summary>
+    /// 取得设备证书；只有「证书确实不存在」时才会创建并写盘。
+    /// </summary>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>带私钥的证书与指纹。</returns>
+    /// <remarks>
+    /// <para><b>M1.2 修复</b>：旧实现无条件走 <see cref="DpapiSecretVault.UpdateAsync{TResult}"/>，
+    /// 即便证书早已存在，也会再做一次 DPAPI 加密与文件写入。这意味着「只是想读一下身份」
+    /// 也会触发一次写操作——在只读/受限环境下会无谓失败，也平白多一次密钥材料的搬运。</para>
+    /// <para>现在分两阶段：</para>
+    /// <list type="number">
+    /// <item><description><b>只读</b>判断 bundle 中证书字段的状态；</description></item>
+    /// <item><description>只有在「两个字段都为空」时才进入写路径，且写路径内部<b>再次</b>检查状态以防竞态。</description></item>
+    /// </list>
+    /// </remarks>
     public async Task<DeviceCertificate> GetOrCreateAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -78,6 +90,30 @@ public sealed class DeviceCertificateService : IDisposable
                 return _cached;
             }
 
+            // 第一阶段：只读，不写文件。
+            CertificateSnapshot snapshot = await _vault.ReadAsync(SnapshotCertificate, cancellationToken)
+                .ConfigureAwait(false);
+
+            switch (snapshot.State)
+            {
+                case CertificateBundleState.Present:
+                    _cached = snapshot.Certificate
+                        ?? throw new InvalidOperationException("证书状态判定与加载结果不一致。");
+
+                    _logger?.LogDebug(
+                        "已从 secrets.bin 加载设备证书（未重写文件）。指纹前缀={FingerprintPrefix}",
+                        _cached.Sha256FingerprintHex[..8]);
+                    return _cached;
+
+                case CertificateBundleState.Corrupt:
+                    throw new InvalidDataException(CorruptStateMessage);
+
+                case CertificateBundleState.Absent:
+                default:
+                    break;
+            }
+
+            // 第二阶段：确认不存在，才真正创建并写盘。
             _cached = await _vault.UpdateAsync(CreateOrLoadCore, cancellationToken).ConfigureAwait(false);
             return _cached;
         }
@@ -101,6 +137,45 @@ public sealed class DeviceCertificateService : IDisposable
         _gate.Dispose();
     }
 
+    private const string CorruptStateMessage =
+        "secrets.bin 中的设备证书状态损坏：certificatePfx 与 certificatePfxPassword 必须同时存在或同时缺失。" +
+        "已拒绝自动生成新证书，以免静默改变证书指纹。";
+
+    /// <summary>
+    /// 只读地取出 bundle 里的证书状态；证书存在时顺带载入（不写盘）。
+    /// </summary>
+    /// <param name="bundle">bundle 副本。</param>
+    /// <returns>状态快照。</returns>
+    private static CertificateSnapshot SnapshotCertificate(SecretBundle bundle)
+    {
+        bool hasPfx = !string.IsNullOrEmpty(bundle.CertificatePfx);
+        bool hasPassword = !string.IsNullOrEmpty(bundle.CertificatePfxPassword);
+
+        if (hasPfx && hasPassword)
+        {
+            X509Certificate2 certificate = ImportFromPfx(bundle.CertificatePfx!, bundle.CertificatePfxPassword!);
+            return new CertificateSnapshot(
+                CertificateBundleState.Present,
+                new DeviceCertificate(certificate, DataProtection.ComputeCertificateFingerprint(certificate)));
+        }
+
+        // 恰好只有一个字段存在 = 状态损坏。
+        return new CertificateSnapshot(
+            hasPfx || hasPassword
+                ? CertificateBundleState.Corrupt
+                : CertificateBundleState.Absent,
+            null);
+    }
+
+    /// <summary>
+    /// 写路径：只在确认证书确实不存在时才签发；否则走「已经存在」分支。
+    /// </summary>
+    /// <param name="bundle">working copy。</param>
+    /// <returns>证书与指纹。</returns>
+    /// <remarks>
+    /// 这里的重复检查不是冗余：只读阶段与写阶段之间隔着一次锁的进出，
+    /// 理论上可能有另一个调用方抢先创建了证书。这里必须同样 fail closed。
+    /// </remarks>
     private DeviceCertificate CreateOrLoadCore(SecretBundle bundle)
     {
         bool hasPfx = !string.IsNullOrEmpty(bundle.CertificatePfx);
@@ -108,27 +183,19 @@ public sealed class DeviceCertificateService : IDisposable
 
         if (hasPfx && hasPassword)
         {
-            X509Certificate2 loaded = ImportFromPfx(bundle.CertificatePfx!, bundle.CertificatePfxPassword!);
-            string loadedFingerprint = DataProtection.ComputeCertificateFingerprint(loaded);
-
-            _logger?.LogDebug(
-                "已从 secrets.bin 加载设备证书。指纹前缀={FingerprintPrefix}",
-                loadedFingerprint[..8]);
-
-            return new DeviceCertificate(loaded, loadedFingerprint);
+            // 竞态兜底：别人已经写好了，直接用那一份，绝不覆盖。
+            X509Certificate2 existing = ImportFromPfx(bundle.CertificatePfx!, bundle.CertificatePfxPassword!);
+            return new DeviceCertificate(
+                existing,
+                DataProtection.ComputeCertificateFingerprint(existing));
         }
 
-        if (!hasPfx && !hasPassword)
+        if (hasPfx || hasPassword)
         {
-            return CreateAndStoreCore(bundle);
+            throw new InvalidDataException(CorruptStateMessage);
         }
 
-        // 恰好只有一个字段存在 = 状态损坏。
-        // 这里绝不能「顺手」生成新证书：那会让证书指纹静默改变，
-        // 而 M3 的 pinning 完全依赖指纹稳定。宁可显式失败。
-        throw new InvalidDataException(
-            "secrets.bin 中的设备证书状态损坏：certificatePfx 与 certificatePfxPassword 必须同时存在或同时缺失。" +
-            "已拒绝自动生成新证书，以免静默改变证书指纹。");
+        return CreateAndStoreCore(bundle);
     }
 
     private DeviceCertificate CreateAndStoreCore(SecretBundle bundle)
@@ -206,4 +273,28 @@ public sealed class DeviceCertificateService : IDisposable
             CryptographicOperations.ZeroMemory(pfx);
         }
     }
+
+    /// <summary>
+    /// bundle 中证书字段的三种状态。
+    /// </summary>
+    private enum CertificateBundleState
+    {
+        /// <summary>两个字段都为空：尚未签发过证书。</summary>
+        Absent = 0,
+
+        /// <summary>两个字段都有：可以加载。</summary>
+        Present = 1,
+
+        /// <summary>恰好只有一个：状态损坏，必须 fail closed。</summary>
+        Corrupt = 2,
+    }
+
+    /// <summary>
+    /// 只读阶段的状态快照。
+    /// </summary>
+    /// <param name="State">状态。</param>
+    /// <param name="Certificate">状态为 <see cref="CertificateBundleState.Present"/> 时的证书，否则为 <see langword="null"/>。</param>
+    private readonly record struct CertificateSnapshot(
+        CertificateBundleState State,
+        DeviceCertificate? Certificate);
 }

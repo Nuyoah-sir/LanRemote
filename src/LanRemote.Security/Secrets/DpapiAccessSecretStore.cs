@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using LanRemote.Core.Abstractions;
 using LanRemote.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -71,9 +72,19 @@ public sealed class DpapiAccessSecretStore : IAccessSecretStore
 
     private static AccessSecret RepairAndMaterialize(SecretBundle bundle)
     {
-        if (!SecretGenerator.TryDecodeAccessKey(bundle.AccessKey, out byte[] _))
+        // 这里解码只是为了「判断合法性」，不是要拿走密钥。
+        // 所以探针字节用完必须清零，不能写成 out byte[] _ 让它躺在 GC 堆里（M1.2）。
+        byte[] probe = Array.Empty<byte>();
+        try
         {
-            bundle.AccessKey = SecretGenerator.NewAccessKey();
+            if (!SecretGenerator.TryDecodeAccessKey(bundle.AccessKey, out probe))
+            {
+                bundle.AccessKey = SecretGenerator.NewAccessKey();
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(probe);
         }
 
         return Materialize(bundle.AccessKey);

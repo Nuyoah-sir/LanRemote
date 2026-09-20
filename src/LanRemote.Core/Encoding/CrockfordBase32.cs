@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 
 namespace LanRemote.Core.Encoding;
@@ -166,6 +167,13 @@ public static class CrockfordBase32
     /// <param name="expectedByteLength">期望字节数。</param>
     /// <param name="bytes">解码结果。</param>
     /// <returns>是否合法且长度匹配。</returns>
+    /// <remarks>
+    /// <para><b>失败语义（M1.2）</b>：Base32 本身合法但长度不符时，
+    /// 已经解出来的字节会被 <see cref="CryptographicOperations.ZeroMemory"/> 清零，
+    /// 并置为 <see cref="Array.Empty{T}()"/> 后返回 <see langword="false"/>。</para>
+    /// <para>原因：这个方法未来会被用于校验用户输入的访问密钥（M4）。
+    /// 如果失败路径把「部分解码出的秘密字节」留给调用方，就等于让错误 API 泄露密钥材料。</para>
+    /// </remarks>
     public static bool TryDecodeExact(string? text, int expectedByteLength, out byte[] bytes)
     {
         if (!TryDecode(text, out bytes))
@@ -173,7 +181,14 @@ public static class CrockfordBase32
             return false;
         }
 
-        return bytes.Length == expectedByteLength;
+        if (bytes.Length == expectedByteLength)
+        {
+            return true;
+        }
+
+        CryptographicOperations.ZeroMemory(bytes);
+        bytes = Array.Empty<byte>();
+        return false;
     }
 
     /// <summary>按固定宽度插入分隔符以便人工阅读。</summary>

@@ -55,6 +55,20 @@ public static class SecretGenerator
 
     /// <summary>生成用于导出 PFX 的随机口令。</summary>
     /// <returns>Base64 形式的口令。</returns>
-    public static string NewPfxPassword() =>
-        Convert.ToBase64String(RandomNumberGenerator.GetBytes(PfxPasswordByteCount));
+    /// <remarks>
+    /// 原始随机字节在编码完成后立即清零。返回的是 <see cref="string"/>，
+    /// 而 .NET 的 string 不可变，无法可靠清零——这一限制在 <c>HANDOFF.md</c> 中如实记录。
+    /// </remarks>
+    public static string NewPfxPassword()
+    {
+        byte[] passwordBytes = RandomNumberGenerator.GetBytes(PfxPasswordByteCount);
+        try
+        {
+            return Convert.ToBase64String(passwordBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(passwordBytes);
+        }
+    }
 }

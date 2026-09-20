@@ -19,6 +19,9 @@ publish/
 *.userprefs
 *.DotSettings.user
 
+## 源码审计/分发 ZIP（由 git archive 生成，不入库）
+LanRemote-source.zip
+
 ## 测试
 TestResults/
 *.trx

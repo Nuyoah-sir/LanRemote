@@ -101,6 +101,33 @@ public sealed class DpapiSecretVaultTransactionTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadProjectionMutation_DoesNotChangeCacheOrDisk()
+    {
+        DpapiSecretVault vault = CreateVault();
+
+        // 1) 先建立稳定的旧状态 A。
+        string keyA = await vault.ReadAsync(bundle => bundle.AccessKey);
+
+        // 2) 在 projection 里故意改动拿到的实例。
+        string tampered = await vault.ReadAsync(
+            bundle =>
+            {
+                bundle.AccessKey = "TAMPERED";
+                return bundle.AccessKey;
+            });
+
+        Assert.Equal("TAMPERED", tampered);
+
+        // 3) 同一个 vault 再次读取仍必须是 A —— projection 拿到的是 clone。
+        string stillInMemory = await vault.ReadAsync(bundle => bundle.AccessKey);
+        Assert.Equal(keyA, stillInMemory);
+
+        // 4) 全新 vault 从磁盘读取也必须是 A。
+        string stillOnDisk = await CreateVault().ReadAsync(bundle => bundle.AccessKey);
+        Assert.Equal(keyA, stillOnDisk);
+    }
+
+    [Fact]
     public async Task Clone_ProducesIndependentCopy()
     {
         DpapiSecretVault vault = CreateVault();
