@@ -5,16 +5,17 @@
 
 完整施工规格位于 `LanRemote_Implementation_Package/`，当前进度见根目录的 `HANDOFF.md`。
 
-**两机手工验收尚未执行（NOT RUN）。验收手册见 [`docs/TWO_MACHINE_ACCEPTANCE.md`](docs/TWO_MACHINE_ACCEPTANCE.md)，
-便携版验收包由 `scripts/acceptance/make-package.py` 生成。验收未通过前不进入 M3。**
+**两机手工验收已于 2026-09-20 完成并通过（20/20，PASS）。** 记录见
+[`docs/TWO_MACHINE_ACCEPTANCE.md`](docs/TWO_MACHINE_ACCEPTANCE.md) 与 `HANDOFF.md` 第 9.1 节；
+便携版验收包由 `scripts/acceptance/make-package.py` 生成。
 
 ## 当前状态
 
 **版本 `0.1.0-m2`**。已完成：**M0 → M1 → M1.1（安全审计）→ M1.2 → M1.3 → M2（局域网发现）→ M2.1（发现收口修复）**。
 基线提交 `664e558`；Last code commit 见 `HANDOFF.md` 第 1 节。当前阶段测试 **408 passed / 0 failed**。
 
-**M1 已封板；M2 / M2.1 code 完成，两机手工 DoD 仍未执行（NOT RUN，见 HANDOFF 第 9 节）。
-两机验收完成前不进入 M3。**
+**M1 已封板；M2 / M2.1 code 完成，两机手工 DoD 已通过（PASS，20/20，见 HANDOFF 第 9.1 节）。
+下一步 M3 开工需用户明确指令。**
 
 - M0：solution、8 个 src 项目、4 个测试项目、WPF 主窗口、DI/日志/配置、单实例 Mutex
 - M1：稳定 deviceGuid、可派生设备码 `QPKE-2CPC` 这类形态、128-bit 访问密钥、
@@ -45,7 +46,9 @@
 ECDSA P-256 / `id-ecPublicKey` / SHA-256 自签名、5 年有效、`CA=false`、
 `KeyUsage = digitalSignature`（critical）、EKU 含 `serverAuth`、私钥 `EphemeralKeySet` 载入。
 
-下一步是 **M3 — TLS Host/Client + 同子网连接校验**（等两机手工验收结果，未验收不开工）。
+下一步是 **M3 — TLS Host/Client + 同子网连接校验**（两机验收已 PASS，开工前提满足，
+等用户下达开工指令）。M3 的硬前提：必须补真实 `SslStream` 握手集成测试来收口 ADR-018 的
+`EphemeralKeySet` 风险，测出来之前不许改回 `PersistKeySet`。
 
 ## 本机构建环境
 

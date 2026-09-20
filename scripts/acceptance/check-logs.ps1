@@ -2,6 +2,12 @@
 #
 # Run this AFTER the acceptance steps, on each machine:
 #   powershell -ExecutionPolicy Bypass -File check-logs.ps1
+#   powershell -ExecutionPolicy Bypass -File check-logs.ps1 -Since "2026-09-20 17:29"
+#
+# -Since matters: the log also holds everything from BEFORE the lab address was
+# configured (e.g. "no eligible private NIC" while the LAN was still 172.100.x.x).
+# Counting those old lines makes the verdict FAIL even though the run itself was
+# clean. Pass -Since to score only the acceptance window.
 #
 # It answers two questions:
 #   1. Did discovery actually do anything? (counts of key log events)
@@ -12,6 +18,10 @@
 #
 # SAFETY: if a key-looking token is ever found, it is printed MASKED.
 # This script must never echo a real access key to the console.
+
+param(
+    [string]$Since = ''
+)
 
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -40,6 +50,12 @@ foreach ($f in $files) {
 }
 Write-Host ""
 Write-Host ("total lines: " + $lines.Count)
+
+if ($Since -ne '') {
+    $before = $lines.Count
+    $lines = @($lines | Where-Object { $_.Length -ge 16 -and $_.Substring(0, 16) -ge $Since })
+    Write-Host ("scoring only -Since " + $Since + " : " + $before + " -> " + $lines.Count + " lines")
+}
 Write-Host ""
 
 Write-Host "--- key events -------------------------------------------" -ForegroundColor Cyan
@@ -88,9 +104,14 @@ Write-Host ""
 
 Write-Host "=========================================================" -ForegroundColor Cyan
 if ($noNic -gt 0) {
-    Write-Host " VERDICT: FAIL - this machine has no private IPv4 NIC." -ForegroundColor Red
+    Write-Host (" VERDICT: FAIL - no private IPv4 NIC was found (" + $noNic + " time(s)).") -ForegroundColor Red
+    if ($Since -eq '') {
+        Write-Host "          NOTE: -Since was not given, so this counts the WHOLE log, including" -ForegroundColor Yellow
+        Write-Host "          runs made BEFORE the lab address was configured (very common)." -ForegroundColor Yellow
+        Write-Host '          Re-run with  -Since "YYYY-MM-DD HH:mm"  to score only that window.' -ForegroundColor Yellow
+    }
 } elseif ($leak -gt 0) {
-    Write-Host (" VERDICT: FAIL - possible access key in log (" + $leak + " hit(s))." -ForegroundColor Red
+    Write-Host (" VERDICT: FAIL - possible access key in log (" + $leak + " hit(s)).") -ForegroundColor Red
     Write-Host "          Report as a BLOCKER and do not enter M3." -ForegroundColor Red
 } elseif ($started -eq 0) {
     Write-Host " VERDICT: INCONCLUSIVE - discovery never started." -ForegroundColor Yellow

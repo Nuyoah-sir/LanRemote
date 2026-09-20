@@ -1,0 +1,5 @@
+2026-09-20 17:51:03.892 [Debug      ] LanRemote.Discovery.LanDiscoveryService: 已回应来自 192.168.1.20 的 probe：unicast → 192.168.1.20:45872（不使用源端口 54670）。
+2026-09-20 17:51:03.893 [Debug      ] LanRemote.Discovery.LanDiscoveryService: 已回应来自 192.168.1.20 的 probe：unicast → 192.168.1.20:45872（不使用源端口 54670）。
+2026-09-20 17:51:03.896 [Information] LanRemote.Discovery.LanDiscoveryService: 发现设备 DESKTOP-CU2263D（3ERD-R74V）于 192.168.1.20，能力=view,control。
+2026-09-20 17:57:33.435 [Information] LanRemote.Discovery.LanDiscoveryService: 设备离线：DESKTOP-CU2263D（3ERD-R74V）192.168.1.20。
+WATCH-END

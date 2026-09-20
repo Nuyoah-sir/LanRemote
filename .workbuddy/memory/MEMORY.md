@@ -61,7 +61,10 @@ M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last 
 M1.3 ECDSA Certificate KeyUsage Fix —— **已完成**（build PASS / 200 tests PASS，Last code commit `9e75fce`）
 M2 网卡筛选 + UDP 发现 —— **已完成**（build PASS / 382 tests PASS，Last code commit `857eaa6`）
 M2.1 Discovery Final Fix —— **code 已完成**（build PASS / 408 tests PASS，Last code commit `313c542`）
-  ⚠️ 两机手工 DoD **NOT RUN**（M2.1 修完仍是 NOT RUN，未验收不得进 M3）
+  验收物料 `905fcc8`（set-lab-ip v2 + 手册重写，无产品代码）
+  ⚠️ 两机手工 DoD **NOT RUN**（未验收不得进 M3）
+  ℹ️ 但日志已实证：真实链路上 probe 回应走 `192.168.1.20:45872` 而非随机源端口 50193，
+     且双向发现 + TTL 离线 + 重新发现全部成立（见当日日志/HANDOFF §9）
 M3 TLS Host/Client + 同子网校验 —— 下一步（等两机验收回填后才能开工）
 M3~M11 —— 未开始
 
@@ -102,13 +105,33 @@ M3~M11 —— 未开始
 
 - 用户的两台实机在 **`172.100.166.220` / `172.100.166.65`**（网关 .254，1000 Mbps 互通）
 - **`172.100.x.x` 不是 RFC1918**（172 段只到 172.31）→ LanRemote 正确拒绝 → 设备列表空
-- 处置：`scripts/acceptance/set-lab-ip.ps1 -Role A|B` 追加 `192.168.1.10` / `192.168.1.20`（/24）
-  **共存地址**，不删原有地址（避免破坏用户现有上网）；同时 profile=Private + 放行 UDP 45872
+- 处置：`scripts/acceptance/set-lab-ip.ps1 -Role A|B` 给两台各安排 `192.168.1.10` / `192.168.1.20`（/24）；
+  同时 profile=Private + 放行入站 UDP 45872
 - 教训：判定私有必须按数值区间，**不能用前缀字符串**（`172.100` 会被误判成私有）
+
+## Windows IPv4 实测结论（血的教训，别再凭直觉）
+
+**一张网卡只能 DHCP 或 静态，不能共存**（2026-09-20 实测，代价是用户断网两次）：
+
+| 操作 | 预期 | 实测 |
+| --- | --- | --- |
+| `New-NetIPAddress` 在 DHCP 接口上追加地址 | 共存 | 接口 `Dhcp` → `Disabled`，租约**丢失** |
+| `netsh interface ipv4 add address` | 共存 | 同上 |
+| 追加后再删除该地址 | 复原 | 只剩 APIPA，无网关/DNS |
+
+- 正确做法：整口切静态（用**当前同一套** IP/掩码/网关/DNS，不断网）→ 再追加第二地址（**不带网关**）
+- 回滚：`netsh interface ipv4 set address source=dhcp` + `set dnsservers source=dhcp` + `ipconfig /renew`
+- **`netsh` 退出码不可信**：已是 DHCP 时 `set address source=dhcp` 返回**非 0** 并输出
+  「已在此接口上启用 DHCP。」，实为成功 → 必须用 `Get-NetIPInterface` 复核实际状态
+- **PS 5.1 陷阱**：`($x | ForEach-Object { $_.IPAddress } -join ', ')` 会把 `-join` 当参数 → 抛异常；
+  写 `$x.IPAddress -join ', '`（语法检查查不出来，只有真跑才暴露）
+- `Set-NetConnectionProfile` 在刚切完静态时因网卡 `Identifying...` 会失败 → 需重试
 
 ## 本机网络环境（影响 discovery 验证）
 
-- 唯一活跃网卡 IPv4 = **172.100.166.220**，**不属于 RFC1918**（172.16/12 只覆盖 172.16–172.31）
-- WLAN 与「本地连接* 1/2」均为媒体已断开
-- 因此本机跑 LanRemote discovery 必然输出「没有找到任何合格的私有 IPv4 网卡」——**预期行为**
-- 要验证发现/连接，需要 192.168.x.x 或 10.x.x.x 的网络，或另开实验性开关（当前不做）
+- 以太网 = **172.100.166.220**，`Dhcp`，**不属于 RFC1918**（172.16/12 只覆盖 172.16–172.31）
+- WLAN 现已连上，`10.65.156.134/24` `Dhcp` —— **是** RFC1918 私有地址
+  （2026-09-20 复测更正：早期记录说 WLAN 媒体已断开，已过期）
+- 「本地连接* 1/2」只有 APIPA `169.254.x.x`
+- 所以本机**有**合格网卡；但电脑 B 不在 `10.65.156.x`，两机仍需 `192.168.1.0/24` lab 网段
+- 改本机 IP 配置前先想清楚回滚路径 —— 已因此断网两次
