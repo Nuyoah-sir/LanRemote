@@ -484,6 +484,14 @@ public sealed class LanDiscoveryService : IDiscoveryService
         // LanRemote 的 discovery receiver 永远监听 DiscoveryConstants.Port。
         IPEndPoint replyTarget = DiscoveryReplyTarget.ForProbe(remote);
 
+        // 这条日志是两机验收的判据：它同时记录「被丢弃的源端口」与「实际回应目标」，
+        // 现场就能确认回应没有再打到对方的随机临时端口上。只记地址与端口，不记报文内容。
+        _logger.LogDebug(
+            "已回应来自 {ProbeAddress} 的 probe：unicast → {ReplyTarget}（不使用源端口 {SourcePort}）。",
+            remote.Address,
+            replyTarget,
+            remote.Port);
+
         await TrySendAsync(
             senders[index],
             payload,
