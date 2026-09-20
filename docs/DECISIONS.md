@@ -128,7 +128,11 @@
 **Consequence**：任何新的消费者都必须自己实现 TTL prune，不能指望收到移除事件。缓存与更新队列本身仍有界（256 / 512 DropOldest）。  
 **可逆性**：可逆，但需要一次独立的 ADR 与 API 变更，不要在后续里程碑里「顺手」改。
 
-### ADR-021 — ECDSA 证书的 Key Usage 只允许 `digitalSignature`）
+### ADR-018 — 证书加载使用 `EphemeralKeySet`（取代 ADR-016）　【编号修正 2026-09-20】
+> **编号修正**：本条目原被误标为「ADR-021（ECDSA 证书的 Key Usage）」，导致 ADR-016 所声明的
+> 「SUPERSEDED by ADR-018」指向一条不存在的记录。2026-09-20 核对后改回 **ADR-018**。
+> 真正的 Key Usage 决策是下方另一条 **ADR-021**，两者内容不同，不要合并。
+
 **日期**：2026-09-20（M1.1 审计）  
 **Decision**：`DeviceCertificateService` 用 `X509CertificateLoader.LoadPkcs12(pfx, password, X509KeyStorageFlags.EphemeralKeySet)` 载入证书；**不使用** `PersistKeySet`，**不使用** `Exportable`。  
 **Context**：ADR-016 当初为了「M3 做 TLS 服务端时 SslStream 能拿到私钥」而选了 `PersistKeySet | Exportable`，理由是传闻中 ephemeral 私钥在 Windows SslStream 上会失败。审计发现这条理由是**未经实测的猜测**，而代价很实在：私钥被额外持久化到用户的 CNG 密钥容器，等于在 DPAPI 保护的 `secrets.bin` 之外多留一份持久化副本，还把私钥标记为可导出。这与「持久化副本只有 secrets.bin」的安全目标冲突。  
@@ -136,7 +140,7 @@
 - 磁盘上的私钥副本只剩 DPAPI 保护的 `secrets.bin`；
 - 进程运行期间私钥仅在内存，窗口关闭即消失；
 - 私钥不可导出（需要导出时应重新走一遍「生成 → 导出 → 存入 bundle」流程）；
-- **风险未关闭**：Windows 上 SslStream 服务端使用 ephemeral 私钥是否可靠，M1/M1.1 阶段**没有真实 TLS 测试可证明**。因此 ADR-018 附带一条强制要求：**M3 必须新增真实 SslStream server/client 握手集成测试**，用实测结果决定是否维持 EphemeralKeySet。在拿到该实测结果之前，**不得**凭猜测改回 PersistKeySet。  
+- **风险未关闭**：Windows 上 SslStream 服务端使用 ephemeral 私钥是否可靠，M1/M1.1 阶段**没有真实 TLS 测试可证明**。因此**本 ADR** 附带一条强制要求：**M3 必须新增真实 SslStream server/client 握手集成测试**，用实测结果决定是否维持 EphemeralKeySet。在拿到该实测结果之前，**不得**凭猜测改回 PersistKeySet。  
 **可逆性**：完全可逆（改一行常量），但方向受 M3 实测结果约束。  
 **验证**：`DeviceCertificateTests.ReloadedCertificateCanSign`（重载后签名 + 公钥验签通过）、`ImportFlags_UsesEphemeralKeySetOnly`（防止把 flags 加回来）。
 
@@ -171,4 +175,68 @@
 **Consequence**：状态损坏会显式失败，用户会看到错误而不是「看起来正常但换了身份」。副作用是需要人工介入（M9 应提供「重置本机身份」入口，见 HANDOFF 已知问题）。  
 **可逆性**：技术可逆，但会重新引入静默换证书的风险，不建议。  
 **验证**：`DeviceCertificateTests` 的两个 partial-state 用例、`SecretFileFormatTests` 的追加字节 / 截断 / 版本不一致用例。
+
+---
+
+## 产品形态决策（2026-09-20，M2 两机验收后由用户拍板）
+
+用户原话：「**不应该要求用户安装了我们的软件还去 PowerShell 输指令；要管理员权限的话，叫用户使用管理员模式（或者打开 UAC 索取管理员权限）不就好啦？**」
+并选中「**三个都做（含改 IP 一键）**」。以下三条把这句话落成可施工、可验收的约束。
+**这三条只定规则与验收口径，当前不启动编码。**
+
+### ADR-024 — 网络诊断必须进 UI，且必须「指名原因 + 指名网卡 + 给实际地址」
+**日期**：2026-09-20（M2 两机验收后）  
+**Decision**：
+1. `LanDiscoveryService` 的「没有合格私有 IPv4 网卡」以及其他启动 / 运行失败原因，**必须呈现到 UI**，不能只写日志（当前的 `bindings.Count == 0` 只 log warning 后正常返回，UI 无从得知——这是既成事实的规格违反）。
+2. UI 诊断必须给出**原因 + 网卡名 + 该网卡的实际地址**，至少覆盖 `05_UI_UX_SPEC.md` §8 的「未发现设备 / 防火墙阻止 / 网络断开」。文案必须是可判定的具体句子，本机实测原句作为基准：
+   「没有找到任何合格的私有 IPv4 网卡：以太网 = 172.100.166.220。RFC1918 私有网段只有 10/8、172.16–172.31、192.168/16；172.100.x.x 属于公网地址段。」
+3. 「发现失败」要能分因，不能只用一个 bool：至少要区分 **0 张合格网卡** / **有网卡但无人回应** / **有回应但被 RFC1918 或同子网校验丢弃**，后两类必须可计数可查。
+4. 诊断区**只负责说明原因并提供需要用户确认的操作入口**，自身不得包含自动改系统配置的「智能修复」。
+
+**Context**：验收当天本机跑 discovery 输出「没有找到任何合格的私有 IPv4 网卡」，而 UI 状态栏仍显示「已从磁盘加载配置与本机身份」，用户完全无法判断为什么搜不到设备——直接违反 `05_UI_UX_SPEC.md` §8。用户同时明确表示不接受「装了软件还要自己开 PowerShell」。
+**Consequence**：需要新增诊断视图模型 / 面板，以及「原因枚举 → 文案」映射；`LanDiscoveryService` 需要把失败原因结构化暴露。**不得**为了 UI 好写而放宽 RFC1918 / 同子网校验（那两条是不可动摇的安全机制）。
+**硬约束**：诊断结论不得伪造——没有测到的维度就写「未知 / 未检测」，不许猜。
+**可逆性**：完全可逆。
+**实施时机**：**M9（可靠性与 UX）**，最晚不晚于 M10 发布。M3~M8 不得顺手实现，也不要因为它去改 discovery 逻辑。
+
+### ADR-025 — 防火墙放行内置到 App（UAC 提权），`configure-firewall.ps1` 降级为可选入口
+**日期**：2026-09-20（M2 两机验收后）  
+**Decision**：
+1. 防火墙放行做成 **App 内一键按钮**（例如「允许局域网访问」）。权限不足时由 App 自己触发 UAC（manifest `requireAdministrator` 或以 `runas` 重启自身），用户点一下即可；**不需要**用户打开 PowerShell，**不需要**用户去找脚本路径。
+2. 规则约束沿用 M10 DoD：**只放行 LocalSubnet**；端口覆盖 discovery UDP 45872 与 TLS/TCP 45873（Control 与 Video 是两条独立连接，按实际 listener 端口放行）。
+3. 必须有确定的**命名与撤销契约**：规则名带统一前缀（如 `LanRemote ...`），App **只能**删除自己按该前缀创建的规则；「停止放行」必须精确撤销，不得误删用户自建规则，不得整段关闭防火墙。
+4. `configure-firewall.ps1` / `remove-firewall.ps1` **降级为可选的离线维护 / 无人值守入口**，不再是终端用户主路径；M10 若仍交付，必须在文档里写明它只是等价的手工路径。
+
+**Context**：`07_MILESTONES_AND_TASKS.md` M10 的任务列表把防火墙交付成两个 ps1，等于要求终端用户自己去开管理员 PowerShell。用户在验收中明确否决了这条路径。
+**Consequence**：App 需要具备 UAC 提权路径，并定义提权后的命令行协议（如 `--elevated-firewall allow|remove`）与结果回报方式；发布包必须让用户能看清 UAC 弹窗的来源（名称 / 发布者），否则会被当成可疑程序。
+**硬约束**：**绝不在后台静默创建防火墙规则**——必须同时经过「用户点击」与「UAC 确认」两道显式确认。
+**可逆性**：可逆，但撤销语义必须在第一版就设计进去，不允许先做单向的 add。
+**实施时机**：**M10（防火墙 / 发布）**，与 self-contained publish 一起做。
+
+### ADR-026 — 临时私有地址一键：显式、确认、可撤销；**禁止静默自动改 IP**
+**日期**：2026-09-20（M2 两机验收后）  
+**Decision**：
+1. App 可提供「添加临时私有地址」一键（用于当前网络不是 RFC1918 又要两台机组网的场景），但**必须是显式、可撤销的高级操作**：
+   - 先列出候选**真实**网卡并**让用户明确选一张**，不允许自动替用户选；
+   - **排除虚拟网卡**：VMware / VMnet / VirtualBox / Hyper-V / TAP-Windows / OpenVPN / WireGuard / Npcap / Bluetooth / WAN Miniport / Wi-Fi Direct / Hosted Network / Loopback / Teredo / ISATAP / RAS Async / ZeroTier / Sangfor / PANGP / AnyConnect / Tunnel / Virtual，以及 `本地连接*` / `Local Area Connection *`（匹配 `InterfaceDescription` + `Name`，规则见 `scripts/acceptance/set-lab-ip.ps1` 的 `Test-VirtualAdapter`）；
+   - 自动选择只允许作为兜底，且选中疑似虚拟网卡时必须显式警告；
+   - 确认文案必须写明：「将向 <网卡名> 添加 <地址>/24（不设网关），现有上网配置 <原地址> 保持不变」。
+2. **禁止静默自动改 IP**：启动时自动改、发现失败自动改、后台定时改，一律不允许。改 IP 只能来自用户的一次显式点击。
+3. 必须遵守 Windows 实测约束（**两次断网换来的，不要凭直觉改**）：
+   - IPv4 是「DHCP **或** 静态」二选一；`New-NetIPAddress` 与 `netsh interface ipv4 add address` 都会把接口 `Dhcp` 置为 `Disabled` 并丢掉租约；
+   - 因此「追加第二个地址」的正确顺序是：**先把整张接口切成静态并逐项回填现有地址 / 掩码 / 网关 / DNS** → 再追加 lab 地址（/24，**不设网关**）→ 校验原地址仍在；
+   - 撤销顺序：删掉**自己加的那个**地址 → `netsh interface ipv4 set address source=dhcp` + `set dnsservers source=dhcp` → 自校验；
+   - **自校验三条缺一不可**：lab 地址必须消失、`Dhcp` 必须恢复 `Enabled`、必须拿回可用 IPv4；
+   - **`netsh` 退出码不可信**：对已经是 DHCP 的接口执行 `set address source=dhcp` 会返回**非零**并打印「已在此接口上启用 DHCP。」（这是提示性信息，不是失败）——必须以 `Get-NetIPInterface` 的实际状态判成败，且**撤销必须幂等**（可重复执行且都返回成功）。
+4. 状态文件必须持久化「撤销所需的全部信息」（接口 index / 别名、原先是否 DHCP、原地址掩码网关 DNS、追加的地址）。校验失败必须明确报失败并保留现场，**不得**假装成功。
+5. `scripts/acceptance/set-lab-ip.ps1`（v3）是这套规则的**已实测参考实现**，产品实现时照抄其顺序与校验点；脚本本身保留为验收 / 离线工具，**不是**用户主路径。
+
+**Context**：用户提出「这个操作应该就是无感的才对」。把改 IP 做成 App 内一键确实可行，但改 IP 是**影响用户整机联网**的操作，做成无感自动执行风险极高（本机实测已两次把自己搞断网）。因此本 ADR **采纳「一键」、拒绝「无感」**：入口在 App 内、提权走 UAC，但触发与网卡选择必须用户显式确认，且必须一键撤销。
+**Consequence**：App 需要管理员能力，并要处理改完 IP 后网卡短暂处于 `Identifying...` 的窗口（`Set-NetConnectionProfile` 会失败，需重试，实测 5 次 × 3 s）；防火墙规则用 `Profile Any` 以免受网络 profile 变化影响。产品代码里**不得**出现自动清理备份 / 自动删除用户配置的逻辑。
+**硬约束**：只追加地址，**绝不删除用户原有地址**；撤销只删自己加的那个。
+**可逆性**：一键撤销是本 ADR 的强制组成部分，**不存在「只 add 不 remove」的实现**。
+**验证**：`set-lab-ip.ps1` v3 已在两台实机跑完完整往返——`-Role A` / `-Role B` EXIT=0 → `-Undo` EXIT=0 → **再次 `-Undo` 幂等 EXIT=0**；A 机恢复 `172.100.166.220/24 Dhcp`、网关 `172.100.166.254`、ping 通、无 lab 残留；B 机恢复 `172.100.166.65/24 Dhcp`。B 机首次自动选中 `VMware Network Adapter VMnet1`，lab 地址落到虚拟网卡上，A 机收到 **0** 个来自 192.168.1.20 的包——这就是排除虚拟网卡规则的实证，改回自动选必踩。
+**实施时机**：**不早于 M10**；M3~M9 不得实现。
+
+**范围外**：discovery 的绑定是否也采用同一套虚拟网卡过滤，不在本 ADR 内。M2 的 `NetworkInterfaceSelector` 已有自己的启发式（HANDOFF §3）且被 408 个测试与两机验收基线锁住；将来若要复用本规则，必须**单独立 ADR 并重跑两机验收**，不得顺手改。
 

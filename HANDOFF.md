@@ -634,25 +634,53 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **ADR-023 — WatchAsync upsert-only + UI TTL prune**：
   明确「不发送 Removed 假设备，UI 按 LastSeen 自 prune」，避免下一位 AI 在 M2 临时推翻现有 Core API。
 
+### 2026-09-20 追加：产品形态决策（用户拍板「三个都做，含改 IP 一键」）
+
+`docs/DECISIONS.md` 新增三条。**只定规则与验收口径，当前不启动编码**：
+
+- **ADR-024 — 网络诊断必须进 UI**：`bindings.Count == 0` 不能再只写日志；UI 必须给出
+  「原因 + 网卡名 + 实际地址」，至少覆盖 `05_UI_UX_SPEC.md` §8 的「未发现设备 / 防火墙阻止 / 网络断开」。
+  实施时机 **M9**，最晚 M10 发布前闭合。
+- **ADR-025 — 防火墙放行内置 App + UAC**：一键按钮 + UAC 提权；
+  `configure-firewall.ps1` / `remove-firewall.ps1` **降级为可选离线入口**；规则仍只放行 LocalSubnet，
+  且必须自带「按前缀精确撤销」契约。实施时机 **M10**。
+- **ADR-026 — 临时私有地址一键：显式 / 确认 / 可撤销，禁止静默自动改 IP**：
+  用户显式选网卡 + 排除虚拟网卡 + 先整张切静态再追加 + 撤销回 DHCP 并自校验。
+  实施时机 **不早于 M10**。
+
+**同时修掉一处编号缺陷**：ADR-016 声明「SUPERSEDED by ADR-018」，但那条记录被错标成了
+「ADR-021（Key Usage）」，导致 ADR-018 实际不存在。已改回 **ADR-018**，并在条目顶部加了修正说明；
+真正的 Key Usage 决策仍是 ADR-021，两者不要合并。
+
 **M2.1 本轮未新增 ADR**：修的都是既有决策下的实现缺陷，没有推翻或新增架构决策。
 两条不变量已就近写进代码注释与类型 XML doc（`DiscoveryReplyTarget`、`MulticastInterfaceOption`），
 并由单元测试锁住。
 
 ## 14. 已知问题 / 技术债
 
-1. **M2 手工 DoD 未完成**（第 9 节）：需要一台有 RFC1918 网卡的机器，最好两台。
-   **M2.1 修完之后依然是未完成**——本轮修的两个问题恰恰只能由真实两机环境证伪。
-2. **本机开发环境无法验证发现**：唯一活跃网卡是 `172.100.166.220`（公网段）。
-   若将来要在本机验证，需要改用 192.168 / 10.x 的网络，或另开实验性开关（当前不做）。
-2a. **M2.1 的组播出口网卡修复在本机只验证到「socket option 设置成功且回读一致」**，
-   **没有**验证「两台机器、多网卡时组播确实分别从各自网卡出去」——那需要 §9 的两机环境。
+1. ~~**M2 手工 DoD 未完成**~~ —— **已于 2026-09-20 两机验收 PASS（20/20）关闭**，见第 9.1 节。
+   只有改动 discovery 收发逻辑（网卡筛选 / probe / announce / 缓存 TTL）才需要重跑。
+2. **本机开发环境无法验证发现**（未变）：唯一活跃网卡是 `172.100.166.220`（公网段）。
+   若将来要**单机**验证，需要改用 192.168 / 10.x 的网络，或另开实验性开关（当前不做）。
+   两机验证请直接按 §9.1 用 `set-lab-ip.ps1` 搭临时私有地址。
+2a. ~~**组播出口网卡只验证到 socket option 回读**~~ —— **两机验收已证伪风险关闭**：
+   B 机带 5 张私有网卡，A 机只在 `192.168.1.20` 收到 B，无跨网卡串扰、无 `AddressNotAvailable`。
 3. **网卡热插拔未处理**：`StartAsync` 做一次快照并保持运行期不变；`INetworkBindingProvider.Refresh()`
    已预留，M9 再接 `NetworkChange`。
 4. **虚拟网卡过滤是启发式**：可能误杀名字里带 `tap`/`vpn` 的真实网卡；需要 VPN LAN 时应另开实验设置。
-5. **真实 accept 路径未走真实 socket 验证**（第 9 节）。
+5. **真实 accept 路径未走真实 socket 验证**（M3 范围，第 15 节）。
 6. UI 交互无自动化覆盖（累计遗留）。
 7. 日志无轮转（M9，ADR-013）。
 8. `LanRemote.Sessions` / `Capture` / `Input` 仍是空项目占位。
+9. **UI 网络诊断缺失（规格违反，待修）**：`05_UI_UX_SPEC.md` §8 要求区分「未发现设备 / 防火墙阻止 /
+   网络断开」，当前 discovery 启动失败只写日志，UI 仍显示「已从磁盘加载配置与本机身份」。
+   已立 **ADR-024**，实施时机 **M9**，最晚 M10 发布前闭合。
+10. **防火墙交付形态待改**：M10 原任务只有 `configure-firewall.ps1` / `remove-firewall.ps1`，
+    等于要求终端用户开管理员 PowerShell。已立 **ADR-025**：改为 App 内一键 + UAC，ps1 降级为可选离线入口，
+    且必须有「按前缀精确撤销」契约。实施时机 **M10**。
+11. **本机开发残留**（非阻断）：`%LOCALAPPDATA%\LanRemote\backups\secrets.bin.pre-m1.3-reset.bak`
+    是 M1.3 手工重置身份时留的旧开发备份，确认不再需要后由施工环境手工删除。
+    **硬约束：绝不把「自动删除身份备份」写进产品逻辑。**
 
 ## 15. 下一步 —— M3（TLS Host/Client + 同子网连接校验）
 
@@ -666,6 +694,7 @@ dotnet test LanRemote.sln -c Debug --no-build
    用实测结果确认 `EphemeralKeySet` 是否满足 Windows TLS 服务端要求，再决定是否维持。
 4. Control channel 的 length-prefixed JSON framing（上限 1 MiB）与 `channel_hello`。
 5. M3 **不要**实现 AuthChallenge / HMAC / 访问密钥认证（那是 M4）。
+6. M3 **不要**实现 UI 网络诊断 / 防火墙一键 / 临时私有地址一键——ADR-024 属 M9、ADR-025 与 ADR-026 属 M10。
 
 ## 16. 下一位 AI 不要重复做
 
@@ -683,7 +712,14 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **不要**往 announcement 里加地址字段并相信它（地址必须来自 UDP source）
 - **不要**为了「支持 VPN 局域网」在 M2 放宽虚拟网卡过滤
 - **不要**在 M2 实现任何 TLS / Auth / 视频 / 输入
-- **不要**在程序里自动改防火墙（属于 M10）
+- **不要在 M3~M8 实现 ADR-024 / 025 / 026**：UI 网络诊断属于 M9、防火墙一键与临时地址一键属于 M10。
+  它们都已定好规则，缺的是时机，不是设计——**等用户下达对应里程碑的开工指令**
+- **绝不在后台静默改防火墙或改 IP**：两者都必须经过「用户显式点击」+「UAC 确认」两道确认（ADR-025/026）。
+  「改 IP 要无感」这句话被拆解为：**入口无感（在 App 内、不用开 PowerShell）+ 触发显式（用户自己点）**，
+  不要把「无感」理解成「自动执行」
+- **不要照抄直觉去改 IP**：Windows IPv4 是「DHCP 或静态」二选一；追加第二地址前必须先把整张接口
+  切成静态并回填原配置，否则会丢 DHCP 租约只剩 169.254（本机已两次踩断）。撤销必须幂等，
+  且**不能靠 `netsh` 退出码判成败**。完整约束见 ADR-026
 - **不要伪造构建/测试结果**：本文件所有数字均为实际执行输出
 - **验收脚本别再犯这 5 个错**（详见第 9.1 节末表）：`netsh` 退出码不可信、
   `-join` 在 PS 5.1 的参数绑定陷阱、自动选网卡必须排除虚拟网卡、
@@ -706,3 +742,6 @@ dotnet test LanRemote.sln -c Debug --no-build
     对地址做 `HostToNetworkOrder` 会抛 `SocketException`（本机实测，见 §1.5.2）
 13. **Discovery 项目对 `LanRemote.Protocol.Tests` 开了 `InternalsVisibleTo`**，
     只为两个 internal 纯函数服务；不要顺手把别的内部类型变成测试依赖
+14. **ADR-018 曾被错标成 ADR-021**（2026-09-20 已修正）：ADR-016 说的是「证书加载改用 EphemeralKeySet」
+    被 ADR-018 取代，而 ADR-021 是另一条「ECDSA 证书 KeyUsage 只允许 digitalSignature」。
+    引用时看清条目正文，不要按编号顺序去猜
