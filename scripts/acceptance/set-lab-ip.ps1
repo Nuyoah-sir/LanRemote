@@ -1,23 +1,38 @@
-﻿# LanRemote M2.1 - two-machine acceptance: add a private lab IPv4 address
+﻿# LanRemote M2.1 - two-machine acceptance: give this NIC a private lab IPv4
 #
 # WHY THIS IS NEEDED
 #   LanRemote only uses RFC1918 private IPv4 (10/8, 172.16-172.31, 192.168/16).
-#   172.100.x.x looks private but is NOT: the 172 block only covers 172.16-172.31.
-#   Both test machines sit on 172.100.166.x, so discovery correctly refuses them
-#   and reports "no eligible private IPv4 NIC". This script ADDS a private
-#   address ALONGSIDE the existing one - it never removes the original.
+#   172.100.x.x LOOKS private but is NOT: the 172 block only covers 172.16-172.31.
+#   Both lab machines sit on 172.100.166.x, so discovery correctly refuses them
+#   and logs "no eligible private IPv4 NIC". This script puts a real private
+#   address on the SAME wire so both machines can talk RFC1918 to each other.
 #
-# USAGE (run in an ADMIN PowerShell on EACH machine, with a different -Role)
+# HOW IT WORKS (v2 - read this before trusting any other doc)
+#   Windows IPv4 is "DHCP OR static" per interface. It is NOT possible to keep a
+#   DHCP lease and append an extra static address: both New-NetIPAddress and
+#   "netsh interface ipv4 add address" silently flip the interface to
+#   Dhcp=Disabled and drop the lease. (Measured on this machine, see
+#   docs/TWO_MACHINE_ACCEPTANCE.md section 1.2.)
+#
+#   So v2 does the honest thing:
+#     1. read the CURRENT IPv4 config (address/mask/gateway/DNS/Dhcp flag)
+#     2. save it to %TEMP%\lanremote-lab-ip-state.json
+#     3. switch the interface to STATIC with exactly that config  -> no outage
+#     4. append 192.168.1.10 (role A) or 192.168.1.20 (role B), /24, no gateway
+#   Result: the NIC keeps 172.100.166.x AND gains 192.168.1.x at the same time.
+#
+#   -Undo removes the lab address and puts the interface back to DHCP (or back to
+#   the original static config, if that is how it was). It self-verifies and, if
+#   only an APIPA 169.254.x.x address is left, prints the manual fix commands.
+#
+# USAGE (ADMIN PowerShell, run once per machine with a different -Role)
 #   Machine A:  powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Role A
 #   Machine B:  powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Role B
 #
-#   Machine A gets 192.168.1.10/24, machine B gets 192.168.1.20/24.
-#
-# TO UNDO (any time)
+# TO UNDO (any time, on any machine)
 #   powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Undo
 #
-# This file is intentionally stored as UTF-8 WITH BOM so that Windows
-# PowerShell 5.1 decodes the Chinese strings correctly.
+# Stored as UTF-8 WITH BOM so Windows PowerShell 5.1 decodes the Chinese text.
 
 param(
     [ValidateSet('A', 'B')]
@@ -30,130 +45,405 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$stateFile = Join-Path $env:TEMP 'lanremote-lab-ip-state.json'
+$logFile   = Join-Path $env:TEMP 'lanremote-lab-ip.log'
+
+$labBindings = @{
+    'A' = @{ Address = '192.168.1.10'; Prefix = 24 }
+    'B' = @{ Address = '192.168.1.20'; Prefix = 24 }
+}
+$labAddresses = @('192.168.1.10', '192.168.1.20')
+
 # ---------------------------------------------------------------------------
-# Pick the adapter that carries the existing 172.100.x.x / any IPv4 address.
+# output helpers - console AND %TEMP%\lanremote-lab-ip.log
+# ---------------------------------------------------------------------------
+function Say {
+    param([string]$Text = '', [string]$Color = 'Gray')
+    if ($Text -ne '') { Write-Host $Text -ForegroundColor $Color }
+    Add-Content -LiteralPath $logFile -Value $Text -Encoding UTF8
+}
+
+function Say-Rule {
+    Say '=========================================================' 'Cyan'
+}
+
+# ---------------------------------------------------------------------------
+# netsh wrapper: prefer the interface index (survives non-ASCII adapter names),
+# fall back to the alias.
+#
+# IMPORTANT (measured): netsh exits NON-ZERO for purely informational messages.
+#   "netsh interface ipv4 set address ... source=dhcp" on an interface that is
+#   already DHCP prints "已在此接口上启用 DHCP。" and returns 1. Treating that as
+#   failure is what broke the first -Undo. So this function NEVER throws on the
+#   exit code - it returns whatever netsh printed and the CALLER verifies the
+#   resulting state with Get-NetIP* cmdlets, which is the only trustworthy check.
+# ---------------------------------------------------------------------------
+function Invoke-Netsh {
+    param(
+        [string]$Alias,
+        [int]$Index,
+        [string[]]$Arguments
+    )
+
+    $byIndex = @('interface', 'ipv4') + $Arguments + @("name=$Index")
+    $byAlias = @('interface', 'ipv4') + $Arguments + @("name=$Alias")
+
+    # netsh prints localized GBK text; decode it correctly so the log is readable.
+    $prevEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(936)
+        $out = & netsh.exe $byIndex 2>&1
+        if ($LASTEXITCODE -eq 0) { return ($out | Out-String).Trim() }
+        $first = ($out | Out-String).Trim()
+
+        $out2 = & netsh.exe $byAlias 2>&1
+        if ($LASTEXITCODE -eq 0) { return ($out2 | Out-String).Trim() }
+        $second = ($out2 | Out-String).Trim()
+    } finally {
+        [Console]::OutputEncoding = $prevEncoding
+    }
+
+    return ($first + ' | alias: ' + $second)
+}
+
+function Convert-PrefixToMask {
+    param([int]$Prefix)
+    if ($Prefix -le 0 -or $Prefix -gt 32) { throw "bad prefix length $Prefix" }
+    $bits = [uint32]0
+    for ($i = 0; $i -lt $Prefix; $i++) { $bits = ($bits -shl 1) -bor 1 }
+    $bits = $bits -shl (32 - $Prefix)
+    $b0 = [byte](($bits -shr 24) -band 0xFF)
+    $b1 = [byte](($bits -shr 16) -band 0xFF)
+    $b2 = [byte](($bits -shr 8) -band 0xFF)
+    $b3 = [byte]($bits -band 0xFF)
+    return "$b0.$b1.$b2.$b3"
+}
+
+# ---------------------------------------------------------------------------
+# adapter resolution. NOTE: v1 threw "No IPv4 adapter found" when only an APIPA
+# address was left, which made the second -Undo impossible. v2 always returns an
+# adapter so that -Undo can still repair the interface.
 # ---------------------------------------------------------------------------
 function Resolve-Adapter {
     param([string]$Requested)
 
-    if ($Requested -ne '') { return $Requested }
-
-    $candidates = Get-NetIPAddress -AddressFamily IPv4 |
-        Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown' }
-
-    if (-not $candidates) {
-        throw "No IPv4 adapter found. Pass -InterfaceAlias explicitly."
+    if ($Requested -ne '') {
+        $hit = Get-NetAdapter -InterfaceAlias $Requested -ErrorAction SilentlyContinue
+        if (-not $hit) { throw "No adapter named '$Requested'." }
+        return $hit
     }
 
-    # Prefer the adapter that has the wired 172.100.x.x address.
-    $wired = $candidates | Where-Object { $_.IPAddress -like '172.100.*' } | Select-Object -First 1
-    if ($wired) { return $wired.InterfaceAlias }
-
-    return ($candidates | Select-Object -First 1).InterfaceAlias
-}
-
-$bindings = @{
-    'A' = @{ Address = '192.168.1.10'; Prefix = 24; Label = 'LanRemote Lab A' }
-    'B' = @{ Address = '192.168.1.20'; Prefix = 24; Label = 'LanRemote Lab B' }
-}
-
-$alias = Resolve-Adapter -Requested $InterfaceAlias
-
-Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host " LanRemote lab IPv4 setup" -ForegroundColor Cyan
-Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host ("  adapter : " + $alias)
-Write-Host ""
-
-# ---------------------------------------------------------------------------
-# Undo
-# ---------------------------------------------------------------------------
-if ($Undo) {
-    $labAddresses = $bindings.Values | ForEach-Object { $_.Address }
-
-    foreach ($address in $labAddresses) {
-        $existing = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $address -ErrorAction SilentlyContinue
-        if ($existing) {
-            Remove-NetIPAddress -IPAddress $address -Confirm:$false
-            Write-Host ("  removed " + $address) -ForegroundColor Green
-        } else {
-            Write-Host ("  not present " + $address) -ForegroundColor Gray
-        }
+    $up = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.MediaType -eq '802.3' })
+    if ($up.Count -eq 0) {
+        $up = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' })
+    }
+    if ($up.Count -eq 0) {
+        throw "No adapter is Up. Plug in the cable or pass -InterfaceAlias."
     }
 
-    Write-Host ""
-    Write-Host " Done. Remaining IPv4 addresses:" -ForegroundColor Cyan
-    Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias $alias |
-        Format-Table IPAddress, PrefixLength, PrefixOrigin -AutoSize
-    exit 0
+    foreach ($a in $up) {
+        $usable = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' })
+        if ($usable.Count -gt 0) { return $a }
+    }
+
+    Say '  WARNING: every Up adapter only has an APIPA 169.254.x.x address.' 'Yellow'
+    return $up[0]
 }
 
-if (-not $Role) {
-    Write-Host " Missing -Role A|B (or use -Undo)." -ForegroundColor Red
+# ---------------------------------------------------------------------------
+# snapshot of the current IPv4 config
+# ---------------------------------------------------------------------------
+function Get-IpState {
+    param($Adapter)
+
+    $addrs = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $Adapter.ifIndex -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -ne '127.0.0.1' })
+
+    $primary = $addrs | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1
+    if (-not $primary) { $primary = $addrs | Select-Object -First 1 }
+
+    $iface = Get-NetIPInterface -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+
+    $gw = ''
+    $route = Get-NetRoute -InterfaceIndex $Adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($route) { $gw = $route.NextHop }
+
+    $dns = @(Get-DnsClientServerAddress -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.ServerAddresses } | Where-Object { $_ -ne '' })
+
+    return @{
+        InterfaceAlias = $Adapter.InterfaceAlias
+        InterfaceIndex = $Adapter.ifIndex
+        Address        = $(if ($primary) { $primary.IPAddress } else { '' })
+        PrefixLength   = $(if ($primary) { [int]$primary.PrefixLength } else { 24 })
+        Gateway        = $gw
+        Dns            = @($dns)
+        WasDhcp        = $(if ($iface) { ($iface.Dhcp -eq 'Enabled') } else { $true })
+    }
+}
+
+function Write-IpState {
+    param($State)
+    $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $stateFile -Encoding UTF8
+}
+
+function Show-IpState {
+    param([string]$Title, [string]$Color = 'Cyan')
+    Say '' 
+    Say $Title $Color
+    Get-NetIPAddress -AddressFamily IPv4 |
+        Where-Object { $_.IPAddress -ne '127.0.0.1' } |
+        Sort-Object InterfaceIndex |
+        Format-Table InterfaceAlias, IPAddress, PrefixLength, PrefixOrigin -AutoSize |
+        Out-String | ForEach-Object { Say $_.TrimEnd() 'Gray' }
+}
+
+# ---------------------------------------------------------------------------
+# guard: this script changes IP configuration, so require elevation
+# ---------------------------------------------------------------------------
+$identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "ERROR: run this from an ADMINISTRATOR PowerShell." -ForegroundColor Red
     exit 1
 }
 
-$target = $bindings[$Role]
-Write-Host ("  role    : " + $Role + "  ->  " + $target.Address + "/" + $target.Prefix)
-Write-Host ""
+Say-Rule
+Say (' LanRemote lab IPv4 setup  (v2)   ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) 'Cyan'
+Say-Rule
+
+$adapter = Resolve-Adapter -Requested $InterfaceAlias
+$alias   = $adapter.InterfaceAlias
+$index   = $adapter.ifIndex
+
+Say ('  adapter : ' + $alias + '  (ifIndex ' + $index + ')')
 
 # ---------------------------------------------------------------------------
-# Idempotent add
+# UNDO
 # ---------------------------------------------------------------------------
-$existing = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $target.Address -ErrorAction SilentlyContinue
-if ($existing) {
-    Write-Host ("  " + $target.Address + " already present - nothing to do.") -ForegroundColor Yellow
+if ($Undo) {
+    Say '  mode    : UNDO' 'Cyan'
+    Say ''
+
+    $prior = $null
+    if (Test-Path -LiteralPath $stateFile) {
+        try { $prior = Get-Content -LiteralPath $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $prior = $null }
+    }
+
+    # 1. drop every lab address that exists
+    foreach ($address in $labAddresses) {
+        $hit = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $address -ErrorAction SilentlyContinue)
+        if ($hit.Count -gt 0) {
+            Remove-NetIPAddress -IPAddress $address -InterfaceIndex $hit[0].InterfaceIndex -Confirm:$false
+            Say ('  removed ' + $address) 'Green'
+        } else {
+            Say ('  not present ' + $address) 'DarkGray'
+        }
+    }
+
+    # 2. restore DHCP, or restore the original static config
+    $restoreTo = $alias
+    $restoreIdx = $index
+    if ($prior -and $prior.InterfaceAlias) {
+        $restoreTo  = $prior.InterfaceAlias
+        $restoreIdx = [int]$prior.InterfaceIndex
+    }
+
+    Say ''
+    if ($prior -and $prior.WasDhcp -eq $false) {
+        Say '  original config was static - restoring it ...'
+        $mask = Convert-PrefixToMask -Prefix ([int]$prior.PrefixLength)
+        if ($prior.Gateway) {
+            Invoke-Netsh -Alias $restoreTo -Index $restoreIdx `
+                -Arguments @('set', 'address', 'source=static', ('addr=' + $prior.Address), ('mask=' + $mask), ('gateway=' + $prior.Gateway), 'gwmetric=1') | Out-Null
+        } else {
+            Invoke-Netsh -Alias $restoreTo -Index $restoreIdx `
+                -Arguments @('set', 'address', 'source=static', ('addr=' + $prior.Address), ('mask=' + $mask)) | Out-Null
+        }
+        if ($prior.Dns -and @($prior.Dns).Count -gt 0) {
+            $dnsList = @($prior.Dns)
+            Invoke-Netsh -Alias $restoreTo -Index $restoreIdx `
+                -Arguments @('set', 'dnsservers', 'source=static', ('addr=' + $dnsList[0]), 'validate=no') | Out-Null
+            for ($i = 1; $i -lt $dnsList.Count; $i++) {
+                Invoke-Netsh -Alias $restoreTo -Index $restoreIdx `
+                    -Arguments @('add', 'dnsservers', ('addr=' + $dnsList[$i]), ('index=' + ($i + 1)), 'validate=no') | Out-Null
+            }
+        }
+        Say '  static config restored.' 'Green'
+    } else {
+        Say '  switching interface back to DHCP ...'
+        Invoke-Netsh -Alias $restoreTo -Index $restoreIdx -Arguments @('set', 'address', 'source=dhcp') | Out-Null
+        Invoke-Netsh -Alias $restoreTo -Index $restoreIdx -Arguments @('set', 'dnsservers', 'source=dhcp') | Out-Null
+        Say '  dhcp enabled, renewing lease ...'
+        & ipconfig.exe /renew | Out-Null
+        Say '  lease renewed.' 'Green'
+    }
+
+    if (Test-Path -LiteralPath $stateFile) { Remove-Item -LiteralPath $stateFile -Force }
+
+    Start-Sleep -Seconds 2
+    Show-IpState -Title '--- after undo -------------------------------------------'
+
+    # 3. self-verification: a machine left on APIPA only is NOT recovered
+    $stillManual = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $labAddresses -contains $_.IPAddress })
+    $usable = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' })
+
+    Say ''
+    if ($stillManual.Count -gt 0) {
+        Say ('  FAIL: lab address still present: ' + ($stillManual.IPAddress -join ', ')) 'Red'
+        Say ('  manual removal:  netsh interface ipv4 delete address name="' + $restoreTo + '" addr=' + $stillManual[0].IPAddress) 'Yellow'
+        exit 1
+    }
+    if ($usable.Count -eq 0) {
+        Say '  FAIL: no usable IPv4 address left (only APIPA 169.254.x.x).' 'Red'
+        Say '  run these three commands in an ADMIN cmd/PowerShell:' 'Yellow'
+        Say ('    netsh interface ipv4 set address name="' + $restoreTo + '" source=dhcp') 'Yellow'
+        Say ('    netsh interface ipv4 set dnsservers name="' + $restoreTo + '" source=dhcp') 'Yellow'
+        Say '    ipconfig /renew' 'Yellow'
+        exit 1
+    }
+
+    $ifaceNow = Get-NetIPInterface -InterfaceIndex $restoreIdx -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    $dhcpNow = $(if ($ifaceNow) { $ifaceNow.Dhcp } else { '(unknown)' })
+    if ($prior -and $prior.WasDhcp -eq $true -and $dhcpNow -ne 'Enabled') {
+        Say ('  FAIL: interface is still not DHCP (Dhcp=' + $dhcpNow + ').') 'Red'
+        Say ('  run:  netsh interface ipv4 set address name="' + $restoreTo + '" source=dhcp') 'Yellow'
+        Say ('        netsh interface ipv4 set dnsservers name="' + $restoreTo + '" source=dhcp') 'Yellow'
+        Say '        ipconfig /renew' 'Yellow'
+        exit 1
+    }
+
+    Say ('  OK: ' + ($usable.IPAddress -join ', ')) 'Green'
+    Say-Rule
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
+# APPLY
+# ---------------------------------------------------------------------------
+if (-not $Role) {
+    Say '  ERROR: missing -Role A|B   (or use -Undo).' 'Red'
+    exit 1
+}
+
+$target = $labBindings[$Role]
+Say ('  role    : ' + $Role + '   ->   ' + $target.Address + '/' + $target.Prefix)
+Say ''
+
+# 1. snapshot BEFORE touching anything
+$state = Get-IpState -Adapter $adapter
+if (-not $state.Address) {
+    Say '  ERROR: this adapter has no IPv4 address to preserve.' 'Red'
+    exit 1
+}
+Write-IpState -State $state
+Say ('  saved   : ' + $stateFile)
+Say ('  current : ' + $state.Address + '/' + $state.PrefixLength +
+     '  gw=' + $(if ($state.Gateway) { $state.Gateway } else { '(none)' }) +
+     '  dhcp=' + $state.WasDhcp +
+     '  dns=' + $(if (@($state.Dns).Count) { (@($state.Dns) -join ',') } else { '(none)' }))
+
+# 2. idempotent: if the lab address is already there, do nothing destructive
+$already = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $target.Address -ErrorAction SilentlyContinue)
+if ($already.Count -gt 0) {
+    Say ('  ' + $target.Address + ' already present - nothing to change.') 'Yellow'
+    Show-IpState -Title '--- current IPv4 -----------------------------------------'
+    Say-Rule
+    exit 0
+}
+
+# 3. switch the interface to static with the SAME config (keeps you online)
+$mask = Convert-PrefixToMask -Prefix ([int]$state.PrefixLength)
+Say ''
+Say ('  step 1/3: switch to static, keeping ' + $state.Address + '/' + $mask + ' ...')
+if ($state.Gateway) {
+    $staticOut = Invoke-Netsh -Alias $alias -Index $index `
+        -Arguments @('set', 'address', 'source=static', ('addr=' + $state.Address), ('mask=' + $mask), ('gateway=' + $state.Gateway), 'gwmetric=1')
 } else {
-    Write-Host ("  adding " + $target.Address + "/" + $target.Prefix + " ...")
-    New-NetIPAddress `
-        -InterfaceAlias $alias `
-        -IPAddress $target.Address `
-        -PrefixLength $target.Prefix `
-        -SkipAsSource $false | Out-Null
-    Write-Host "  added." -ForegroundColor Green
+    $staticOut = Invoke-Netsh -Alias $alias -Index $index `
+        -Arguments @('set', 'address', 'source=static', ('addr=' + $state.Address), ('mask=' + $mask))
 }
 
-# A private network must be profiled Private, otherwise inbound UDP is blocked.
-Write-Host ""
-Write-Host "  setting network profile to Private (inbound UDP 45872) ..."
-try {
-    Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private
-    Write-Host "  profile = Private" -ForegroundColor Green
-} catch {
-    Write-Host ("  could not set profile: " + $_.Exception.Message) -ForegroundColor Yellow
-    Write-Host "  set it manually in Settings > Network & Internet > Ethernet." -ForegroundColor Yellow
+# verify by state, not by netsh exit code
+$kept = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $index -IPAddress $state.Address -ErrorAction SilentlyContinue)
+if ($kept.Count -eq 0) {
+    Say '  FAIL: the original address disappeared while switching to static.' 'Red'
+    Say ('  netsh said: ' + $staticOut) 'Yellow'
+    Say ('  run:  .\set-lab-ip.ps1 -Undo') 'Yellow'
+    exit 1
+}
+Say ('  kept ' + $state.Address + ' (PrefixOrigin=' + $kept[0].PrefixOrigin + ')') 'Green'
+
+$dnsList = @($state.Dns)
+if ($dnsList.Count -gt 0) {
+    Invoke-Netsh -Alias $alias -Index $index `
+        -Arguments @('set', 'dnsservers', 'source=static', ('addr=' + $dnsList[0]), 'validate=no') | Out-Null
+    for ($i = 1; $i -lt $dnsList.Count; $i++) {
+        Invoke-Netsh -Alias $alias -Index $index `
+            -Arguments @('add', 'dnsservers', ('addr=' + $dnsList[$i]), ('index=' + ($i + 1)), 'validate=no') | Out-Null
+    }
+    Say ('  dns kept: ' + ($dnsList -join ', '))
+}
+Say '  static applied.' 'Green'
+
+# 4. append the lab address (no gateway - it must not compete with the real one)
+Say ''
+Say ('  step 2/3: append lab address ' + $target.Address + '/255.255.255.0 (no gateway) ...')
+Invoke-Netsh -Alias $alias -Index $index `
+    -Arguments @('add', 'address', ('addr=' + $target.Address), 'mask=255.255.255.0') | Out-Null
+Say '  appended.' 'Green'
+
+# 5. private profile + inbound firewall rule for UDP 45872
+Say ''
+Say '  step 3/3: private network profile + inbound UDP 45872 rule ...'
+# After switching to static the adapter briefly sits in "Identifying...", and
+# Set-NetConnectionProfile fails during that window. Retry instead of giving up.
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+        Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private -ErrorAction Stop
+        Say '  profile = Private' 'Green'
+        break
+    } catch {
+        if ($attempt -eq 5) {
+            Say ('  could not set profile: ' + $_.Exception.Message) 'Yellow'
+            Say '  set it manually: Settings > Network & Internet > Ethernet > Private.' 'Yellow'
+        } else {
+            Start-Sleep -Seconds 3
+        }
+    }
 }
 
-# Dedicated inbound rule for the discovery port.
-Write-Host ""
-Write-Host "  ensuring inbound UDP 45872 firewall rule ..."
 $ruleName = 'LanRemote Discovery UDP 45872'
 $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
 if ($rule) {
-    Write-Host "  rule already exists." -ForegroundColor Green
+    Say '  firewall rule already exists.' 'Green'
 } else {
-    New-NetFirewallRule `
-        -DisplayName $ruleName `
-        -Direction Inbound `
-        -Protocol UDP `
-        -LocalPort 45872 `
-        -Action Allow `
-        -Profile Any | Out-Null
-    Write-Host "  rule created." -ForegroundColor Green
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol UDP `
+        -LocalPort 45872 -Action Allow -Profile Any | Out-Null
+    Say '  firewall rule created.' 'Green'
 }
 
-Write-Host ""
-Write-Host "--- resulting IPv4 addresses on $alias --------------------" -ForegroundColor Cyan
-Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias $alias |
-    Format-Table IPAddress, PrefixLength, PrefixOrigin -AutoSize
+Show-IpState -Title '--- resulting IPv4 ---------------------------------------'
 
-Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host (" READY: this machine is LanRemote Lab " + $Role + ".") -ForegroundColor Green
-if ($Role -eq 'A') {
-    Write-Host " Now run set-lab-ip.ps1 -Role B on the OTHER machine." -ForegroundColor Green
+# 6. verify the lab address really landed
+$check = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $target.Address -ErrorAction SilentlyContinue)
+Say-Rule
+if ($check.Count -gt 0) {
+    Say (' READY: this machine is LanRemote Lab ' + $Role + ' (' + $target.Address + ').') 'Green'
+    if ($Role -eq 'A') {
+        Say ' Now run:  .\set-lab-ip.ps1 -Role B   on the OTHER machine.' 'Green'
+    } else {
+        Say ' Both machines configured. Start LanRemote on both.' 'Green'
+    }
+    Say '' 
+    Say (' Undo afterwards:   .\set-lab-ip.ps1 -Undo') 'Gray'
 } else {
-    Write-Host " Both machines configured. Start LanRemote on both." -ForegroundColor Green
+    Say ' FAILED: lab address was not applied. Run -Undo and check the log.' 'Red'
+    exit 1
 }
-Write-Host ""
-Write-Host " To undo afterwards:  .\set-lab-ip.ps1 -Undo" -ForegroundColor Gray
-Write-Host "=========================================================" -ForegroundColor Cyan
+Say (' Log: ' + $logFile) 'Gray'
+Say-Rule

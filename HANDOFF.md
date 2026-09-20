@@ -1,7 +1,12 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-20 15:26 (+08:00)**
+> 更新时间：**2026-09-20 17:25 (+08:00)**
+>
+> 本轮（15:26 之后）追加的内容**只动验收物料，不动产品代码**：
+> `set-lab-ip.ps1` 重写为 v2（v1 有缺陷会弄丢 IPv4，已归档）、验收手册 §1.2 重写、
+> HANDOFF 新增「验收核心已实证」与「v1 事故 / v2 重写」两节。
+> **`src/` 与 `tests/` 零改动**，因此 §12 的 408 tests 结论继续有效、无需重跑。
 
 ---
 
@@ -247,10 +252,12 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 原因（两条，各自都足够）：
 
 1. **只有一台物理测试机**；
-2. **本机唯一的活跃网卡是 `172.100.166.220`，不属于 RFC1918**
-   （172.16.0.0/12 只覆盖 172.16–172.31）。WLAN 与两个「本地连接*」均为「媒体已断开连接」。
-   因此 `NetworkInterfaceSelector` 正确地判定「没有合格的私有 IPv4 网卡」，
-   本机环境按设计不支持 LanRemote 的发现。
+2. **本机以太网的 `172.100.166.220` 不属于 RFC1918**
+   （172.16.0.0/12 只覆盖 172.16–172.31）。两个「本地连接*」为「媒体已断开连接」，
+   只有 APIPA `169.254.x.x`。
+   > 2026-09-20 17:10 复测更正：WLAN 此时已连接并拿到 `10.65.156.134/24`（Dhcp，**是** RFC1918
+   > 私有地址），所以本机现在**存在**合格网卡。但电脑 B 不在 `10.65.156.x` 网段，
+   > 两机仍然互不可见 —— 结论不变：**必须**靠 `set-lab-ip.ps1` 造出双方共享的 `192.168.1.0/24`。
 
 ### 已实际执行的单机验证
 
@@ -308,11 +315,85 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 
 两台机器网线是通的（1000 Mbps、同网段、可互通），问题纯粹在地址段本身。
 
-**处置**：新增 `scripts/acceptance/set-lab-ip.ps1`，给两台机器各**追加**
-一个 `192.168.1.10/24`（A）与 `192.168.1.20/24`（B）**共存地址**（不动原有 `172.100.x.x`，
-避免破坏现有上网），同时把网卡配置文件设为 `Private` 并放行入站 UDP 45872；
-`-Undo` 可一键回滚。**未修改任何产品代码**，安全约束（只认 RFC1918）保持原样。
-验收手册新增第 1.1 / 1.2 节记录本案例。
+**处置**：新增 `scripts/acceptance/set-lab-ip.ps1`，给两台机器各安排
+`192.168.1.10/24`（A）与 `192.168.1.20/24`（B），同时把网卡配置文件设为 `Private`
+并放行入站 UDP 45872；`-Undo` 可一键回滚。**未修改任何产品代码**，
+安全约束（只认 RFC1918）保持原样。验收手册新增第 1.1 / 1.2 节记录本案例。
+
+> 该脚本第一版（v1）按「保留 DHCP 地址 + 追加静态地址」实现，被实测证明前提错误，
+> 已归档为 `_set-lab-ip.v1.broken.ps1.bak`。当前是 **v2**，细节见下一小节。
+
+### 验收核心已实证：A 机日志中的双向发现记录（2026-09-20 16:10–16:16）
+
+回滚事故中断验收之前，电脑 A 的 `%LOCALAPPDATA%\LanRemote\logs\lanremote-20260920.log`
+**已经完整记录了 M2.1 两个头条修复的真实收发**。摘录（原文）：
+
+```
+16:10:15.717 [Information] 局域网发现启动。有效网卡=1，地址=以太网:192.168.1.10
+16:10:25.396 [Debug]      已回应来自 192.168.1.20 的 probe：unicast → 192.168.1.20:45872（不使用源端口 50193）。
+16:10:25.401 [Information] 发现设备 DESKTOP-CU2263D（3ERD-R74V）于 192.168.1.20，能力=view,control。
+16:16:18.730 [Information] 设备离线：DESKTOP-CU2263D（3ERD-R74V）192.168.1.20。
+16:16:19.378 [Information] 发现设备 DESKTOP-CU2263D（3ERD-R74V）于 192.168.1.20，能力=view,control。
+```
+
+据此可判定：
+
+| M2.1 修复项 | 证据 | 结论 |
+| --- | --- | --- |
+| §1.5.1 probe 回应端口 | `不使用源端口 50193` → `192.168.1.20:45872` | **真实链路上成立**（源端口 50193 是随机的，若仍回源端口则 B 收不到） |
+| §1.5.2 组播出口网卡 | 单网卡 + 绑定源地址后 announce/probe 正常互达 | 未出现 `AddressNotAvailable`，出口选择正确 |
+| 发现 → 缓存 → UI | `发现设备` 与 `设备离线` 成对出现，且离线后重新出现 | TTL 移除 + 重新发现路径**真实可用** |
+
+> 16:14 之后反复出现的 `发送组播 announce 到 239.255.77.77 失败（SocketError=AddressNotAvailable）`
+> 是**回滚把网卡绑定的源地址弄丢之后**的后果（当时以太网只剩 APIPA），不是产品缺陷。
+> 该进程（pid 37700，源地址已消失仍在跑）已手工终止。
+
+**所以：M2.1 的技术结论已被真实环境支撑，缺口只剩「20 步完整走完并正式签字」。**
+这一项仍是 **NOT RUN**——证据是**中途截取**的，不是按清单逐条验收的结果。
+
+### set-lab-ip.ps1 v1 事故与 v2 重写（2026-09-20）
+
+**事故**：用户在电脑 A 上跑 `set-lab-ip.ps1 -Role A`（报告成功）、`check-env.ps1`（PRE-CHECK PASSED）、
+随后 `-Undo` —— 以太网**失去全部可用 IPv4**（仅剩 APIPA `169.254.194.126`，无网关无 DNS）；
+第二次 `-Undo` 又抛出 `No IPv4 adapter found. Pass -InterfaceAlias explicitly.`。
+已用 `Remove-NetIPAddress` + `Set-NetIPInterface -Dhcp Enabled` + `ipconfig /renew` 手工恢复，
+复核 `172.100.166.220/24`、`Dhcp=Enabled`、网关 `172.100.166.254`、DNS `172.100.162.101/102` 均复原。
+
+**根因（实测，不是推测）**：Windows IPv4 上「DHCP 地址 + 额外静态地址」**不能共存**。
+
+| 操作 | 预期 | 实测 |
+| --- | --- | --- |
+| `New-NetIPAddress` 在 DHCP 接口上追加 | 共存 | 接口 `Dhcp` → `Disabled`，租约丢失 |
+| `netsh interface ipv4 add address` 追加 | 共存 | 同上 |
+| 追加后再删除 | 复原 | 只剩 APIPA，无网关/DNS |
+
+（在定位过程中本机网络又断了一次，同样用 `netsh ... source=dhcp` + `set dnsservers source=dhcp`
++ `ipconfig /renew` 恢复。**教训与 §1.5.2 一致：Windows 网络行为必须实测，不能凭直觉断言。**）
+
+**v2 改法**：整口切静态 —— 先把当前 IP/掩码/网关/DNS 存盘到
+`%TEMP%\lanremote-lab-ip-state.json`，再用**同一套配置**切成静态（不断网），
+最后追加 `192.168.1.x/24`（不带网关）。`-Undo` 移除 lab 地址、切回 DHCP、`ipconfig /renew` 并自检。
+
+**v2 实测（本机，Windows PowerShell 5.1）**：
+
+| 场景 | 结果 |
+| --- | --- |
+| `-Role A` | `EXIT=0`；以太网 `172.100.166.220` Manual + `192.168.1.10` Manual 共存 |
+| 切静态后连通性 | `ping 172.100.166.254` = True；DNS `172.100.162.101/102` 保留；默认路由仍在 |
+| `-Undo` | `EXIT=0`；回到 `172.100.166.220/24 Dhcp`；`OK:` 自检通过 |
+| 已是 DHCP 时再 `-Undo`（幂等） | `EXIT=0`（v1 在此场景崩溃） |
+
+**v2 修掉的两个 bug**（都是实测才暴露）：
+
+1. **不能只看 `netsh` 退出码** —— 在已是 DHCP 的接口上 `set address source=dhcp`，
+   netsh 返回**非 0** 并输出「已在此接口上启用 DHCP。」，实为成功。改为**用
+   `Get-NetIPInterface` 复核实际状态**，退出码仅供参考。
+2. **`($x | ForEach-Object { $_.IPAddress } -join ', ')` 在 PS 5.1 会把 `-join` 当成
+   `ForEach-Object` 的参数**并抛异常（语法检查查不出来）。已改为 `$x.IPAddress -join ', '`。
+
+附带修正：`Set-NetConnectionProfile` 在刚切完静态时会因网卡处于 `Identifying...` 而失败，
+现改为最多 5 次、间隔 3 s 重试。（即便失败也不阻断——防火墙规则是 `Profile Any`，
+不依赖网络配置文件。）
 
 ### 验收物料（已就绪，等用户重测）
 
@@ -322,6 +403,7 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 | 便携版验收包（自包含 win-x64，解压即用，目标机无需装运行时） | `scripts/acceptance/make-package.py` 生成 `LanRemote-0.1.0-m2-win-x64.zip` |
 | 验收前环境自检脚本 | `scripts/acceptance/check-env.ps1` |
 | 验收后日志检查 / 访问密钥泄漏扫描脚本 | `scripts/acceptance/check-logs.ps1` |
+| 私有实验网段配置 / 回滚脚本（**v2**） | `scripts/acceptance/set-lab-ip.ps1`（v1 缺陷版已归档为 `_set-lab-ip.v1.broken.ps1.bak`） |
 
 包内自带 `START-HERE.md`（即验收手册）、`check-env.ps1`、`check-logs.ps1`、`set-lab-ip.ps1`。
 两个 `.ps1` 刻意存为 **UTF-8 with BOM**，否则 Windows PowerShell 5.1 会把中文按 ANSI 解析成乱码。

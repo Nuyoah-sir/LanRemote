@@ -63,7 +63,7 @@ LanRemote 有一条硬性安全约束（规格第 3 节、ADR-022）：**只使�
 > 注意：网线是好的、两台能互通、同网段也正确。问题纯粹在**地址段本身**。
 > `172.100.x.x` 这种"看着像私有"的地址，最容易骗过直觉。
 
-### 1.2 修复：给两台机器各加一个私有地址
+### 1.2 修复：给两台机器各加一个私有地址（`set-lab-ip.ps1` v2）
 
 用 `set-lab-ip.ps1`（**管理员 PowerShell**，两台各跑一次，角色不同）：
 
@@ -75,28 +75,60 @@ powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Role A     # → 192.16
 powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Role B     # → 192.168.1.20/24
 ```
 
-脚本做四件事，且**幂等**（重复跑不会出错）：
+#### 为什么脚本要"整口切静态"（v1 就是栽在这里）
 
-1. 给承载现有地址的网卡**追加** `192.168.1.10`（或 `.20`）/24 —— **不会删除原来的 `172.100.x.x`**，
-   原来的上网能力完全不受影响；
-2. 把该网卡的网络配置文件设为 `Private`（`Public` 配置文件下入站 UDP 会被拦）；
-3. 创建入站放行规则 `LanRemote Discovery UDP 45872`；
-4. 打印结果地址表供核对。
+直觉上"保留 DHCP 地址、再追加一个静态地址"应该可行 —— **实测证明不行**。
+Windows IPv4 上，一张网卡只能是 **DHCP 或 静态**，不能共存：
 
-`-InterfaceAlias` 可显式指定网卡（默认自动挑带 `172.100.*` 的那张）；
-带 `-SkipAsSource $false` 是刻意的，让新地址可以正常参与收发。
+| 操作 | 预期 | 实测结果 |
+| --- | --- | --- |
+| `New-NetIPAddress` 在 DHCP 接口上追加地址 | 两个地址共存 | 接口 `Dhcp` 被翻成 `Disabled`，DHCP 租约**丢失** |
+| `netsh interface ipv4 add address` 追加地址 | 两个地址共存 | 同上，`Dhcp` → `Disabled` |
+| 追加后再删掉该地址 | 回到原状 | 只剩 APIPA `169.254.x.x`，**无网关无 DNS** |
 
-**验收做完后回滚**（任意一台）：
+v1 就是按"追加共存"写的，结果 `-Undo` 之后电脑 A 的以太网**没有可用 IPv4**，
+第二次 `-Undo` 还因为找不到非 APIPA 地址而直接报 `No IPv4 adapter found`。
+（该脚本已归档为 `_set-lab-ip.v1.broken.ps1.bak`，不要再用。）
+
+#### v2 的实际做法
+
+1. 读取当前 IPv4 配置（地址 / 掩码 / 网关 / DNS / 是否 DHCP），存到
+   `%TEMP%\lanremote-lab-ip-state.json`；
+2. 把该网卡**切成静态**，但用的就是刚才读到的那套配置 —— 所以**不会断网**
+   （实测切完后 `ping 172.100.166.254` 通，DNS 保留，默认路由还在）；
+3. 再追加 `192.168.1.10`（或 `.20`）/24，**不带网关**，不与原网关抢默认路由；
+4. 把网络配置文件设为 `Private`（带重试：刚切静态时网卡处于 `Identifying...`，
+   首次设置会失败），并创建入站规则 `LanRemote Discovery UDP 45872`。
+
+结果：网卡**同时**持有 `172.100.166.x`（Manual）和 `192.168.1.x`（Manual）。
+
+`-InterfaceAlias "以太网"` 可显式指定网卡；不指定时自动挑**有线的、Up 的、有非 APIPA 地址**的那张。
+
+#### 回滚
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Undo
 ```
 
-它会移除两个 lab 地址，并列出剩余地址供确认。（防火墙规则如需删：
-`Remove-NetFirewallRule -DisplayName "LanRemote Discovery UDP 45872"`）
+会移除 lab 地址 → 接口切回 DHCP → `ipconfig /renew` → **自检**：
+确认没有残留 lab 地址、确认拿到了非 APIPA 地址、确认 `Dhcp=Enabled`。
+任何一项不过就打印手工修复命令并以退出码 1 结束。
 
-> 采用"加地址"而不是"改地址"，是为了不动你现有的网络配置 ——
-> 万一 `172.100.166.x` 是公司内网且需要保留，改了会断网。
+#### v2 实测记录（本机 2026-09-20，Windows PowerShell 5.1）
+
+| 场景 | 结果 |
+| --- | --- |
+| `-Role A`（DHCP → 静态 + 追加 lab 地址） | `EXIT=0`，以太网 `172.100.166.220` Manual + `192.168.1.10` Manual |
+| 切静态后连通性 | `ping 172.100.166.254` = True，DNS `172.100.162.101/102` 保留 |
+| `-Undo`（静态 → DHCP） | `EXIT=0`，回到 `172.100.166.220/24 Dhcp`，`OK:` 自检通过 |
+| 已是 DHCP 时再 `-Undo`（幂等） | `EXIT=0` —— 这正是 v1 会崩的场景 |
+
+> 两个踩过的坑，都已修掉：`netsh` 在"已经是 DHCP"时**返回非 0** 但实为成功
+> （不能只看退出码，必须复核 `Get-NetIPInterface`）；
+> `($x | ForEach-Object { $_.IPAddress } -join ', ')` 在 PS 5.1 会把 `-join`
+> 当成 `ForEach-Object` 的参数而抛异常（要写成 `$x.IPAddress -join ', '`）。
+
+（防火墙规则如需删：`Remove-NetFirewallRule -DisplayName "LanRemote Discovery UDP 45872"`）
 
 在**每一台**上都先跑一次自检：
 
