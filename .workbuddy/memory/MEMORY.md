@@ -48,7 +48,9 @@ M1 设备身份与安全存储 —— **已完成**（build PASS / 175 tests PAS
 M1.1 Security Hardening —— **已完成**（build PASS / 189 tests PASS，git 基线 `664e558`）
 M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last code commit `104f296`）
 M1.3 ECDSA Certificate KeyUsage Fix —— **已完成**（build PASS / 200 tests PASS，Last code commit `9e75fce`）
-M2 网卡筛选 + UDP 发现 —— 下一步（M1 系列已封板，不要再打磨 M1）
+M2 网卡筛选 + UDP 发现 —— **code 已完成**（build PASS / 382 tests PASS，Last code commit `857eaa6`）
+  ⚠️ 两机手工 DoD **NOT RUN**
+M3 TLS Host/Client + 同子网校验 —— 下一步（M2 已停止，等审计确认）
 M3~M11 —— 未开始
 
 ## M1 关键存储事实（后续里程碑会依赖）
@@ -67,3 +69,10 @@ M3~M11 —— 未开始
 - `ReadAsync` 只发 `Clone()`；证书已存在时加载走只读路径，**不重写 secrets.bin**
 - `TryDecodeExact` 失败时 out 是 `Array.Empty<byte>()`（已 ZeroMemory），不会返回部分解码的秘密字节
 - HANDOFF 记账用 `Last code commit` + `Working tree at validation`，**不写 HEAD hash**（避免自引用）
+
+## 本机网络环境（影响 discovery 验证）
+
+- 唯一活跃网卡 IPv4 = **172.100.166.220**，**不属于 RFC1918**（172.16/12 只覆盖 172.16–172.31）
+- WLAN 与「本地连接* 1/2」均为媒体已断开
+- 因此本机跑 LanRemote discovery 必然输出「没有找到任何合格的私有 IPv4 网卡」——**预期行为**
+- 要验证发现/连接，需要 192.168.x.x 或 10.x.x.x 的网络，或另开实验性开关（当前不做）

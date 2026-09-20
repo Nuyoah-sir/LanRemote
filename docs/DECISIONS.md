@@ -108,7 +108,27 @@
 **Consequence**：算法一旦改动，所有已存在的设备码都会变，等同于换身份。有测试固定了「同一 guid 稳定 / 不同 guid 不同 / 格式匹配正则」。  
 **可逆性**：技术可逆，产品上不可接受。
 
-### ADR-018 — 私钥导入改为 `EphemeralKeySet`（取代 ADR-016）
+### ADR-022 — Discovery transport：IPv4 组播 + directed broadcast，无云端
+**日期**：2026-09-20（M2）  
+**Decision**：
+1. 只处理 IPv4；
+2. 发现用 UDP 组播 `239.255.77.77:45872` TTL=1，外加每张合格网卡的 directed broadcast probe 兜底；
+3. **没有任何**云端注册、mDNS 中继、STUN/TURN、WebSocket、UPnP、NAT-PMP、PCP、端口映射、公网 API；
+4. **source IP 权威**：远端地址一律取 UDP source endpoint，announcement payload 里就没有地址字段；
+5. **报文一律不可信**：先看来源（IPv4 + RFC1918 + 同子网），通过后才进 JSON parser；单报文上限 2048 字节；
+6. 发现包**不是**认证依据，只用于列表展示与后续证书 pinning。  
+**Context**：`04_PROTOCOL_AND_SECURITY.md` 第 5 节与 M2 要求第二十五节。产品定位是纯局域网自用工具，任何公网依赖都会把威胁模型完全改变。  
+**Consequence**：在完全断网、只剩一个交换机的环境也能工作；代价是跨网段/VPN 场景默认不可用（需另开实验设置，M2 不做）。  
+**可逆性**：技术可逆，但与产品定位冲突，不建议。
+
+### ADR-023 — `WatchAsync` 是 upsert-only，UI 自己按 LastSeen prune
+**日期**：2026-09-20（M2）  
+**Decision**：`IDiscoveryService.WatchAsync` 只推送「在线设备的插入或更新」，**不发送**任何「Removed」假设备。UI（MainViewModel）自己起一个 1 秒的清理循环，按 `LastSeen <= now - 7s` 从 `ObservableCollection` 删除。  
+**Context**：现有 Core API 在 M0 就定为 `IAsyncEnumerable<DiscoveredDevice>`。M2 若临时改成 Added/Updated/Removed 事件模型，等于推翻已有契约；而设备离线本来就是「超时未再出现」，用 TTL 表达最自然。  
+**Consequence**：任何新的消费者都必须自己实现 TTL prune，不能指望收到移除事件。缓存与更新队列本身仍有界（256 / 512 DropOldest）。  
+**可逆性**：可逆，但需要一次独立的 ADR 与 API 变更，不要在后续里程碑里「顺手」改。
+
+### ADR-021 — ECDSA 证书的 Key Usage 只允许 `digitalSignature`）
 **日期**：2026-09-20（M1.1 审计）  
 **Decision**：`DeviceCertificateService` 用 `X509CertificateLoader.LoadPkcs12(pfx, password, X509KeyStorageFlags.EphemeralKeySet)` 载入证书；**不使用** `PersistKeySet`，**不使用** `Exportable`。  
 **Context**：ADR-016 当初为了「M3 做 TLS 服务端时 SslStream 能拿到私钥」而选了 `PersistKeySet | Exportable`，理由是传闻中 ephemeral 私钥在 Windows SslStream 上会失败。审计发现这条理由是**未经实测的猜测**，而代价很实在：私钥被额外持久化到用户的 CNG 密钥容器，等于在 DPAPI 保护的 `secrets.bin` 之外多留一份持久化副本，还把私钥标记为可导出。这与「持久化副本只有 secrets.bin」的安全目标冲突。  
