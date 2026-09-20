@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Discovery：UDP 局域网发现、网卡筛选、设备缓存。
+       v1 仅 IPv4；只使用私有 RFC1918 网卡（见 04_PROTOCOL_AND_SECURITY.md 第 3 节）。
+       M2 施工，M0 仅建立项目边界与占位类型。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>LanRemote.Discovery</RootNamespace>
+    <AssemblyName>LanRemote.Discovery</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Transport：TLS/TCP、长度前缀帧协议、连接状态机。
+       Control 与 Video 使用两条独立 TLS/TCP 连接（ADR-003），M3 施工。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>LanRemote.Transport</RootNamespace>
+    <AssemblyName>LanRemote.Transport</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+  </ItemGroup>
+
+</Project>

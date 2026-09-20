@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 必须使用 Windows TFM：被测的 LanRemote.Security 依赖 Windows DPAPI。
+         安全测试要在真实 Crypto API 上跑；绕过手段只能用 injection/fake，
+         不允许把 production policy 改弱（06_DEV_STANDARDS.md、AGENTS.md 第 12 条）。 -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LanRemote.Core\LanRemote.Core.csproj" />
+    <ProjectReference Include="..\..\src\LanRemote.Security\LanRemote.Security.csproj" />
+  </ItemGroup>
+
+</Project>

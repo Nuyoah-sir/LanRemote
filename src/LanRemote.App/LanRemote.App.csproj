@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 关于 TFM 的说明（ADR-010）：
+       01_MASTER_PROMPT.md 允许「net10.0-windows10.0.19041.0 或等价可支持目标系统的 Windows TFM」。
+       本项目选择 net10.0-windows（不带最后的平台版本号），因为：
+         1. UseWPF 只需要 Microsoft.WindowsDesktop.App.Ref 中的 WPF 引用程序集，不需要 WinRT 投影；
+         2. 带 10.0.19041.0 后缀会强制解析 Windows SDK 投影包/契约，本机未安装 Windows 10 SDK 会直接构建失败；
+         3. 当前代码不使用任何 CsWinRT / WinRT API。
+       一旦将来需要 UWP/WinRT API，应显式升级为 net10.0-windows10.0.19041.0 并同步更新本注释与 ADR。 -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>LanRemote.App</RootNamespace>
+    <AssemblyName>LanRemote.App</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <EnableWindowsFormsAnalyzer>true</EnableWindowsFormsAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 刻意不引入 MVVM 框架：ViewModelBase 只需十几行，
+         符合 06_DEV_STANDARDS.md 第 13 节「不是为了几行代码引入大框架」。 -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+    <ProjectReference Include="..\LanRemote.Discovery\LanRemote.Discovery.csproj" />
+    <ProjectReference Include="..\LanRemote.Transport\LanRemote.Transport.csproj" />
+    <ProjectReference Include="..\LanRemote.Security\LanRemote.Security.csproj" />
+    <ProjectReference Include="..\LanRemote.Capture\LanRemote.Capture.csproj" />
+    <ProjectReference Include="..\LanRemote.Input\LanRemote.Input.csproj" />
+    <ProjectReference Include="..\LanRemote.Sessions\LanRemote.Sessions.csproj" />
+  </ItemGroup>
+
+</Project>

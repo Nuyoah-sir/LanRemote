@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Sessions：Host / Client 会话编排与会话注册表。M4~M8 逐步施工。
+       单个会话失败不得拖死其他会话（03_ARCHITECTURE.md 第 11 节）。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>LanRemote.Sessions</RootNamespace>
+    <AssemblyName>LanRemote.Sessions</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,26 @@
+<Project>
+
+  <!-- LanRemote 全局构建属性。
+       来源：LanRemote_Implementation_Package/PROJECT_BOOTSTRAP.md 推荐配置。
+       初期 TreatWarningsAsErrors=false，避免 Win32/WPF interop 警告阻塞施工；
+       M9 前应把项目自身可修警告清掉（见 06_DEV_STANDARDS.md 第 1 节）。 -->
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+  </PropertyGroup>
+
+  <!-- 版本与产品元信息集中在此，避免各项目各写一份。 -->
+  <PropertyGroup>
+    <LanRemoteVersion>0.1.0-m1</LanRemoteVersion>
+    <Version>$(LanRemoteVersion)</Version>
+    <Authors>Nuyoah</Authors>
+    <Product>LanRemote</Product>
+    <RootNamespace Condition="'$(RootNamespace)' == ''">$(MSBuildProjectName)</RootNamespace>
+  </PropertyGroup>
+
+</Project>

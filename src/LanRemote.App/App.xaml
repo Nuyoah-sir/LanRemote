@@ -1,0 +1,6 @@
+<Application x:Class="LanRemote.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnMainWindowClose">
+    <!-- 不设置 StartupUri：主窗口由 DI 容器解析后显示（见 App.xaml.cs）。 -->
+</Application>

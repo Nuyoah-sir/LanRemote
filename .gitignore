@@ -1,0 +1,44 @@
+# .gitignore — LanRemote
+
+## 构建输出
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+artifacts/
+publish/
+
+## Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+## 测试
+TestResults/
+*.trx
+coverage*.json
+coverage*.xml
+coverage*.info
+
+## 本地秘密与安全产物（绝不入库）
+secrets.bin
+*.pfx
+*.p7b
+*.key
+*.snk
+logs/
+*.log
+
+## NuGet
+*.nupkg
+packages/
+
+## OS
+Thumbs.db
+desktop.ini

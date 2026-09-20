@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Core：领域模型、配置、公共接口。
+       不依赖任何 Windows 专有 API，保持 net10.0 以便单元测试可在任意平台 CI 上跑。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>LanRemote.Core</RootNamespace>
+    <AssemblyName>LanRemote.Core</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

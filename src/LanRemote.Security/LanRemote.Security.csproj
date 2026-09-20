@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Security：DPAPI 秘密存储、自签名证书、访问密钥、认证挑战。
+       依赖 Windows DPAPI (ProtectedData, CurrentUser)，因此使用 Windows TFM。M1/M4 施工。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>LanRemote.Security</RootNamespace>
+    <AssemblyName>LanRemote.Security</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 日志只使用抽象包：具体的 logger provider 由 App 通过 DI 注入。
+         这样 Security 层不知道日志会落到哪里，也就不存在「顺手把 key 打出去」的路径。 -->
+    <!-- Windows DPAPI (ProtectedData)。即使 TFM 是 net10.0-windows，该类型仍来自 NuGet 包，
+         不引用就编译不过。这是 M1 唯一新增的外部依赖，且属于 BCL 官方扩展。 -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+  </ItemGroup>
+
+</Project>

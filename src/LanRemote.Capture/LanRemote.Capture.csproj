@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Capture：屏幕采集（v1 为 GDI BitBlt）、缩放、JPEG 编码（ADR-007/ADR-008）。M5 施工。
+       后端必须通过 IScreenCaptureBackend 接口隔离，便于后续替换为 Windows.Graphics.Capture（M11）。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>LanRemote.Capture</RootNamespace>
+    <AssemblyName>LanRemote.Capture</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+  </ItemGroup>
+
+</Project>
