@@ -16,7 +16,7 @@
 
   <!-- 版本与产品元信息集中在此，避免各项目各写一份。 -->
   <PropertyGroup>
-    <LanRemoteVersion>0.1.0-m1</LanRemoteVersion>
+    <LanRemoteVersion>0.1.0-m2</LanRemoteVersion>
     <Version>$(LanRemoteVersion)</Version>
     <Authors>Nuyoah</Authors>
     <Product>LanRemote</Product>

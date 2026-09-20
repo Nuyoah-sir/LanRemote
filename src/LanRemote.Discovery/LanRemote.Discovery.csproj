@@ -12,6 +12,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 日志只引用抽象包：具体 provider 由 App 通过 DI 注入。
+         Discovery 层因此不知道日志落到哪里，也不存在「顺手把报文原文打进日志」的路径。 -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
   </ItemGroup>
 

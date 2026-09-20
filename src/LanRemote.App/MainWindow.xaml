@@ -130,14 +130,60 @@
 
             <GroupBox Grid.Column="2" Header="局域网设备" Padding="12">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top"
-                               Text="自动发现将在 M2 实现。此处的列表目前为空是有意为之。"
-                               Opacity="0.7"
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,8" />
-                    <!-- M2 才会出现真实设备列表。故意不绑定尚不存在的属性，避免绑定错误噪音。 -->
-                    <ListBox x:Name="DeviceList" IsEnabled="False">
-                        <ListBoxItem Content="（暂无设备 — M2 实现自动发现）" />
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Button DockPanel.Dock="Right"
+                                Content="刷新"
+                                Padding="14,4"
+                                Click="RefreshDevices_OnClick" />
+                        <TextBlock Text="同一私有 IPv4 子网内的设备会自动出现。"
+                                   Opacity="0.7"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0" />
+                    </DockPanel>
+
+                    <ListBox x:Name="DeviceList"
+                             ItemsSource="{Binding DiscoveredDevices}"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0"
+                                               Text="●"
+                                               Foreground="ForestGreen"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0" />
+
+                                    <StackPanel Grid.Column="1" Orientation="Vertical">
+                                        <TextBlock>
+                                            <Run Text="{Binding DeviceName, Mode=OneWay}"
+                                                 FontWeight="SemiBold" />
+                                            <Run Text="   " />
+                                            <Run Text="{Binding DeviceCode, Mode=OneWay}"
+                                                 FontFamily="Consolas" />
+                                        </TextBlock>
+                                        <TextBlock Opacity="0.7">
+                                            <Run Text="{Binding Address, Mode=OneWay}" />
+                                            <Run Text="  在线" />
+                                        </TextBlock>
+                                    </StackPanel>
+
+                                    <Button Grid.Column="2"
+                                            Content="连接"
+                                            IsEnabled="False"
+                                            Padding="12,2"
+                                            VerticalAlignment="Center"
+                                            ToolTip="连接功能将在 M3/M4 实现" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
             </GroupBox>

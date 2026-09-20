@@ -5,6 +5,8 @@ using LanRemote.App.ViewModels;
 using LanRemote.Core.Abstractions;
 using LanRemote.Core.Configuration;
 using LanRemote.Core.Infrastructure;
+using LanRemote.Discovery;
+using LanRemote.Discovery.Networking;
 using LanRemote.Security.Certificates;
 using LanRemote.Security.Identity;
 using LanRemote.Security.Secrets;
@@ -78,6 +80,29 @@ public partial class App : Application
         {
             if (_host is not null)
             {
+                // 先停 discovery：它会 complete channel 并关闭 socket。
+                // StopAsync 是幂等的，即使 ViewModel 已经停过也不会报错。
+                try
+                {
+                    IDiscoveryService? discovery = _host.Services.GetService<IDiscoveryService>();
+                    if (discovery is not null)
+                    {
+                        using CancellationTokenSource discoveryCts = new(TimeSpan.FromSeconds(3));
+                        await discovery.StopAsync(discoveryCts.Token).ConfigureAwait(true);
+                    }
+
+                    MainViewModel? viewModel = _host.Services.GetService<MainViewModel>();
+                    if (viewModel is not null)
+                    {
+                        await viewModel.StopDiscoveryAsync().ConfigureAwait(true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // discovery 停止失败不能阻止宿主停止。
+                    Debug.WriteLine($"停止局域网发现失败: {ex}");
+                }
+
                 using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
                 await _host.StopAsync(cts.Token).ConfigureAwait(true);
                 _host.Dispose();
@@ -165,6 +190,20 @@ internal static class HostBuilderConfiguration
             provider => new DpapiAccessSecretStore(
                 provider.GetRequiredService<DpapiSecretVault>(),
                 provider.GetRequiredService<ILogger<DpapiAccessSecretStore>>()));
+
+        // M2：局域网发现。
+        builder.Services.AddSingleton<INetworkInterfaceSource, SystemNetworkInterfaceSource>();
+        builder.Services.AddSingleton<INetworkBindingProvider>(
+            provider => new LocalNetworkBindingProvider(
+                provider.GetRequiredService<INetworkInterfaceSource>()));
+        builder.Services.AddSingleton<ISubnetPolicy>(
+            provider => new SubnetPolicy(provider.GetRequiredService<INetworkBindingProvider>()));
+        builder.Services.AddSingleton<DiscoveryRuntimeState>();
+
+        // concrete 与 interface 必须指向同一个实例，否则会出现两套 UDP 服务。
+        builder.Services.AddSingleton<LanDiscoveryService>();
+        builder.Services.AddSingleton<IDiscoveryService>(
+            provider => provider.GetRequiredService<LanDiscoveryService>());
 
         builder.Services.AddSingleton<MainViewModel>();
         builder.Services.AddSingleton<MainWindow>();

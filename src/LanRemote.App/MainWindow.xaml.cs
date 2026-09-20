@@ -105,6 +105,12 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void RefreshDevices_OnClick(object sender, RoutedEventArgs e)
+    {
+        // 只触发一次 discovery probe：不清除身份、不重读 DPAPI、不重建证书、不重启 socket。
+        await ViewModel.RefreshAsync().ConfigureAwait(true);
+    }
+
     private async void RegenerateAccessKey_OnClick(object sender, RoutedEventArgs e)
     {
         MessageBoxResult answer = MessageBox.Show(
