@@ -16,6 +16,7 @@
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → **M2.1**
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
 - **Last code commit：`313c542`**（M2.1 代码 + 测试 + probe 回应日志；主修复提交为 `fb202eb`）
+- **Acceptance kit commit：`905fcc8`**（只含 HANDOFF / 验收手册 / `set-lab-ip.ps1` v2，无产品代码）
 - **Working tree at validation: clean**
 - **M2.1 code 状态：Implementation complete；Two-machine manual DoD：NOT RUN（见第 9 节）**
 - **是否满足完整 M2 DoD：否**（缺两机手工验收，见第 9 节与第 16 节）
