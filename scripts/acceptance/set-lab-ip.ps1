@@ -124,31 +124,75 @@ function Convert-PrefixToMask {
 # address was left, which made the second -Undo impossible. v2 always returns an
 # adapter so that -Undo can still repair the interface.
 # ---------------------------------------------------------------------------
+# Virtual NICs are the trap here (learned the hard way on machine B): VMware /
+# VirtualBox / Hyper-V / TAP / hosted-network adapters are "Up", report MediaType
+# 802.3 and carry an IPv4 address, so a naive "first Up 802.3 adapter" picks them.
+# But their traffic never reaches the physical wire, so a lab address placed on
+# VMnet1 is invisible to the other machine. Always prefer real hardware NICs.
+function Test-VirtualAdapter {
+    param($Adapter)
+
+    $name = $(if ($Adapter.Name) { $Adapter.Name } else { '' })
+    $desc = $(if ($Adapter.InterfaceDescription) { $Adapter.InterfaceDescription } else { '' })
+    $text = $desc + ' | ' + $name
+
+    $patterns = @(
+        'VMware', 'VMnet', 'VirtualBox', 'Hyper-V', 'TAP-Windows', 'TAP Adapter',
+        'OpenVPN', 'WireGuard', 'Npcap', 'Bluetooth', 'WAN Miniport', 'Wi-Fi Direct',
+        'Hosted Network', 'Loopback', 'Teredo', 'ISATAP', 'RAS Async', 'ZeroTier',
+        'Sangfor', 'PANGP', 'Fortinet', 'AnyConnect', 'NordLynx', 'ExpressVPN',
+        'Microsoft KM-TEST', 'Tunnel', 'Virtual'
+    )
+    foreach ($p in $patterns) {
+        if ($text -match [regex]::Escape($p)) { return $true }
+    }
+
+    # Windows mobile-hotspot / hosted-network adapters: "本地连接* 1"
+    if ($name -match '^本地连接\s*\*') { return $true }
+    if ($name -match '^Local Area Connection\s*\*') { return $true }
+
+    return $false
+}
+
 function Resolve-Adapter {
     param([string]$Requested)
 
     if ($Requested -ne '') {
-        $hit = Get-NetAdapter -InterfaceAlias $Requested -ErrorAction SilentlyContinue
-        if (-not $hit) { throw "No adapter named '$Requested'." }
-        return $hit
+        $hit = @(Get-NetAdapter -InterfaceAlias $Requested -ErrorAction SilentlyContinue)
+        if ($hit.Count -eq 0) {
+            $hit = @(Get-NetAdapter -Name $Requested -ErrorAction SilentlyContinue)
+        }
+        if ($hit.Count -eq 0) { throw "No adapter named '$Requested'." }
+        return $hit[0]
     }
 
-    $up = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.MediaType -eq '802.3' })
-    if ($up.Count -eq 0) {
-        $up = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' })
-    }
+    $up = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' })
     if ($up.Count -eq 0) {
         throw "No adapter is Up. Plug in the cable or pass -InterfaceAlias."
     }
 
-    foreach ($a in $up) {
+    $real = @($up | Where-Object { -not (Test-VirtualAdapter $_) })
+    if ($real.Count -eq 0) { $real = $up }
+
+    # pass 1: real NIC + wired + has a default gateway  (the machine's real LAN)
+    foreach ($a in $real) {
+        if ($a.MediaType -ne '802.3') { continue }
+        $usable = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' })
+        if ($usable.Count -eq 0) { continue }
+        $hasGw = @(Get-NetRoute -InterfaceIndex $a.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue).Count -gt 0
+        if ($hasGw) { return $a }
+    }
+
+    # pass 2: real NIC with any usable IPv4
+    foreach ($a in $real) {
         $usable = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue |
             Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -notlike '169.254.*' })
         if ($usable.Count -gt 0) { return $a }
     }
 
     Say '  WARNING: every Up adapter only has an APIPA 169.254.x.x address.' 'Yellow'
-    return $up[0]
+    return $real[0]
 }
 
 # ---------------------------------------------------------------------------
@@ -218,7 +262,17 @@ $adapter = Resolve-Adapter -Requested $InterfaceAlias
 $alias   = $adapter.InterfaceAlias
 $index   = $adapter.ifIndex
 
+$desc = $(if ($adapter.InterfaceDescription) { $adapter.InterfaceDescription } else { '(no description)' })
 Say ('  adapter : ' + $alias + '  (ifIndex ' + $index + ')')
+Say ('  desc    : ' + $desc)
+
+if ($InterfaceAlias -eq '' -and (Test-VirtualAdapter $adapter)) {
+    Say '' 
+    Say '  WARNING: this looks like a VIRTUAL adapter (VMware / VirtualBox / Hyper-V /' 'Yellow'
+    Say '           TAP / hosted-network). A lab address here will NOT reach the physical' 'Yellow'
+    Say '           LAN and the other machine will never see it. If that is wrong, rerun' 'Yellow'
+    Say '           with  -InterfaceAlias "<real NIC>"  (see Get-NetAdapter | ft Name,Status).' 'Yellow'
+}
 
 # ---------------------------------------------------------------------------
 # UNDO
