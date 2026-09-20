@@ -7,7 +7,8 @@
 
 ## 当前状态
 
-**版本 `0.1.0-m1`**。已完成：**M0 → M1 → M1.1（安全审计修复）**。基线提交 `664e558`。
+**版本 `0.1.0-m1`**。已完成：**M0 → M1 → M1.1（安全审计）→ M1.2（封板清理）**。
+基线提交 `664e558`，Last code commit `104f296`。当前阶段测试 **197 passed / 0 failed**。
 
 - M0：solution、8 个 src 项目、4 个测试项目、WPF 主窗口、DI/日志/配置、单实例 Mutex
 - M1：稳定 deviceGuid、可派生设备码 `QPKE-2CPC` 这类形态、128-bit 访问密钥、
@@ -16,8 +17,10 @@
 - M1.1：证书私钥导入改为 `EphemeralKeySet`（ADR-018，取代 ADR-016）、
   `UpdateAsync` copy-on-write 事务语义（ADR-019）、证书状态 fail closed 与
   `secrets.bin` 严格校验（ADR-020）、秘密 `byte[]` 生命周期清零
+- M1.2：`ReadAsync` 只发副本、已有证书时启动零写入、`NewPfxPassword` 清零、
+  `TryDecodeExact` 失败不返回部分解码字节、partial 证书恢复测试加强
 
-下一步是 **M2 — 网卡筛选 + UDP 发现**。当前阶段测试：**189 passed / 0 failed**。
+下一步是 **M2 — 网卡筛选 + UDP 发现**。当前阶段测试：**197 passed / 0 failed**。
 
 ## 本机构建环境
 

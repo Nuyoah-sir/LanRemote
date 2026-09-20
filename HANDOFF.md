@@ -1,225 +1,230 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-20 13:25 (+08:00)**
+> 更新时间：**2026-09-20 13:40 (+08:00)**
 
 ---
 
 ## 1. 当前状态
 
-- **当前里程碑：M1.1 — Security Hardening（M1 的审计修复），已完成**
-- 已完成里程碑：M0（仓库骨架）→ M1（设备身份与安全存储）→ **M1.1（安全审计修复）**
-- 版本：`0.1.0-m1`（`Directory.Build.props` 的 `LanRemoteVersion`）
-- 分支/commit：**`main` @ `664e558`**（首个基线提交，97 个文件；工作区干净）
-- 总体状态：**里程碑完成**。按用户指令，**不进入 M2**
+- **当前里程碑：M1.2 — M1 Final Cleanup，已完成**
+- 已完成：M0（仓库骨架）→ M1（设备身份与安全存储）→ M1.1（安全审计）→ **M1.2（封板清理）**
+- 版本：`0.1.0-m1`
+- **Last code commit：`104f296`**（M1.2 代码 + 测试 + `.gitattributes`）
+- **Working tree at validation: clean**
+- 总体状态：**M1 系列封板**。按用户指令，**下一阶段是 M2**，不要再打磨 M1
 
-## 2. M1.1 修了哪些问题
+### 关于 git 记账方式（HANDOFF 不再写 HEAD hash）
 
-| # | 问题 | 修复 | 证据 |
-|---|---|---|---|
-| 1 | 证书私钥导入用了 `PersistKeySet \| Exportable`，把私钥额外持久化进用户 CNG 密钥容器，并标记为可导出 | 改为 `X509KeyStorageFlags.EphemeralKeySet`；常量公开为 `DeviceCertificateService.ImportFlags` | `DeviceCertificateTests.ImportFlags_UsesEphemeralKeySetOnly`、`ReloadedCertificateCanSign` |
-| 2 | `UpdateAsync` 把缓存实例直接交给 operation 修改，**先改内存、后落盘**，失败时会出现「内存是新 key、磁盘是旧 key」 | 改为 copy-on-write（见第 5 节） | `DpapiSecretVaultTransactionTests` 共 5 条 |
-| 3 | 秘密 `byte[]` 用完后不清零（访问密钥原始字节、PFX 导出缓冲、PFX 导入缓冲、轮换出的新密钥） | 全部在 `finally` 中 `CryptographicOperations.ZeroMemory` | 见第 6 节 |
-| 4 | 证书字段「半损坏」（PFX 与口令只有一个存在）时会**静默重新签发证书**，导致指纹悄悄改变 | fail closed：抛 `InvalidDataException`，不生成新证书 | `CertificateState_PfxWithoutPassword_IsRejected`、`CertificateState_PasswordWithoutPfx_IsRejected` |
-| 5 | `UnpackProtected` 只检查 `actualLength < declaredLength`，被追加过内容的文件能蒙混过关；也不校验 payload 内的 bundle 版本 | 改为**严格相等** + 解密后校验 `bundle.Version == CurrentVersion` | `SecretFileFormatTests` 共 5 条 |
+HANDOFF 本身会被单独提交，如果把「包含这个 HANDOFF 的 commit hash」写回 HANDOFF，
+就会形成自引用：写完的那个 hash 立刻过期。因此从 M1.2 起改为两个字段：
 
-**安全要求未变**（逐项确认）：访问密钥仍为 `RandomNumberGenerator.GetBytes(16)`；DPAPI 仍为 CurrentUser；
-密钥不进 config.json；密钥不进日志；DeviceCode 算法未动；证书仍为 ECDSA P-256；
-fingerprint 算法（对 `RawData` 求 SHA-256）未动。**未**施工 Discovery / TLS / Auth / Video / Input。
+- `Last code commit`：最后一次**代码/测试**提交（不含文档提交）
+- `Working tree at validation`：验证时的工作区状态
 
-## 3. 最终证书 key-storage flags
+允许 `HEAD` 比 `Last code commit` 新（因为之后可能有单独的 HANDOFF/README 文档提交）。
+本轮验证时：`Last code commit = 104f296`，之后追加了文档提交，工作区 clean。
+
+## 2. M1.2 修了什么
+
+| # | 项目 | 结论 |
+|---|---|---|
+| 1 | `DpapiSecretVault.ReadAsync` 暴露可变缓存实例 | **已改为发放 `Clone()`** |
+| 2 | 已存在证书时仍重写 `secrets.bin` | **已改为零写入**（只读加载路径） |
+| 3 | `NewPfxPassword` 原始随机 byte[] 未清零 | **已清零** |
+| 4 | `TryDecodeExact` 失败返回部分解码字节 | **已改为 ZeroMemory + `Array.Empty`** |
+| 5 | `RepairAndMaterialize` 用 `out byte[] _` 丢弃有效密钥字节 | **已改为探针用后清零** |
+| 6 | partial certificate 测试只能证明「错误口令会失败」 | **已重写为真正证明原证书未被替换** |
+
+### 2.1 ReadAsync 是否已改 clone —— ✅ 是
 
 ```csharp
-public const X509KeyStorageFlags ImportFlags = X509KeyStorageFlags.EphemeralKeySet;
+SecretBundle bundle = await EnsureLoadedCoreAsync(cancellationToken);
+return projection(bundle.Clone());   // 交出去的是副本
 ```
 
-- ❌ `PersistKeySet` —— 不再把私钥写入用户 CNG 密钥容器
-- ❌ `Exportable` —— 不再把导入的私钥标记为可导出
-- ✅ 磁盘上的唯一持久化副本 = DPAPI 保护的 `secrets.bin`
-- ✅ 进程运行期间私钥只在内存，进程退出即消失
+- projection 对副本的任何修改都影响不到 `_cached`，更影响不到磁盘
+- `DpapiSecretVault` 的 XML 注释已同步更新，与「外部拿不到 cached mutable instance」真正一致
+- 代价：每次读多一次浅拷贝（字段都是值 / Guid / string，开销可忽略）
+- 回归测试：`DpapiSecretVaultTransactionTests.ReadProjectionMutation_DoesNotChangeCacheOrDisk`
+  （读 A → projection 内改成 `"TAMPERED"` → 同 vault 仍为 A → 新 vault 从磁盘仍为 A）
 
-**未关闭的风险（必须留给 M3）**：Windows 上 SslStream 服务端使用 ephemeral 私钥是否可靠，
-M1/M1.1 阶段**没有真实 TLS 测试可以证明**。因此 ADR-018 附带强制要求：
-**M3 必须新增真实 SslStream server/client 握手集成测试**，用实测结果决定维持或回退。
-在拿到实测结果之前，**不得**凭猜测改回 `PersistKeySet`。
+### 2.2 已存在证书启动是否零写入 —— ✅ 是
 
-## 4. ADR 状态
-
-- **ADR-016 —— ✅ 已标记 `SUPERSEDED by ADR-018`**（`docs/DECISIONS.md` 标题已加删除线与作废日期，
-  正文保留以备追溯，并明确写「请勿照此实现」）
-- **ADR-018（新增）**：私钥导入改为 `EphemeralKeySet`，取代 ADR-016；含 M3 强制验证要求
-- **ADR-019（新增）**：`UpdateAsync` copy-on-write 事务语义
-- **ADR-020（新增）**：证书 bundle 状态 fail closed + `secrets.bin` 严格长度/版本校验
-
-## 5. copy-on-write 的实现方式
-
-`DpapiSecretVault.UpdateAsync<TResult>` 现在的严格顺序：
+`DeviceCertificateService.GetOrCreateAsync` 现在分两阶段：
 
 ```text
-1. 读取当前缓存的 bundle（current）
-2. SecretBundle.Clone()  → 独立的 working copy
-3. operation(working)    → 只允许改 working
-4. PersistCoreAsync(working)   ← 先落盘
-5. _cached = working           ← 只有上一步成功才替换缓存
+阶段 1（只读，不写文件）：vault.ReadAsync(SnapshotCertificate)
+    PFX + 口令都在  → 直接 ImportFromPfx 加载，返回缓存，不触碰 secrets.bin
+    只有一个存在    → throw InvalidDataException（fail closed，绝不重签）
+    两个都不存在    → 进入阶段 2
+
+阶段 2（写）：vault.UpdateAsync(CreateOrLoadCore)
+    CreateOrLoadCore 内【再次】检查状态：
+        已在（竞态兜底）→ 直接用那一份，绝不覆盖
+        半损坏         → throw InvalidDataException
+        确实没有       → 签发并持久化
 ```
 
-要点：
+- `_gate` 保留未动
+- 回归测试：`DeviceCertificateTests.ExistingCertificate_LoadDoesNotRewriteSecretsFile`
+  （创建 → 保存文件字节 → 新建 vault + service 模拟冷启动 → 再加载 → **byte-for-byte 完全一致** + 指纹相同）
+- **手工验证也做了**：真实 `%LOCALAPPDATA%\LanRemote\secrets.bin` 在启动前后
+  `sha256` 与 `mtime` **均未变化**（`83ec595f…`，mtime 1789881661，1807 字节），
+  日志走的是新分支：`已从 secrets.bin 加载设备证书（未重写文件）。指纹前缀=3A3D791A`
 
-- `SecretBundle` 新增 `Clone()` 深拷贝（所有字段都是值/Guid/string，无共享引用）
-- `PersistCoreAsync` 在动手写临时文件**之前**先 `cancellationToken.ThrowIfCancellationRequested()`，
-  让「取消 → 磁盘保持旧状态」成为确定性行为，而不是取决于 `File.WriteAllBytesAsync` 什么时候察觉
-- 取消 / `IOException` / `UnauthorizedAccessException` / DPAPI 失败等**任意**异常下：
-  磁盘保持旧状态，且 `_cached` 也保持旧状态，二者不可能撕裂
-- 失败时清理临时文件，不会留下 `*.tmp`
+### 2.3 NewPfxPassword byte[] 清零 —— ✅
 
-## 6. 秘密 byte[] 生命周期清理
+```csharp
+byte[] passwordBytes = RandomNumberGenerator.GetBytes(PfxPasswordByteCount);
+try { return Convert.ToBase64String(passwordBytes); }
+finally { CryptographicOperations.ZeroMemory(passwordBytes); }
+```
 
-| 位置 | 处理 |
+### 2.4 TryDecodeExact failure semantics —— ✅
+
+Base32 合法但解码长度 ≠ 期望长度时：
+
+1. `CryptographicOperations.ZeroMemory(bytes)`
+2. `bytes = Array.Empty<byte>()`
+3. `return false`
+
+目的：M4 校验用户输入的访问密钥时，失败路径不能把「部分解码出的秘密字节」留给调用方。
+Core 为此新增 `using System.Security.Cryptography;` —— 只用 BCL，**未新增任何第三方包**。
+
+测试：`CrockfordBase32Tests.TryDecodeExact_LengthMismatch_ReturnsEmptyInsteadOfPartialSecret`
+（4 种长度）+ `TryDecodeExact_MatchingLength_ReturnsDecodedBytes` + `…_MalformedInput_AlsoReturnsEmpty`。
+
+### 2.5 partial certificate 恢复测试 —— ✅ 已加强
+
+新流程：生成证书记下指纹 A → 读出**原来的** `CertificatePfxPassword` → 置 null →
+新 service 必须 `InvalidDataException` → **恢复原口令** → 新 service 再加载 → 指纹仍等于 A。
+最后还断言 `_logs.Contains(originalPassword) == false`（口令不得进日志）。
+
+旧版本最后一步恢复的是一个**新的随机口令**，只能证明「错误口令会失败」，
+并不能证明原证书没有被悄悄替换；现在这条才真正闭环。
+
+### 2.6 RepairAndMaterialize
+
+```csharp
+byte[] probe = Array.Empty<byte>();
+try { if (!TryDecodeAccessKey(bundle.AccessKey, out probe)) bundle.AccessKey = NewAccessKey(); }
+finally { CryptographicOperations.ZeroMemory(probe); }
+return Materialize(bundle.AccessKey);
+```
+
+不再出现 `TryDecodeAccessKey(..., out byte[] _)` 把有效密钥字节丢给 GC 的写法。
+
+## 3. 本轮明确没有施工
+
+未实现、未触碰：NetworkInterfaceSelector、SubnetPolicy、UDP Discovery、TLS、Auth、Video、Input、Session。
+这仍然是 M1 封板。
+
+## 4. 修改文件
+
+| 路径 | 说明 |
 |---|---|
-| `SecretGenerator.NewAccessKey()` | 生成 16 字节 → Base32 编码 → `finally` 清零原始字节 |
-| `DeviceCertificateService.CreateAndStoreCore` | `Export(Pfx)` 的 byte[] → `ToBase64String` 后 `finally` 清零 |
-| `DeviceCertificateService.ImportFromPfx` | `FromBase64String` 的 PFX byte[] → 载入成功**或失败**都 `finally` 清零 |
-| `MainViewModel.RegenerateAccessKeyAsync()` | 接收 `RegenerateAsync()` 返回的 `AccessSecret` 到局部变量，`finally` 清零其原始字节 |
+| `src/LanRemote.Security/Secrets/DpapiSecretVault.cs` | `ReadAsync` 发 `Clone()`；XML 注释同步 |
+| `src/LanRemote.Security/Certificates/DeviceCertificateService.cs` | 两阶段加载；新增 `CertificateBundleState` / `CertificateSnapshot` / `CorruptStateMessage`；写路径内二次检查 |
+| `src/LanRemote.Security/Secrets/SecretGenerator.cs` | `NewPfxPassword` 清零原始字节 |
+| `src/LanRemote.Security/Secrets/DpapiAccessSecretStore.cs` | `RepairAndMaterialize` 探针清零 |
+| `src/LanRemote.Core/Encoding/CrockfordBase32.cs` | `TryDecodeExact` 失败语义 + `System.Security.Cryptography` using |
+| `tests/LanRemote.Security.Tests/DpapiSecretVaultTransactionTests.cs` | 新增 `ReadProjectionMutation_DoesNotChangeCacheOrDisk` |
+| `tests/LanRemote.Security.Tests/DeviceCertificateTests.cs` | 新增 `ExistingCertificate_LoadDoesNotRewriteSecretsFile`；重写 partial 恢复测试 |
+| `tests/LanRemote.Core.Tests/CrockfordBase32Tests.cs` | 新增 3 条 TryDecodeExact 用例 |
+| `.gitattributes`（新增） | `.workbuddy/ export-ignore` + 二进制声明 |
+| `.gitignore` | 忽略生成的 `LanRemote-source.zip` |
 
-**诚实说明（.NET 语言级限制，不是偷懒）**：
-`string` 不可变，因此 Base32 展示串、PFX 口令串**无法**可靠清零——它们一旦存在，
-进程内存中是否残留副本取决于 GC。已清零的是所有我们能控制的原始 `byte[]`。
-
-## 7. 新增的失败路径测试
-
-`tests/LanRemote.Security.Tests/DpapiSecretVaultTransactionTests.cs`（5 条）
-
-1. `CancelledPersist_LeavesDiskAndMemoryUnchanged` —— operation 内改 working copy 后主动 cancel；
-   `UpdateAsync` 抛 `OperationCanceledException`；**同一个 vault** 读回仍是 A；**全新 vault** 从磁盘读回仍是 A
-2. `AccessKeyRotation_FailedPersist_KeepsOldKeyServable` —— access key rotation 走同一条 `UpdateAsync` 路径，
-   取消后 `IAccessSecretStore.LoadOrCreateAsync()` 仍返回旧 key（重启后亦然）
-3. `SuccessfulUpdate_IsVisibleToFreshVault` —— 反向对照：成功时新值确实对新 vault 可见
-4. `Clone_ProducesIndependentCopy` —— 深拷贝互不影响
-5. `CancelledPersist_DoesNotLeaveTemporaryFiles` —— 不留 `.tmp`
-
-`tests/LanRemote.Security.Tests/SecretFileFormatTests.cs`（5 条）
-
-1. `AppendedTrailingBytes_AreRejected` —— 合法文件后追加 3 字节 → 必须拒绝
-2. `TruncatedFile_IsRejected`
-3. `BundleVersionMismatchInsidePayload_IsRejected` —— 手工构造「头部版本正确、payload 内 version=99」的文件
-4. `WrongHeaderVersion_IsRejected`
-5. `PackProtected_SetsCurrentVersion`
-
-`tests/LanRemote.Security.Tests/DeviceCertificateTests.cs`（新增 3 条）
-
-1. `CertificateState_PfxWithoutPassword_IsRejected`
-2. `CertificateState_PasswordWithoutPfx_IsRejected`
-3. `CertificateState_PartialStateDoesNotSilentlyReissue` —— 破坏后不会静默换证书
-4. `ImportFlags_UsesEphemeralKeySetOnly` —— 防止以后把 flags 加回来
-
-**被修改的现有测试（唯一一处）**：`GetOrCreateAsync_UsesEcdsaP256` 原来用
-`ExportParameters(includePrivateParameters: true)` 确认曲线；按 M1.1 要求改为只用
-**公钥/证书公开信息**（`GetECDsaPublicKey()` + `ExportParameters(false)` + `KeySize`）确认 P-256。
-这是按指令调整断言方式，**不是**为了掩盖 production bug；`ReloadedCertificateCanSign`
-（重载后签名 + 公钥验签）按要求保留并通过。
-
-## 8. 构建
+## 5. 构建
 
 ```text
 source scripts/env.sh
 dotnet build LanRemote.sln -c Debug
 ```
 
-结果：**PASS**
-- 12 个项目全部生成成功
-- **0 个警告，0 个错误**
+结果：**PASS** —— 12 个项目全部生成，**0 个警告，0 个错误**
 
-## 9. 测试
+## 6. 测试
 
 ```text
 dotnet test LanRemote.sln -c Debug --no-build
 ```
 
-结果：**189 passed / 0 failed / 0 skipped**
+结果：**197 passed / 0 failed / 0 skipped**
 
-| 项目 | M1 结束时 | M1.1 后 | 增量 |
+| 项目 | M1.1 后 | M1.2 后 | 增量 |
 |---|---:|---:|---:|
-| LanRemote.Core.Tests | 119 | 119 | 0 |
-| LanRemote.Security.Tests | 46 | **60** | +14 |
+| LanRemote.Core.Tests | 119 | **125** | +6 |
+| LanRemote.Security.Tests | 60 | **62** | +2 |
 | LanRemote.Protocol.Tests | 7 | 7 | 0 |
 | LanRemote.IntegrationTests | 3 | 3 | 0 |
-| **合计** | **175** | **189** | **+14** |
+| **合计** | **189** | **197** | **+8** |
 
-既有 175 条**全部继续通过**，未修改任何测试来掩盖 production bug。
+既有 189 条全部继续通过；没有修改任何测试来掩盖 production bug。
 
-## 10. 手工验证
+## 7. 源码审计包
 
-- [x] **M1.1 后的 identity restart 验证：已运行**
-  - 在真实 `%LOCALAPPDATA%\LanRemote` 上连续启动两次（都是 exit=124，即存活到超时被杀，无崩溃）
-  - 两次都加载的是 **M1 时期落盘的同一份 PFX**：`已从 secrets.bin 加载设备证书。指纹前缀=3A3D791A`、
-    `设备码=QPKE-2CPC`
-  - 结论：`PersistKeySet → EphemeralKeySet` 的切换**没有**改变指纹、没有触发重新签发
-- [ ] **UI 上「显示 / 复制 / 重新生成」按钮点击**：仍未做（无 UI 自动化框架），**不伪装成已验证**
-- [ ] 换 Windows 用户后 DPAPI 解不开的行为：仍未实测
+```text
+git archive --format=zip -o LanRemote-source.zip HEAD
+```
 
-## 11. git
+- **已生成**：`LanRemote-source.zip`（仓库根目录）
+- `.gitattributes` 用 `export-ignore` 排除了 `.workbuddy/`
+  （里面有测试机路径、设备码、证书指纹等开发环境信息——不是 Access Key，但不属于产品源码）
+- `git archive` 天然不含 `.git`；`bin` / `obj` / `TestResults` / 真实 `secrets.bin` / `logs` /
+  `*.pfx` / `*.key` 都属于被 `.gitignore` 忽略的未跟踪文件，不会进包
+- `LanRemote-source.zip` 本身也已加入 `.gitignore`，不会污染工作区
 
-- [x] `git init` 已执行；`.gitignore` 生效（`git status --ignored` 确认 `bin/`、`obj/` 全部被忽略）
-- [x] 已确认**没有**把 `bin`、`obj`、`secrets.bin`、`logs`、`*.pfx` 混入版本库
-- [x] 首个基线提交：`664e558`（97 个文件，12550 行），工作区干净
-- 说明：`.workbuddy/memory/` 也被纳入版本库（它是本项目的长期记忆，不是临时缓存）
+## 8. 手工验证
 
-## 12. 发现但**未**修的问题（留给你决定）
+- [x] **已存在证书时零写入**：`secrets.bin` 的 sha256 与 mtime 在应用启动前后完全一致
+- [x] 应用启动无崩溃（exit=124 表示存活到超时被杀）
+- [ ] UI 按钮点击仍未做（无 UI 自动化框架），**不伪装成已验证**
+- [ ] 换 Windows 用户后 DPAPI 解不开的行为仍未实测
 
-按「不顺便施工」的约束，以下只记录、未改动代码：
-
-1. **`ReadAsync` 把缓存实例直接交给投影函数**（严重度：低，但属于同类隐患）。
-   如果某个调用方在投影里改了 bundle，就会造成「内存改了、磁盘没改」——正好是本次在
-   `UpdateAsync` 里修掉的那种撕裂状态。当前所有调用方都只读。
-   建议后续把 `ReadAsync` 也改成发放 `Clone()`（一行改动，代价是每次读多一次分配）。
-2. **`GetOrCreateAsync` 每次调用都会触发一次文件写入**。`DeviceCertificateService` 走的是
-   `vault.UpdateAsync`，而 `UpdateAsync` 无论内容是否变化都会 persist。证书已存在时
-   这次写入是多余的 DPAPI 往返。语义正确，只是浪费；建议 M3 之前加一个「无变更则不写」的短路。
-3. **证书状态损坏后没有自愈入口**。fail closed 之后用户会看到错误，但当前没有
-   「重置本机身份」的 UI 入口。M9 应补（这条在 M1 HANDOFF 里也记过）。
-4. 遗留自 M0：**日志无轮转**（ADR-013）、**SDK 不在系统 PATH**（用 `scripts/env.sh`）。
-
-## 13. 已知问题 / 技术债（累计）
+## 9. 已知问题 / 技术债（累计）
 
 1. 日志没有轮转（M9 必修，ADR-013）
-2. UI 交互无自动化覆盖（M1.1 仍未解决）
-3. `string` 无法可靠清零（.NET 限制，已诚实记录）
-4. `secrets.bin` 损坏时显式失败、无自愈入口
-5. `PersistKeySet` 遗留副作用：**M1 期间单元测试创建过的证书在用户 CNG 密钥容器里可能留有条目**；
-   M1.1 之后不会再新增。若在意，可用 `certmgr`/CNG 工具清理
+2. UI 交互无自动化覆盖
+3. `string` 无法可靠清零（.NET 限制，已如实记录）
+4. `secrets.bin` 损坏时显式失败、无自愈入口（M9 应补「重置本机身份」）
+5. M1 期间单元测试用 `PersistKeySet` 建的证书可能在用户 CNG 密钥容器留有条目（M1.1 起不再新增）
 6. `LanRemote.Sessions` / `Capture` / `Input` 仍是空项目占位
+7. **ADR-018 的未关闭风险**：Windows SslStream 服务端用 ephemeral 私钥是否可靠没有实测，
+   **M3 必须补真实握手集成测试**再下结论
 
-## 14. 下一步（仍在 M2 之前；当前按指令停在这里）
+## 10. 下一步 —— M2（网卡筛选 + UDP 发现）
 
-用户明确要求 **M1.1 完成后停止，不进入 M2**。下次开工请从 `07_MILESTONES_AND_TASKS.md` 的
-**M2 — 网卡筛选 + UDP 发现**开始：
+按 `07_MILESTONES_AND_TASKS.md`：
 
-1. `NetworkInterfaceSelector`：IPv4、Ethernet/Wireless80211、`Up`、有掩码、RFC1918；排除 Loopback/Tunnel/169.254
+1. `NetworkInterfaceSelector`：IPv4、Ethernet/Wireless80211、`Up`、有掩码、RFC1918；
+   排除 Loopback / Tunnel / 169.254 / 公网
 2. 实现 `ISubnetPolicy`（接口已在 `LanRemote.Core.Abstractions`，**不要重新定义**）——按真实掩码比较网络号
-3. 实现 `IDiscoveryService`：组播 `239.255.77.77:45872` TTL=1 + directed broadcast probe；2 秒 announce、7 秒缓存
-4. 发现报文的 `certSha256` 字段现在可以从 `DeviceCertificateService` 拿到真实指纹
+3. 实现 `IDiscoveryService`：组播 `239.255.77.77:45872` TTL=1 + directed broadcast probe；
+   2 秒 announce、7 秒缓存 TTL；自身公告去重
+4. 发现报文的 `certSha256` 字段可从 `DeviceCertificateService` 拿到真实指纹
 5. MainWindow 设备列表接真实数据
-6. M2 **不要**碰 TLS / Auth / 视频 / 键鼠
+6. M2 不要碰 TLS / Auth / 视频 / 键鼠
 
-## 15. 下一位 AI 不要重复做
+## 11. 下一位 AI 不要重复做
 
-- **不要把 `PersistKeySet`/`Exportable` 加回来**，除非 M3 的真实 SslStream 握手测试证明必须（ADR-018）
-- **不要为了「让测试好过」改 production 的安全策略**（AGENTS.md 第 12 条）
-- **不要把证书 partial state 改成「自动生成新证书」**：那会静默改变指纹（ADR-020）
-- **不要把 `UnpackProtected` 的长度校验放松回 `<=`**
+- **不要再改 M1 的东西**：M1.2 是封板，下一步就是 M2
+- **不要把 `ReadAsync` 改回发放缓存实例**（那是 M1.2 刚修掉的洞）
+- **不要把证书加载改回「无条件 UpdateAsync」**（会重新引入无谓写盘）
+- **不要把 `PersistKeySet` / `Exportable` 加回来**，除非 M3 的真实 SslStream 握手测试证明必须（ADR-018）
 - **不要伪造构建/测试结果**：本文件所有数字均为实际执行输出
 - 不要重新实现 `CrockfordBase32`、`DeviceCode`、`DpapiSecretVault`、`DpapiAccessSecretStore`、
   `DeviceCertificateService`、`DeviceIdentityService`
 
-## 16. 关键上下文
+## 12. 关键上下文
 
 1. **`dotnet` 不在 PATH**：先 `source scripts/env.sh`
-2. **`ProtectedData` 需要显式 NuGet 包**，即使 TFM 是 `net10.0-windows`
-3. **`ProtectedData.Protect` 参数名是 `optionalEntropy`**；`X509CertificateLoader.LoadPkcs12` 只有 3 个参数
+2. **`ProtectedData` 需要显式 NuGet 包**，即使 TFM 是 `net10.0-windows`；参数名是 `optionalEntropy`
+3. **`X509CertificateLoader.LoadPkcs12` 只有 3 个参数**；旧的 `new X509Certificate2(bytes, pwd, flags)` 已过时
 4. **`X509Certificate2.NotBefore/NotAfter` 返回本地时间**，与 `DateTime.UtcNow` 比较前要 `.ToUniversalTime()`
 5. **模拟「重启」必须新建 `DpapiSecretVault`**（有缓存）
-6. **`EphemeralKeySet` 下不能导出私钥**：需要 PFX 时必须走「新建 → Export → 存 bundle」，
-   不能从已加载的证书 `Export`
-7. **`UpdateAsync` 是唯一的写入通道**：`ReadAsync` 拿到的实例理论上是可变的，别在里面改东西
-   （见第 12 节第 1 条）
-8. **8 个 Base32 字符 = 5 字节**，不是 1 字节
+6. **`EphemeralKeySet` 下不能导出私钥**：需要 PFX 时必须走「新建 → Export → 存 bundle」
+7. **`UpdateAsync` 是唯一写入通道，`ReadAsync` 只发副本**：两条路径都改不了真实状态
+8. **`TryDecodeExact` 失败时 out 参数是 `Array.Empty<byte>()`**，不是部分解码结果
+9. **8 个 Base32 字符 = 5 字节**，不是 1 字节
+10. **HANDOFF 不写 HEAD hash**，写 `Last code commit` + `Working tree at validation`
