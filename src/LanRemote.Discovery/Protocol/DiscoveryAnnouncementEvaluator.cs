@@ -235,22 +235,43 @@ public sealed class DiscoveryAnnouncementEvaluator
             return true;
         }
 
+        // 上限必须先按「去重前的原始条数」判定。
+        // 否则 ["view" 重复 100 次] 去重后只剩 1 项，就能绕过「最多 16 项」的限制，
+        // 让对端用一份极小的报文把本机拖进 100 次循环。
+        if (raw.Count > DiscoveryConstants.MaxCapabilities)
+        {
+            return false;
+        }
+
         HashSet<string> set = new(StringComparer.Ordinal);
 
         foreach (string entry in raw)
         {
+            // null / "" / 纯空白一律拒绝，不静默跳过：
+            // 「对端声称自己有一个叫空白的能力」本身就是畸形报文，跳过等于替对方掩盖协议错误。
             if (string.IsNullOrWhiteSpace(entry))
-            {
-                continue;
-            }
-
-            string normalized = entry.Trim();
-
-            if (normalized.Length > DiscoveryConstants.MaxCapabilityLength)
             {
                 return false;
             }
 
+            // 控制字符必须在 Trim **之前**判定。
+            // \n / \r / \t 本身也是空白字符，先 Trim 会把 "view\n" 洗成 "view" 从而放过。
+            // 第一次发现设备时 capability 会进日志，放行 \n / \r 就等于让局域网报文伪造日志行。
+            if (ContainsControlCharacter(entry))
+            {
+                return false;
+            }
+
+            // 到这里只剩下普通空格可以 Trim（" control " → "control"，这是允许的）。
+            string normalized = entry.Trim();
+
+            if (normalized.Length == 0 || normalized.Length > DiscoveryConstants.MaxCapabilityLength)
+            {
+                return false;
+            }
+
+            // unknown capability 是允许的（view / control / future-capability），
+            // 这里只做去重与规范化，不做白名单过滤。
             set.Add(normalized);
 
             if (set.Count > DiscoveryConstants.MaxCapabilities)

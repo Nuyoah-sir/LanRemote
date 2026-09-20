@@ -293,13 +293,86 @@ public sealed class DiscoveryAnnouncementEvaluatorTests
     }
 
     [Fact]
-    public void Capabilities_AreDedupedAndEmptiesRemoved()
+    public void Capabilities_ValidDuplicates_AreDeduped()
     {
+        // 合法项重复出现是允许的，只做去重；首尾普通空格允许 Trim。
         DiscoveryAnnouncement announcement = ValidAnnouncement(Guid.NewGuid());
-        announcement.Capabilities = new List<string> { "view", "view", "  ", "control", " control " };
+        announcement.Capabilities = new List<string> { "view", "view", "control", " control " };
 
         Assert.True(Evaluate(announcement, "192.168.1.55", out DiscoveredDevice? device, out _));
         Assert.Equal(2, device!.Capabilities.Count);
+        Assert.Contains("view", device.Capabilities);
+        Assert.Contains("control", device.Capabilities);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    [InlineData("\r")]
+    public void Capabilities_WhitespaceEntry_IsRejected(string entry)
+    {
+        // 空白 capability 必须拒绝，而不是静默跳过：
+        // 对端声称自己有一个「空白能力」本身就是畸形报文。
+        DiscoveryAnnouncement announcement = ValidAnnouncement(Guid.NewGuid());
+        announcement.Capabilities = new List<string> { "view", entry };
+
+        Assert.False(Evaluate(announcement, "192.168.1.55", out _, out string? reason));
+        Assert.Equal("capabilities 非法", reason);
+    }
+
+    [Fact]
+    public void Capabilities_NullEntry_IsRejected()
+    {
+        DiscoveryAnnouncement announcement = ValidAnnouncement(Guid.NewGuid());
+        announcement.Capabilities = new List<string> { "view", null! };
+
+        Assert.False(Evaluate(announcement, "192.168.1.55", out _, out string? reason));
+        Assert.Equal("capabilities 非法", reason);
+    }
+
+    [Theory]
+    [InlineData("evil\nfake-log")]
+    [InlineData("abc\rxyz")]
+    [InlineData("abc\txyz")]
+    [InlineData("view\n")]
+    public void Capabilities_ControlCharacter_IsRejected(string entry)
+    {
+        // capability 会在「第一次发现设备」时进日志，
+        // 允许 \n / \r 就等于让局域网报文可以伪造日志行。
+        DiscoveryAnnouncement announcement = ValidAnnouncement(Guid.NewGuid());
+        announcement.Capabilities = new List<string> { "view", entry };
+
+        Assert.False(Evaluate(announcement, "192.168.1.55", out _, out string? reason));
+        Assert.Equal("capabilities 非法", reason);
+    }
+
+    [Fact]
+    public void Capabilities_RawCountAboveLimit_IsRejectedEvenWhenDuplicates()
+    {
+        // 关键：上限按「去重前的原始条数」判定。
+        // 这 17 项全是 "view"，去重后只剩 1 项，但 raw.Count=17 已超限 → 必须拒绝，
+        // 否则「最多 16 项」这条约束可以被重复项无限绕过。
+        DiscoveryAnnouncement announcement = ValidAnnouncement(Guid.NewGuid());
+        announcement.Capabilities =
+            Enumerable.Repeat("view", DiscoveryConstants.MaxCapabilities + 1).ToList();
+
+        Assert.False(Evaluate(announcement, "192.168.1.55", out _, out string? reason));
+        Assert.Equal("capabilities 非法", reason);
+    }
+
+    [Fact]
+    public void Capabilities_ExactlyMaxEntries_IsAccepted()
+    {
+        DiscoveryAnnouncement announcement = ValidAnnouncement(Guid.NewGuid());
+        announcement.Capabilities = Enumerable
+            .Range(0, DiscoveryConstants.MaxCapabilities)
+            .Select(i => $"cap{i}")
+            .ToList();
+
+        Assert.True(Evaluate(announcement, "192.168.1.55", out DiscoveredDevice? device, out _));
+        Assert.Equal(DiscoveryConstants.MaxCapabilities, device!.Capabilities.Count);
     }
 
     [Fact]

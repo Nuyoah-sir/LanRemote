@@ -148,6 +148,10 @@ public sealed class LanDiscoveryService : IDiscoveryService
                 CloseSocketsCore();
                 _cts = null;
                 _logger.LogError(ex, "创建 UDP socket 失败，局域网发现未启动。");
+
+                // 后台循环这次一个都没起来，因此不会有人再观察这个 linked CTS；
+                // 置空之后 StopAsync 也不会碰到它，这里 dispose 不会造成 double-dispose。
+                cts.Dispose();
                 throw;
             }
 
@@ -475,10 +479,15 @@ public sealed class LanDiscoveryService : IDiscoveryService
             }
         }
 
+        // 关键：回应目标不是 remote 本身。
+        // remote 的端口是对方发送 socket 的随机临时端口（例如 53742），没有人在听；
+        // LanRemote 的 discovery receiver 永远监听 DiscoveryConstants.Port。
+        IPEndPoint replyTarget = DiscoveryReplyTarget.ForProbe(remote);
+
         await TrySendAsync(
             senders[index],
             payload,
-            remote,
+            replyTarget,
             bindings[index < bindings.Count ? index : 0],
             "probe 的 unicast 回应",
             cancellationToken).ConfigureAwait(false);
@@ -680,6 +689,13 @@ public sealed class LanDiscoveryService : IDiscoveryService
                     SocketOptionLevel.IP,
                     SocketOptionName.MulticastTimeToLive,
                     DiscoveryConstants.MulticastTimeToLive);
+
+                // 显式指定组播出口网卡：Bind 只决定 unicast 源地址，组播走哪张卡由 IP_MULTICAST_IF 决定。
+                // 不设置 → 所有组播都走系统默认路由，多网卡机器上另一张卡的子网永远收不到 announce。
+                sender.SetSocketOption(
+                    SocketOptionLevel.IP,
+                    SocketOptionName.MulticastInterface,
+                    MulticastInterfaceOption.ForInterface(binding.Address));
             }
 
             _senders = senders;

@@ -213,11 +213,17 @@ public sealed class MainViewModel : ViewModelBase
                 _config.AllowControl,
                 _config.RequireLocalApprovalForUnknownController);
 
-            await StartDiscoveryAsync(cancellationToken).ConfigureAwait(true);
+            bool discoveryStarted = await StartDiscoveryAsync(cancellationToken).ConfigureAwait(true);
 
-            StatusText = File.Exists(_paths.ConfigFilePath)
-                ? "已从磁盘加载配置与本机身份。"
-                : "未发现配置文件，使用安全默认值。";
+            // 只有 discovery 真的起来了才写「正常启动」状态。
+            // 失败时 StartDiscoveryAsync 已经写入了具体的网络错误原因，
+            // 这里再无条件覆盖就会把「端口被占用」这类真问题伪装成「加载成功」。
+            if (discoveryStarted)
+            {
+                StatusText = File.Exists(_paths.ConfigFilePath)
+                    ? "已从磁盘加载配置与本机身份。"
+                    : "未发现配置文件，使用安全默认值。";
+            }
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or UnauthorizedAccessException)
         {
@@ -349,7 +355,17 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
-    private async Task StartDiscoveryAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// 启动局域网发现。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>是否成功启动；<see langword="false"/> 表示身份仍然可用，只是发现不可用。</returns>
+    /// <remarks>
+    /// 失败时<b>由本方法自己</b>写入状态文本，调用方不再覆盖——
+    /// 否则「端口被占用」这类真实网络错误会被「配置加载成功」的文案盖掉。
+    /// 身份<b>不会</b>因为 discovery 失败而重置。
+    /// </remarks>
+    private async Task<bool> StartDiscoveryAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -358,7 +374,7 @@ public sealed class MainViewModel : ViewModelBase
             StartDeviceWatch();
             StartTtlCleanupLoop();
 
-            StatusText = "局域网发现已启动。";
+            return true;
         }
         catch (Exception ex) when (ex is SocketException or InvalidOperationException
                                      or UnauthorizedAccessException)
@@ -366,6 +382,7 @@ public sealed class MainViewModel : ViewModelBase
             // 端口被占用、网卡异常等都不能影响 M1：身份照旧，只是发现不可用。
             StatusText = "本机身份已加载，但局域网发现启动失败。";
             _logger.LogError(ex, "局域网发现启动失败；本机身份保持原样。");
+            return false;
         }
     }
 
