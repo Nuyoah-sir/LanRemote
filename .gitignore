@@ -47,3 +47,6 @@ packages/
 ## OS
 Thumbs.db
 desktop.ini
+
+# throwaway diagnostic / monitoring scratch files
+_*.txt
