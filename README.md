@@ -7,8 +7,9 @@
 
 ## 当前状态
 
-**版本 `0.1.0-m1`**。已完成：**M0 → M1 → M1.1（安全审计）→ M1.2（封板清理）**。
-基线提交 `664e558`，Last code commit `104f296`。当前阶段测试 **197 passed / 0 failed**。
+**版本 `0.1.0-m1`**。已完成：**M0 → M1 → M1.1（安全审计）→ M1.2（清理）→ M1.3（证书 KeyUsage）**。
+基线提交 `664e558`，Last code commit `9e75fce`。当前阶段测试 **200 passed / 0 failed**。
+**M1 已正式封板，下一步是 M2。**
 
 - M0：solution、8 个 src 项目、4 个测试项目、WPF 主窗口、DI/日志/配置、单实例 Mutex
 - M1：稳定 deviceGuid、可派生设备码 `QPKE-2CPC` 这类形态、128-bit 访问密钥、
@@ -19,8 +20,15 @@
   `secrets.bin` 严格校验（ADR-020）、秘密 `byte[]` 生命周期清零
 - M1.2：`ReadAsync` 只发副本、已有证书时启动零写入、`NewPfxPassword` 清零、
   `TryDecodeExact` 失败不返回部分解码字节、partial 证书恢复测试加强
+- M1.3：ECDSA 证书 KeyUsage 改为 `digitalSignature` only（RFC 5480，`keyEncipherment`
+  不属于 EC profile）；serverAuth EKU 保留
 
-下一步是 **M2 — 网卡筛选 + UDP 发现**。当前阶段测试：**197 passed / 0 failed**。
+### 设备证书 profile
+
+ECDSA P-256 / `id-ecPublicKey` / SHA-256 自签名、5 年有效、`CA=false`、
+`KeyUsage = digitalSignature`（critical）、EKU 含 `serverAuth`、私钥 `EphemeralKeySet` 载入。
+
+下一步是 **M2 — 网卡筛选 + UDP 发现**。当前阶段测试：**200 passed / 0 failed**。
 
 ## 本机构建环境
 

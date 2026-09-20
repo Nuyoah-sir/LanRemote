@@ -47,6 +47,7 @@ M0 仓库骨架 —— **已完成**（build PASS / 87 tests PASS）
 M1 设备身份与安全存储 —— **已完成**（build PASS / 175 tests PASS）
 M1.1 Security Hardening —— **已完成**（build PASS / 189 tests PASS，git 基线 `664e558`）
 M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last code commit `104f296`）
+M1.3 ECDSA Certificate KeyUsage Fix —— **已完成**（build PASS / 200 tests PASS，Last code commit `9e75fce`）
 M2 网卡筛选 + UDP 发现 —— 下一步（M1 系列已封板，不要再打磨 M1）
 M3~M11 —— 未开始
 
@@ -56,7 +57,9 @@ M3~M11 —— 未开始
   bundle 内有 `deviceGuid` / `accessKey`(Base32 26 字符) / `certificatePfx` / `certificatePfxPassword`
 - 访问密钥 = `RandomNumberGenerator.GetBytes(16)`；`Regenerate` 直接覆盖存储字段 → 旧 key 立即失效
 - 设备证书 = 自签名 ECDSA P-256，5 年，含 serverAuth EKU，非 CA；
+  **KeyUsage 只能是 digitalSignature**（RFC 5480，EC 证书不得声明 keyEncipherment，ADR-021）；
   指纹 = `SHA256(RawData)` 大写 hex，重载后稳定
+- **禁止**为「把旧证书换成新 profile」加入静默自动重签逻辑（ADR-021 硬约束）
 - 设备码 = `Base32(SHA256(deviceGuid) 前 5 字节)`，展示 `XXXX-XXXX`；**不是秘密**
 - 证书加载用 `X509CertificateLoader.LoadPkcs12(pfx, pwd, EphemeralKeySet)`（ADR-018，取代 ADR-016）；
   **M3 必须补真实 SslStream 握手集成测试**才能确认这个策略够用，没测出来之前不许改回 PersistKeySet

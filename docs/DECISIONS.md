@@ -128,6 +128,19 @@
 **可逆性**：不可倒退——这是正确性修复。  
 **验证**：`DpapiSecretVaultTransactionTests`（取消后同 vault 与全新 vault 都仍是旧 key；rotation 失败路径同样适用；无 `.tmp` 残留）。
 
+### ADR-021 — ECDSA 证书的 Key Usage 只允许 `digitalSignature`
+**日期**：2026-09-20（M1.3）  
+**Decision**：设备证书的 KeyUsage 扩展为 `new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, critical: true)`，不再声明 `keyEncipherment`，也不声明 `keyAgreement`。  
+**Context**：证书是 ECDSA / P-256 / `id-ecPublicKey` 的 end-entity server certificate。RFC 5480 对 `id-ecPublicKey` 的 end-entity 证书允许的 Key Usage 只有 `digitalSignature` / `nonRepudiation` / `keyAgreement`；`keyEncipherment` 属于 RSA 密钥传输语义，不属于 EC certificate profile——在 EC 证书里声明它属于 profile 违规，严格校验方可能直接拒绝。LanRemote 的 TLS 服务端身份使用 ECDSA 签名，只需要 `digitalSignature`。  
+**Consequence**：
+- 只影响**新签发**的证书；已存在的证书不会被自动替换（这一条是硬约束，见下）；
+- serverAuth EKU（`1.3.6.1.5.5.7.3.1`）保持不变；
+- 由于当时本机开发身份是 M1.2 之前签发的（带 `keyEncipherment`），M1.3 对**开发机**做了一次显式备份后的手工重置。这是 pre-release 开发身份处理，**不是**升级迁移逻辑。  
+**硬约束**：不得为了实现「自动把旧证书换成新 profile」而在 production code 中加入静默重签逻辑。已有证书只能由用户显式轮换。  
+**可逆性**：可逆，但会把 profile 违规带回来，不建议。  
+**验证**：`CertificateKeyUsage_IsDigitalSignatureOnly`、`CertificateProfile_MatchesEcdsaServerIdentity`、
+`KeyUsageSurvivesReloadFromSecretsBin`；`CertificateDeclaresServerAuthenticationUsage` 确认 EKU 未破。
+
 ### ADR-020 — 证书 bundle 状态 fail closed + secrets.bin 严格校验
 **日期**：2026-09-20（M1.1 审计）  
 **Decision**：
