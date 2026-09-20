@@ -60,12 +60,11 @@ M1.1 Security Hardening —— **已完成**（build PASS / 189 tests PASS，git
 M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last code commit `104f296`）
 M1.3 ECDSA Certificate KeyUsage Fix —— **已完成**（build PASS / 200 tests PASS，Last code commit `9e75fce`）
 M2 网卡筛选 + UDP 发现 —— **已完成**（build PASS / 382 tests PASS，Last code commit `857eaa6`）
-M2.1 Discovery Final Fix —— **code 已完成**（build PASS / 408 tests PASS，Last code commit `313c542`）
-  验收物料 `905fcc8`（set-lab-ip v2 + 手册重写，无产品代码）
-  ⚠️ 两机手工 DoD **NOT RUN**（未验收不得进 M3）
-  ℹ️ 但日志已实证：真实链路上 probe 回应走 `192.168.1.20:45872` 而非随机源端口 50193，
-     且双向发现 + TTL 离线 + 重新发现全部成立（见当日日志/HANDOFF §9）
-M3 TLS Host/Client + 同子网校验 —— 下一步（等两机验收回填后才能开工）
+M2.1 Discovery Final Fix —— **已完成，两机验收 PASS（20/20，2026-09-20）**
+  build PASS / 408 tests PASS，Last code commit `313c542`
+  验收物料与文档：`905fcc8` / `5e9f245` / `846794c` / `b8dbdb3`（无产品代码）
+  ✅ 两机手工 DoD **PASS**（HANDOFF §9.1 有完整时间线 + 20 步逐条证据）
+M3 TLS Host/Client + 同子网校验 —— 下一步（验收已 PASS，**等用户开工指令**）
 M3~M11 —— 未开始
 
 ## M1 关键存储事实（后续里程碑会依赖）
