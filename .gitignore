@@ -21,6 +21,8 @@ publish/
 
 ## 源码审计/分发 ZIP（由 git archive 生成，不入库）
 LanRemote-source.zip
+## 两机验收用的便携版二进制包（体积大，不入库）
+LanRemote-*.zip
 
 ## 测试
 TestResults/

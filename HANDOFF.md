@@ -35,6 +35,19 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 | 4 | capability 测试语义错误 | ✅ 已重写 |
 | 5 | discovery 启动失败的状态文本被 config 文案覆盖 | ✅ 已修复 |
 | 6 | `StartAsync` 创建 socket 失败时 linked CTS 未 Dispose | ✅ 已修复 |
+| 7 | probe 回应成功时**没有任何日志**，两机验收无法判定链路是否真的通 | ✅ 已补一行 Debug 日志（见下） |
+
+### 1.5.6 补充：probe 回应日志（为两机验收的可判定性而加）
+
+`ReplyToProbeAsync` 原先只在「拒绝回应」和「发送失败」时写日志，**成功回应时没有日志**，
+导致验收第 18 步「B 应能正常响应」无法从日志判定。已补一条 Debug：
+
+```text
+已回应来自 {ProbeAddress} 的 probe：unicast → {ReplyTarget}（不使用源端口 {SourcePort}）。
+```
+
+它同时记录「被丢弃的源端口」与「实际回应目标」，现场就能确认回应没有再打到对方的随机临时端口上。
+只记地址与端口，不记报文内容、不记任何秘密。**纯日志，未改动任何逻辑**（重跑后仍是 408 passed）。
 
 ### 1.5.1 probe 回应端口（阻断项）
 
@@ -274,6 +287,18 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 > 验收结果请回填到第 9 节与第 1 节「是否满足完整 M2 DoD」。
 > **未回填前不要进入 M3。**
 
+### 验收物料（已就绪，等用户执行）
+
+| 项 | 位置 |
+|---|---|
+| 两机验收手册（20 步 + 排查表 + 回填模板） | `docs/TWO_MACHINE_ACCEPTANCE.md` |
+| 便携版验收包（自包含 win-x64，解压即用，目标机无需装运行时） | `scripts/acceptance/make-package.py` 生成 `LanRemote-0.1.0-m2-win-x64.zip` |
+| 验收前环境自检脚本 | `scripts/acceptance/check-env.ps1` |
+| 验收后日志检查 / 访问密钥泄漏扫描脚本 | `scripts/acceptance/check-logs.ps1` |
+
+包内自带 `START-HERE.md`（即验收手册）、`check-env.ps1`、`check-logs.ps1`。
+两个 `.ps1` 刻意存为 **UTF-8 with BOM**，否则 Windows PowerShell 5.1 会把中文按 ANSI 解析成乱码。
+
 ## 10. 修改文件
 
 **新增（Discovery 项目）**
@@ -320,12 +345,17 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 | `src/LanRemote.Discovery/AssemblyInfo.cs` | `InternalsVisibleTo("LanRemote.Protocol.Tests")`，仅为测试开放上述两个 internal 类型 |
 | `tests/LanRemote.Protocol.Tests/DiscoveryReplyTargetTests.cs` | 回应端口回归测试（含 `ProbeReply_AlwaysTargetsDiscoveryPort_NotSourcePort`） |
 | `tests/LanRemote.Protocol.Tests/MulticastInterfaceOptionTests.cs` | 选项值构造 + 真实 socket 上设置不抛异常 |
+| `docs/TWO_MACHINE_ACCEPTANCE.md` | 两机验收手册（20 步 + 排查表 + 结果回填模板） |
+| `scripts/acceptance/check-env.ps1` | 验收前环境自检（RFC1918 判定 / 端口占用 / 网络配置文件 / 残留进程） |
+| `scripts/acceptance/check-logs.ps1` | 验收后日志检查 + 访问密钥泄漏扫描（命中只打掩码，不回显真实密钥） |
+| `scripts/acceptance/make-package.py` | 把 publish 产物打成便携版验收 zip |
+| `scripts/acceptance/add-bom.py` | 给两个 `.ps1` 加 UTF-8 BOM（PS 5.1 否则乱码） |
 
 **修改**
 
 | 路径 | 说明 |
 |---|---|
-| `src/LanRemote.Discovery/LanDiscoveryService.cs` | ① 回应目标改用 `DiscoveryReplyTarget.ForProbe(remote)`；② sender 增加 `MulticastInterface`；③ socket 创建失败时 `cts.Dispose()` |
+| `src/LanRemote.Discovery/LanDiscoveryService.cs` | ① 回应目标改用 `DiscoveryReplyTarget.ForProbe(remote)`；② sender 增加 `MulticastInterface`；③ socket 创建失败时 `cts.Dispose()`；④ probe 回应成功时补一行 Debug 日志（§1.5.6） |
 | `src/LanRemote.Discovery/Protocol/DiscoveryAnnouncementEvaluator.cs` | capabilities：raw 数量先判上限、空白/null 拒绝、控制字符在 Trim 前拒绝 |
 | `src/LanRemote.App/ViewModels/MainViewModel.cs` | `StartDiscoveryAsync` 改返回 `bool`；`LoadAsync` 只在成功时写正常状态 |
 | `tests/LanRemote.Protocol.Tests/DiscoveryAnnouncementEvaluatorTests.cs` | 删掉语义错误的 `Capabilities_AreDedupedAndEmptiesRemoved`，换成 6 组新测试 |

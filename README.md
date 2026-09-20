@@ -5,6 +5,9 @@
 
 完整施工规格位于 `LanRemote_Implementation_Package/`，当前进度见根目录的 `HANDOFF.md`。
 
+**两机手工验收尚未执行（NOT RUN）。验收手册见 [`docs/TWO_MACHINE_ACCEPTANCE.md`](docs/TWO_MACHINE_ACCEPTANCE.md)，
+便携版验收包由 `scripts/acceptance/make-package.py` 生成。验收未通过前不进入 M3。**
+
 ## 当前状态
 
 **版本 `0.1.0-m2`**。已完成：**M0 → M1 → M1.1（安全审计）→ M1.2 → M1.3 → M2（局域网发现）→ M2.1（发现收口修复）**。
