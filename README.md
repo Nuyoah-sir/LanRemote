@@ -7,10 +7,11 @@
 
 ## 当前状态
 
-**版本 `0.1.0-m2`**。已完成：**M0 → M1 → M1.1（安全审计）→ M1.2 → M1.3 → M2（局域网发现）**。
-基线提交 `664e558`，Last code commit `857eaa6`。当前阶段测试 **382 passed / 0 failed**。
+**版本 `0.1.0-m2`**。已完成：**M0 → M1 → M1.1（安全审计）→ M1.2 → M1.3 → M2（局域网发现）→ M2.1（发现收口修复）**。
+基线提交 `664e558`；Last code commit 见 `HANDOFF.md` 第 1 节。当前阶段测试 **408 passed / 0 failed**。
 
-**M1 已封板；M2 code 完成，两机手工 DoD 未执行（NOT RUN，见 HANDOFF 第 9 节）。下一步是 M3。**
+**M1 已封板；M2 / M2.1 code 完成，两机手工 DoD 仍未执行（NOT RUN，见 HANDOFF 第 9 节）。
+两机验收完成前不进入 M3。**
 
 - M0：solution、8 个 src 项目、4 个测试项目、WPF 主窗口、DI/日志/配置、单实例 Mutex
 - M1：稳定 deviceGuid、可派生设备码 `QPKE-2CPC` 这类形态、128-bit 访问密钥、
@@ -27,6 +28,10 @@
 - M2：`NetworkInterfaceSelector`（RFC1918 + 物理类型 + 虚拟网卡过滤）、`SubnetPolicy`、
   UDP 组播 `239.255.77.77:45872` TTL=1 + directed broadcast probe、announce/probe/unicast 回应、
   有界设备缓存（256）与有界更新队列（512 DropOldest）、7 秒 TTL、MainWindow 真实设备列表
+- M2.1：probe unicast 回应改为固定打到 `remote.Address:45872`（原 bug 会打到对方随机临时端口）、
+  每个 sender 显式设置 `IP_MULTICAST_IF` 出口网卡、capabilities 校验收紧
+  （raw 条数先判上限 / 空白与 null 拒绝 / 控制字符在 Trim 前拒绝）、
+  discovery 启动失败不再被配置加载文案覆盖、`StartAsync` 失败路径 Dispose linked CTS
 
 > 注意：本机开发环境唯一的活跃网卡是 `172.100.166.220`（公网段，**不属于 RFC1918**），
 > 因此在这台机器上发现功能会输出「没有找到任何合格的私有 IPv4 网卡」——这是预期行为，不是 bug。
@@ -37,7 +42,7 @@
 ECDSA P-256 / `id-ecPublicKey` / SHA-256 自签名、5 年有效、`CA=false`、
 `KeyUsage = digitalSignature`（critical）、EKU 含 `serverAuth`、私钥 `EphemeralKeySet` 载入。
 
-下一步是 **M2 — 网卡筛选 + UDP 发现**。当前阶段测试：**200 passed / 0 failed**。
+下一步是 **M3 — TLS Host/Client + 同子网连接校验**（等两机手工验收结果，未验收不开工）。
 
 ## 本机构建环境
 

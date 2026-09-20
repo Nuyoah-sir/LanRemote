@@ -48,9 +48,10 @@ M1 设备身份与安全存储 —— **已完成**（build PASS / 175 tests PAS
 M1.1 Security Hardening —— **已完成**（build PASS / 189 tests PASS，git 基线 `664e558`）
 M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last code commit `104f296`）
 M1.3 ECDSA Certificate KeyUsage Fix —— **已完成**（build PASS / 200 tests PASS，Last code commit `9e75fce`）
-M2 网卡筛选 + UDP 发现 —— **code 已完成**（build PASS / 382 tests PASS，Last code commit `857eaa6`）
-  ⚠️ 两机手工 DoD **NOT RUN**
-M3 TLS Host/Client + 同子网校验 —— 下一步（M2 已停止，等审计确认）
+M2 网卡筛选 + UDP 发现 —— **已完成**（build PASS / 382 tests PASS，Last code commit `857eaa6`）
+M2.1 Discovery Final Fix —— **code 已完成**（build PASS / 408 tests PASS，Last code commit `fb202eb`）
+  ⚠️ 两机手工 DoD **NOT RUN**（M2.1 修完仍是 NOT RUN，未验收不得进 M3）
+M3 TLS Host/Client + 同子网校验 —— 下一步（等两机验收回填后才能开工）
 M3~M11 —— 未开始
 
 ## M1 关键存储事实（后续里程碑会依赖）
@@ -69,6 +70,22 @@ M3~M11 —— 未开始
 - `ReadAsync` 只发 `Clone()`；证书已存在时加载走只读路径，**不重写 secrets.bin**
 - `TryDecodeExact` 失败时 out 是 `Array.Empty<byte>()`（已 ZeroMemory），不会返回部分解码的秘密字节
 - HANDOFF 记账用 `Last code commit` + `Working tree at validation`，**不写 HEAD hash**（避免自引用）
+
+## M2.1 已锁死的两条发现不变量（别写回去）
+
+- **probe unicast 回应目标 = `remote.Address : 45872`**，绝不是 `remote.Port`
+  （probe 源端口是对方 sender 的随机临时端口，没人监听）
+- **每个 sender 必须显式 `SetSocketOption(IP, MulticastInterface, 接口 IPv4 网络序 4 字节)`**；
+  不设则多网卡时组播全走系统默认路由。实测：对地址做 `HostToNetworkOrder` 或传裸 index 都会抛
+  `SocketException: 在其上下文中，该请求的地址无效`
+- Discovery 对 `LanRemote.Protocol.Tests` 开了 `InternalsVisibleTo`，只服务上述两个 internal 纯函数
+
+## 本机开发残留（非阻断、勿写进产品逻辑）
+
+- `%LOCALAPPDATA%\LanRemote\backups\secrets.bin.pre-m1.3-reset.bak` = M1.3 手工重置身份时留的旧开发备份
+- 只存在本机，**不在源码包**（`git archive` 152 条目已验证不含 bak/secrets.bin/.workbuddy）
+- 确认不再需要旧开发身份后**由施工环境手工删除**即可
+- **硬约束：绝不把「自动删除身份备份」写进产品逻辑**（产品代码里不得出现 backups/.bak 相关清理）
 
 ## 本机网络环境（影响 discovery 验证）
 
