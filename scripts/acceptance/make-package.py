@@ -10,6 +10,8 @@ The zip contains the published output plus:
     START-HERE.md   - the two-machine acceptance manual (Chinese)
     check-env.ps1   - pre-flight environment check
     check-logs.ps1  - post-run log inspection / access-key leak scan
+    set-lab-ip.ps1  - add / remove a private lab IPv4 (needed when the LAN
+                      is not RFC1918, e.g. 172.100.x.x)
 """
 
 import os
@@ -39,7 +41,7 @@ def main() -> None:
 
     # Put the manual and the two helper scripts next to the exe.
     shutil.copyfile(DOC_SOURCE, os.path.join(PUBLISH_DIR, "START-HERE.md"))
-    for name in ("check-env.ps1", "check-logs.ps1"):
+    for name in ("check-env.ps1", "check-logs.ps1", "set-lab-ip.ps1"):
         shutil.copyfile(
             os.path.join(SCRIPTS_DIR, name), os.path.join(PUBLISH_DIR, name)
         )

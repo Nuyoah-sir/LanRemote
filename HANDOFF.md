@@ -287,7 +287,34 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 > 验收结果请回填到第 9 节与第 1 节「是否满足完整 M2 DoD」。
 > **未回填前不要进入 M3。**
 
-### 验收物料（已就绪，等用户执行）
+### 首次实测失败记录（2026-09-20，NOT RUN 原因已实证）
+
+**用户于 2026-09-20 15:52 完成首次两机实测：两台设备列表均为空，失败。**
+
+现场数据：
+
+| | 电脑 A（DESKTOP-D132BMD） | 电脑 B（DESKTOP-CU2Z63D） |
+|---|---|---|
+| IPv4 | `172.100.166.220` | `172.100.166.65` |
+| 默认网关 | `172.100.166.254` | — |
+| 链接速度 | 1000 Mbps | 1000 Mbps |
+| 网卡 | Realtek PCIe GbE | Realtek Gaming 2.5GbE |
+| 设备码 | `M5WC-14GX` | `3ERD-R74V` |
+
+**根因（不是 LanRemote 的 bug）**：RFC1918 的 172 段只覆盖 `172.16`–`172.31`，
+而这两台机器是 `172.100.166.x`（第二段 **100**），**落在范围外，属于公网地址段**。
+`NetworkInterfaceSelector` 据此正确判定「没有合格的私有 IPv4 网卡」，
+`LanDiscoveryService` 因此不开 socket → 列表为空。软件行为符合规格与 ADR-022。
+
+两台机器网线是通的（1000 Mbps、同网段、可互通），问题纯粹在地址段本身。
+
+**处置**：新增 `scripts/acceptance/set-lab-ip.ps1`，给两台机器各**追加**
+一个 `192.168.1.10/24`（A）与 `192.168.1.20/24`（B）**共存地址**（不动原有 `172.100.x.x`，
+避免破坏现有上网），同时把网卡配置文件设为 `Private` 并放行入站 UDP 45872；
+`-Undo` 可一键回滚。**未修改任何产品代码**，安全约束（只认 RFC1918）保持原样。
+验收手册新增第 1.1 / 1.2 节记录本案例。
+
+### 验收物料（已就绪，等用户重测）
 
 | 项 | 位置 |
 |---|---|
@@ -296,7 +323,7 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 | 验收前环境自检脚本 | `scripts/acceptance/check-env.ps1` |
 | 验收后日志检查 / 访问密钥泄漏扫描脚本 | `scripts/acceptance/check-logs.ps1` |
 
-包内自带 `START-HERE.md`（即验收手册）、`check-env.ps1`、`check-logs.ps1`。
+包内自带 `START-HERE.md`（即验收手册）、`check-env.ps1`、`check-logs.ps1`、`set-lab-ip.ps1`。
 两个 `.ps1` 刻意存为 **UTF-8 with BOM**，否则 Windows PowerShell 5.1 会把中文按 ANSI 解析成乱码。
 
 ## 10. 修改文件
@@ -348,6 +375,7 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 | `docs/TWO_MACHINE_ACCEPTANCE.md` | 两机验收手册（20 步 + 排查表 + 结果回填模板） |
 | `scripts/acceptance/check-env.ps1` | 验收前环境自检（RFC1918 判定 / 端口占用 / 网络配置文件 / 残留进程） |
 | `scripts/acceptance/check-logs.ps1` | 验收后日志检查 + 访问密钥泄漏扫描（命中只打掩码，不回显真实密钥） |
+| `scripts/acceptance/set-lab-ip.ps1` | 追加/移除私有 lab IPv4（`-Role A\|B` / `-Undo`）；本机网络非私有段时必须先跑 |
 | `scripts/acceptance/make-package.py` | 把 publish 产物打成便携版验收 zip |
 | `scripts/acceptance/add-bom.py` | 给两个 `.ps1` 加 UTF-8 BOM（PS 5.1 否则乱码） |
 
