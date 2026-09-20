@@ -7,14 +7,17 @@
 
 ## 当前状态
 
-**M1 — 设备身份与安全存储（已完成）**，此前 **M0 — 仓库骨架（已完成）**。
+**版本 `0.1.0-m1`**。已完成：**M0 → M1 → M1.1（安全审计修复）**。基线提交 `664e558`。
 
 - M0：solution、8 个 src 项目、4 个测试项目、WPF 主窗口、DI/日志/配置、单实例 Mutex
 - M1：稳定 deviceGuid、可派生设备码 `QPKE-2CPC` 这类形态、128-bit 访问密钥、
   DPAPI 保护的 `secrets.bin`、自签名 ECDSA P-256 设备证书与 SHA-256 指纹、
   主窗口的密钥「显示 / 复制 / 重新生成」
+- M1.1：证书私钥导入改为 `EphemeralKeySet`（ADR-018，取代 ADR-016）、
+  `UpdateAsync` copy-on-write 事务语义（ADR-019）、证书状态 fail closed 与
+  `secrets.bin` 严格校验（ADR-020）、秘密 `byte[]` 生命周期清零
 
-下一步是 **M2 — 网卡筛选 + UDP 发现**。
+下一步是 **M2 — 网卡筛选 + UDP 发现**。当前阶段测试：**189 passed / 0 failed**。
 
 ## 本机构建环境
 
@@ -99,3 +102,7 @@ scripts/ 环境脚本（防火墙脚本在 M10 补充）
 - 加密：`ProtectedData.Protect(..., CurrentUser)`，换用户或换机器都解不开
 - 写入：临时文件 + 原子替换，不会留下写了一半的文件
 - 文件损坏时**不静默重建**（否则「损坏」会被伪装成「首次运行」），而是抛 `InvalidDataException`
+- 长度必须**严格等于**声明长度；payload 内的 bundle 版本也必须与实现一致（ADR-020）
+- 证书字段（`certificatePfx` / `certificatePfxPassword`）必须同时存在或同时缺失，
+  缺一半时**拒绝**而不是重新签发证书——否则证书指纹会静默改变（ADR-020）
+- 私钥导入使用 `EphemeralKeySet`：运行时只在内存，磁盘上的副本只有这份 DPAPI 文件（ADR-018）
