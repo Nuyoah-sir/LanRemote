@@ -236,10 +236,21 @@ public sealed class DeviceCertificateService : IDisposable
 
         CertificateRequest request = new($"CN=LanRemote-{deviceCode}", privateKey, HashAlgorithmName.SHA256);
 
-        // 不是 CA，只做服务器/客户端身份认证。
+        // 不是 CA，只做服务器身份认证。
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+
+        // M1.3：Key Usage 只允许 digitalSignature。
+        //
+        // RFC 5480 对 id-ecPublicKey 的 end-entity 证书允许的 Key Usage 是
+        // digitalSignature / nonRepudiation / keyAgreement；
+        // keyEncipherment 属于 RSA 密钥传输语义，不属于 EC certificate profile——
+        // 之前错误地把它写进 ECDSA 证书，属于 profile 违规（严格校验方可能直接拒绝）。
+        //
+        // LanRemote 的 TLS 服务端身份使用 ECDSA 签名，因此只需要 digitalSignature；
+        // 刻意不使用 keyAgreement（那会要求 ECDH 语义，本项目不做）。
         request.CertificateExtensions.Add(
-            new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+            new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, critical: true));
+
         request.CertificateExtensions.Add(
             new X509EnhancedKeyUsageExtension(
                 new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") },

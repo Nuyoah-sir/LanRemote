@@ -204,6 +204,93 @@ public sealed class DeviceCertificateTests : IDisposable
     }
 
     [Fact]
+    public async Task CertificateKeyUsage_IsDigitalSignatureOnly()
+    {
+        (_, DeviceCertificateService certificates) = CreateServices();
+
+        DeviceCertificate certificate = await certificates.GetOrCreateAsync();
+
+        X509KeyUsageExtension? keyUsage = certificate.Certificate.Extensions
+            .OfType<X509KeyUsageExtension>()
+            .FirstOrDefault();
+
+        Assert.NotNull(keyUsage);
+        Assert.True(keyUsage.Critical);
+
+        Assert.True(keyUsage.KeyUsages.HasFlag(X509KeyUsageFlags.DigitalSignature));
+
+        // RFC 5480：keyEncipherment 不属于 id-ecPublicKey 的 EC certificate profile。
+        Assert.False(keyUsage.KeyUsages.HasFlag(X509KeyUsageFlags.KeyEncipherment));
+
+        // 本项目用 ECDSA 签名做 TLS 服务端身份，不做 ECDH 密钥协商。
+        Assert.False(keyUsage.KeyUsages.HasFlag(X509KeyUsageFlags.KeyAgreement));
+
+        // 最终 Flags 必须恰好等于 digitalSignature，不多不少。
+        Assert.Equal(X509KeyUsageFlags.DigitalSignature, keyUsage.KeyUsages);
+    }
+
+    [Fact]
+    public async Task CertificateProfile_MatchesEcdsaServerIdentity()
+    {
+        (_, DeviceCertificateService certificates) = CreateServices();
+
+        DeviceCertificate certificate = await certificates.GetOrCreateAsync();
+        X509Certificate2 x509 = certificate.Certificate;
+
+        // 1) ECDSA P-256（只看公钥，私钥以 EphemeralKeySet 载入不宜导出）
+        using ECDsa? publicKey = x509.GetECDsaPublicKey();
+        Assert.NotNull(publicKey);
+        Assert.Equal(
+            ECCurve.NamedCurves.nistP256.Oid.Value,
+            publicKey.ExportParameters(includePrivateParameters: false).Curve.Oid.Value);
+        Assert.Equal(256, publicKey.KeySize);
+
+        // 2) CA=false
+        X509BasicConstraintsExtension? constraints = x509.Extensions
+            .OfType<X509BasicConstraintsExtension>()
+            .FirstOrDefault();
+        Assert.NotNull(constraints);
+        Assert.False(constraints.CertificateAuthority);
+
+        // 3) KeyUsage = digitalSignature only
+        X509KeyUsageExtension? keyUsage = x509.Extensions
+            .OfType<X509KeyUsageExtension>()
+            .FirstOrDefault();
+        Assert.NotNull(keyUsage);
+        Assert.Equal(X509KeyUsageFlags.DigitalSignature, keyUsage.KeyUsages);
+
+        // 4) EKU 含 serverAuth
+        X509EnhancedKeyUsageExtension? eku = x509.Extensions
+            .OfType<X509EnhancedKeyUsageExtension>()
+            .FirstOrDefault();
+        Assert.NotNull(eku);
+        Assert.Contains(
+            "1.3.6.1.5.5.7.3.1",
+            eku.EnhancedKeyUsages.Cast<Oid>().Select(o => o.Value).ToArray());
+
+        // 5) 公钥算法必须是 id-ecPublicKey（1.2.840.10045.2.1），而不是 RSA
+        Assert.Equal("1.2.840.10045.2.1", x509.PublicKey.Oid.Value);
+    }
+
+    [Fact]
+    public async Task KeyUsageSurvivesReloadFromSecretsBin()
+    {
+        (_, DeviceCertificateService firstBoot) = CreateServices();
+        await firstBoot.GetOrCreateAsync();
+
+        // 冷启动：从 PFX 重新加载后，KeyUsage 必须仍然是 digitalSignature only。
+        (_, DeviceCertificateService secondBoot) = CreateServices();
+        DeviceCertificate reloaded = await secondBoot.GetOrCreateAsync();
+
+        X509KeyUsageExtension? keyUsage = reloaded.Certificate.Extensions
+            .OfType<X509KeyUsageExtension>()
+            .FirstOrDefault();
+
+        Assert.NotNull(keyUsage);
+        Assert.Equal(X509KeyUsageFlags.DigitalSignature, keyUsage.KeyUsages);
+    }
+
+    [Fact]
     public async Task CertificateIsPersistedAndSecretsBinHasNoPlainReadablePfx()
     {
         (_, DeviceCertificateService certificates) = CreateServices();
