@@ -46,7 +46,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M5~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）。
-远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）；2026-09-21 起首推 + 后续记账提交均推送成功（远端 `main` = 本地，54 提交）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**链路间歇性抖动**：push 会挂到超时 `exit 124`/schannel 握手失败，与代理/配置无关 → **解法=重试**（实测 2 次内过）；`GIT_TERMINAL_PROMPT=0` + 关 GCM 交互仅防凭据挂起。此后每轮收尾 `git push origin main`。
+远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **全局 helper 链不可信**——`git-credential-helper-selector` 会重写 `~/.gitconfig`（实测被写成 `<no helper>`；连 `--help` 都写），且被调用会挂起 → 本仓库已用 repo 级「空值 + `manager`」屏蔽继承链（只剩 GCM），**勿改回**。此后每轮收尾 `git push origin main`。
 
 ## 实测事实（别再猜）
 
