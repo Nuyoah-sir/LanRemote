@@ -1,7 +1,7 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 18:24 (+08:00)**
+> 更新时间：**2026-09-21 19:44 (+08:00)**
 >
 > 本轮（M3 第 24 步 · 续「一键准备本机」）**动了代码**：全部在
 > `tools/LanRemote.Acceptance/`（验收器）与 `scripts/acceptance/set-lab-ip.ps1` 里，
@@ -49,12 +49,18 @@
   **别改回去**，理由与坑见第 15 节「M3 验收器的形态教训」。
 - **注意：不要拿 `LanRemote.App` 验收 M3**——它引用了 `LanRemote.Transport` 但一行都没调用，
   打它的包只能重证 discovery。
+- **远端仓库已上线（2026-09-21）：`https://github.com/Nuyoah-sir/LanRemote.git`（public，
+  用户手动建库）**——完成**首次全量推送**：`main` 与本地一致（52 提交 / 693 对象 / 726 KiB，
+  远端 `refs/heads/main` 与本地 HEAD 逐字符相同）。推送走 git+HTTPS（GCM 缓存凭据，
+  `gh` 未安装也不需要）；此后记账提交按「关于 git 记账方式」同步推送。
 
 ### 关于 git 记账方式
 
 HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 `Last code commit`（最后一次代码/测试提交）+ `Working tree at validation`。
 允许 HEAD 比 Last code commit 新（之后会有单独的文档提交）。
+远端 `origin` 已配（GitHub，public）：每轮记账提交后 `git push origin main` 同步
+（防交互挂起：`GIT_TERMINAL_PROMPT=0`，并关 GCM 交互 `credential.interactive=false`/`guiPrompt=false`）。
 
 ## 1.5 M2.1 — Discovery Final Fix（本轮修复明细）
 
