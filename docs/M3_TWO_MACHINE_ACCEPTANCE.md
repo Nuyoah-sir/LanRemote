@@ -83,7 +83,7 @@ LanRemote.Acceptance.exe --headless prepare-lab --lab-role <A|B>    ← 「准�
 | 1 | FAIL —— 真的不符合预期 |
 | 2 | UNMET —— 前置条件不满足（没合格网卡 / 对端没跑 / 端口没开），**不是**产品失败 |
 | 3 | HARNESS_ERROR —— 验收器自身故障（参数写错、内部异常） |
-| 4 | INVALID_RUN —— 操作员中途点了停止，整轮作废，**不得**把由此产生的关闭算成 PASS |
+| 4 | INVALID_RUN —— 操作员点了停止（控制端「中止」/ 被控端「停止监听」），整轮作废，**不得**把由此产生的关闭算成 PASS。被控端**收尾时**的正常停止也走这条路径——它作废的是「结局字段」，证据照常有效（§2 第 4 步 / §4） |
 
 > `--address` + `--pin` 是**直连模式**：跳过发现直接连，用于「本机自检」
 > （一个环回上的假被控端就能把全部判据走一遍）。
@@ -202,6 +202,11 @@ powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Role B
 - 两台各自点 `复制全部日志`，贴回给我；
 - **先确认日志已经贴走**，再两台各点一次 `撤销准备（还原网络设置）`（等于手动跑 `set-lab-ip.ps1 -Undo`）。
   撤销只动网络，不碰任何日志文件；但网络都还原了还留着 lab 地址才是麻烦，所以别忘。
+
+> **B 停完之后的结局字段会是 `INVALID_RUN`（本轮作废，退 4）——这是设计使然，不是失败**：
+> 停机强行关 socket，而「连接被关闭」本身是若干场景的通过条件，所以操作员一按停，
+> 整轮的**结局字段**就机械作废（不这样做，「按停」就能伪造出通过）。
+> **作废的是那个字段，不是证据**：逐条连接行 / 桶 / 汇总行一条不少，判定见 §4/§5。
 
 ---
 
@@ -331,11 +336,15 @@ powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Role B
 被控端点 `停止监听` 后会打印：
 
 ```
-[HOST][BUCKETS] sessionHandled=N active=0 completedTrue=… completedFalse=… partitionOk=True
+[HOST][BUCKETS] sessionHandled=N active=0 sum=N partitionOk=True {<终态桶=计数>, …}
 [HOST][SUMMARY] connectionsEnteringSessionHandler=N listenersStoppedCleanly=True activeAtStop=0 handlerFaults=0
-[HOST][UNOBSERVED] tlsStageRejections=UNOBSERVABLE // 同子网拒绝 / 准入拒绝 / TLS 失败全部静默 return（§5.1）
+[HOST][UNOBSERVED] tlsStageRejections=UNOBSERVABLE // 同子网拒绝 / 准入拒绝 / TLS 失败全部静默 return（§6.1）
 [HOST][CORRELATE] hostDeviceId=… hostDeviceCode=… hostCertSha256=… boundAddresses="…" port=45873
 ```
+
+> ⚠ **点过「停止监听」的这一轮，结局字段必然显示 `INVALID_RUN`**（见 §2 第 4 步）：
+> 操作员按停 = 整轮**结局字段**机械作废（不这样做，「按停」就能把若干场景的通过条件伪造出来）。
+> **作废的是那个字段，不是上面这几行**：判定 M3 用的就是下方这五条约束 + §5 的四元组配对。
 
 `accepted / preAuthenticated / rejected` 那三个旧数字已经**废弃**：
 
@@ -456,7 +465,7 @@ B 只留 `192.168.1.20`，并且中间有路由能通），我再把场景 5 加
 | `clientOutcome=FAIL` 且 `peerClosed=reset` | 收尾方式不是有序 EOF。若同时 `closedAtMs` 贴着 5000，说明 hello 根本没被接受 |
 | `slow-dribble` 显示 `sent=4/4` | 长度前缀时限被逐字节重置了——**真缺陷**，把两段日志都贴我 |
 | `② rejection=pre-auth-timeout 的行恰好 2 条` 对不上 | 某个场景提前/推迟收尾，看 `closedAtMs` 是否贴在 5000 |
-| 整轮结局是 `本轮作废（INVALID_RUN）` | 你中途点了 `中止`。这是故意的：操作员中止产生的关闭**不许**被翻译成场景 PASS。重跑一次即可 |
+| 整轮结局是 `本轮作废（INVALID_RUN）` | 操作员点过停止。这是故意的：操作员中止产生的关闭**不许**被翻译成场景 PASS。**控制端中途**中止 → 重跑一次；**被控端收尾**的正常停止也会出现它（§2 第 4 步 / §4），证据照常有效——别重跑 |
 | 退 3 / `验收器故障` | 参数写错或验收器自身异常。看 `%TEMP%\lanremote-m3-acceptance\crash.log` |
 | `bind 失败 <地址>: …` | 该地址已被占用；其它地址不受影响（ADR-031 按网卡降级） |
 | 窗口根本打不开 | 极少见。看 `%TEMP%\lanremote-m3-acceptance\crash.log`，整段贴我 |

@@ -18,26 +18,27 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M3 — TLS Host/Client + 同子网连接校验**
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1
+- **当前里程碑：M3 — TLS Host/Client + 同子网连接校验 —— 已完成（两机验收 PASS，见第 15 节）**
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3**
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
 - **Last code commit：`1d5ffc8`**（M3 第 24 步 · 续「一键准备本机」：窗口按钮 + 提升 helper
   + headless `prepare-lab`，含 3 个真缺陷；上一提交 `ffd73e9` = lab 脚本补 TCP 45873 放行）
-- **Working tree at validation: 有未提交改动**——本轮全部验证（build 0 警告 / 574 tests /
-  `prepare-lab` 端到端 / `lab-apply` 幂等 / GUI 冒烟 / A 机 lab 实测）都发生在提交之前，
-  随后逐批提交；现在工作树只剩本文件与其后的记账性修订。
-- **A 机（本机）lab 环境已就绪**（2026-09-21 16:47 实测）：`192.168.1.10/24` 追加成功
-  （原 `172.100.166.220/24` 保留、未断网）、profile=Private、UDP 45872 与 TCP 45873
-  入站放行、`--headless host --seconds 8` 监听成功且退 0。
-  **B 机尚未配置** —— 第 24 步现在就卡在这里：B 机拷最新 zip 解压后，**双击 exe →
-  点「准备为 B 机」→ 一次 UAC** → 自检转绿（headless 等价：`--headless prepare-lab --lab-role b`）。
+  ——其后第 24 步真机验收（2026-09-21）**未再动任何代码**。
+- **Working tree at validation: 无未提交代码**——两机验收跑的就是由 `1d5ffc8` 后工作树打出的
+  物料（zip `f81d194c…`；harness / transport 哈希两端逐字符一致）；验收后仓库只新增文档性
+  修订（本记录 + 手册澄清），无代码 / 测试改动。
+- **两机 lab 环境均已就绪，且第 24 步两机验收已跑完（PASS，2026-09-21）**：
+  A（本机）= `192.168.1.10`、B = `192.168.1.20`，UDP 45872 + TCP 45873 入站放行；
+  A 侧四场景 4/4 PASS（runId `8a7e3d03`）、B 侧四条连接行与五条汇总约束全部对上
+  （runId `0e7f03d0`）。**收尾待办：两台机器各点一次「撤销准备（还原网络设置）」**
+  （用户执行；判定明细与 `INVALID_RUN` 口径见第 15 节第 24 步记录）。
 - **M2.1 code 状态：Implementation complete；Two-machine manual DoD：PASS**
   （2026-09-20 17:30–18:18 两台实机跑完 20 步，20/20 通过，见第 9 节）
 - **是否满足完整 M2 DoD：是**（两机手工验收已回填）
-- **M3 代码状态：Implementation complete**——阶段 0～5 的 24 步里第 1～23 步已完成，
-  第 24 步（两机验收）的**物料与 A 机环境都已修到就绪**（含窗口「一键准备本机」），
-  当前停在**等 B 机**。
-  `dotnet build` 0 警告 0 错误，`dotnet test` **574 PASS / 0 FAIL**。
+- **M3：完成**——24 步全部完成，第 24 步两机验收（真实 TLS + pinning）**PASS**（2026-09-21）。
+  判定以逐条连接证据为准（五约束 + 四元组配对）；被控端结局字段 `INVALID_RUN` 是收尾机制
+  的机械产物、**不是失败**（第 15 节第 24 步记录有专述）。
+  `dotnet build` 0 警告 0 错误，`dotnet test` **574 PASS / 0 FAIL**（验收轮未改代码）。
   逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节可能滞后。
 - **验收器是 WPF 窗口程序（`WinExe`），双击 `LanRemote.Acceptance.exe` 就是一个窗口**，
   不需要任何脚本；窗口里可直接**「准备为 A/B 机」「撤销准备」**（各弹一次 UAC，拒绝不循环）；
@@ -793,7 +794,7 @@ dotnet test LanRemote.sln -c Debug --no-build
 
 ## 15. 下一步 —— M3（TLS Host/Client + 同子网连接校验）
 
-**开工指令未下达**：下面是已定型的施工顺序，等用户说"开工"才动手。
+**已实施完毕（2026-09-21，含两机验收 PASS）**：下面是本阶段的施工顺序与逐步记录，原记的「等开工」已不适用。
 **开工前必读 `docs/M3_REVIEW_TRIAGE.md`**（外部红队评审 + 本机实测校正）。
 
 **可直接复用，不要重写**（M2 已就绪）：`ISubnetPolicy` / `SubnetPolicy` / `NetworkBinding` /
@@ -1354,6 +1355,81 @@ dotnet test LanRemote.sln -c Debug --no-build
     「用 `set-lab-ip.ps1`」——窗口路径下该分支基本不可达（自检不合格时角色按钮本来
     就是灰的），下次动代码时顺手改。
 
+### M3 第 24 步 · 两机验收记录（2026-09-21 真机执行 —— **PASS**）
+
+**判定口径**：本轮判定 = **逐条连接证据**（验收手册 §4 的五条约束 + §5 的 4 元组配对，
+两份日志对得上）。被控端整轮**结局字段**是 `INVALID_RUN`（退 4）——那是「操作员按了停止」
+触发收尾机制后的机械产物，**不是失败、不需要重跑**（来历见下）。
+
+**两台机器与物料**（A = 控制端 / B = 被控端）
+
+| 项 | A 机 | B 机 |
+| --- | --- | --- |
+| 设备名 / 设备码 | DESKTOP-D132BMD / `M5WC-14GX` | DESKTOP-CU2263D / `3ERD-R74V` |
+| lab 地址（唯一合格网卡） | `192.168.1.10` | `192.168.1.20` |
+| 设备 id | `fbdf903d-988c-4b38-b999-25998befe71f` | `ee59c0c0-c05c-4034-ba6b-5f1f006c7ae1` |
+| 证书指纹 | `89A5C10E…5320F445` | `6755838E…49A73938` |
+| osBuild / .NET | 10.0.26200 / 10.0.12 | 10.0.22631 / 10.0.12 |
+
+物料：harness `B0FAF788…BF544A`（162 304 B）、`LanRemote.Transport.dll` `A47E64AF…8BCE2B`
+（53 248 B），**两端 `[BUILD]` 行逐字符一致**；执行物料 = zip `f81d194c…`（60 197 088 B / 265 文件）。
+跨端互证：A 的 `peerDeviceId` = B 的 `hostDeviceId`；A 的 `presentedPin` 与 B 的
+`hostCertSha256` **逐字符相同**；B 的 `[HOST][CORRELATE]` 里 `boundAddresses="192.168.1.20"`
+`port=45873` 与 A 每条 `peerHost=192.168.1.20:45873` 对上。
+
+**A 侧**（runId `8a7e3d03`，`startedUtc=10:56:00.039Z`，`--headless client --peer 3ERD-R74V --all`，退 0：4/4 PASS）
+
+| 场景 | 关键实测行（原文摘） |
+| --- | --- |
+| success | `tls = ok proto=Tls13`；`presentedPin= 6755838E…4938`；`local=192.168.1.10:49575`；`peerClosed = eof t=29 ms` |
+| pin-mismatch | `wrongPin` 与真值仅 `byte[16] ^ 0x01` 之差（`…E2B4…`→`…E2B5…`）；`AuthenticationException: 对端证书未通过校验（pin-mismatch）`；**无 `local=` 行**（握手失败前拿不到端点） |
+| timeout | `local=192.168.1.10:49577`；`peerClosed = eof t=5013 ms`（长度前缀绝对时限 5000 ms） |
+| slow-dribble | `local=192.168.1.10:57131`；`已发 3/4 字节 t=4027 ms`；`peerClosed = eof sent=3/4 t=5000 ms` |
+
+`[VERDICT] M3 = PENDING-HOST-EVIDENCE` 系设计（控制端不单独宣布里程碑）。
+
+**B 侧**（runId `0e7f03d0`）四条连接行与 4 元组配对（唯一配对；配对方法见验收手册 §5）
+
+| B 行（原文摘） | 配对依据 | 认定 |
+| --- | --- | --- |
+| `conn#1 peer=192.168.1.10:49575 outcome=PreAuthenticated rejection=-` | A `local=…:49575` | success |
+| `conn#2 peer=192.168.1.10:49576 rejection=pre-auth-eof`（elapsedMs=3） | **唯一没有对应 `local=` 行的 B 行**；端口 49576 居 49575/49577 之间（顺序分配佐证） | pin-mismatch（TLS 1.3 半开窗口，验收手册 §3 场景 2 的预期形态） |
+| `conn#3 peer=192.168.1.10:49577 rejection=pre-auth-timeout elapsedMs=5017` | A `local=…:49577` | timeout |
+| `conn#4 peer=192.168.1.10:57131 rejection=pre-auth-timeout elapsedMs=5004` | A `local=…:57131` | slow-dribble |
+
+**五约束核对：全过。** ① PreAuthenticated 恰 1 条；② pre-auth-timeout 恰 2 条（5017 / 5004 ms，
+都贴 5 s）；③ 其余唯一一条是 `pre-auth-eof`；④ `connectionsEnteringSessionHandler=4` ∈ 3..4；
+⑤ `listenersStoppedCleanly=True activeAtStop=0`。
+另：`[HOST][BUCKETS] sessionHandled=4 active=0 sum=4 partitionOk=True {preauthenticated=1, rejected:pre-auth-eof=1, rejected:pre-auth-timeout=2}`、
+`handlerFaults=0`、`tlsStageRejections=UNOBSERVABLE`（不填 0）。
+
+**`INVALID_RUN` 的来历（设计使然，防误读）**
+
+- 验收手册 §2 第 4 步要求 B 点「停止监听」收尾；该按钮**无条件**调 `MarkOperatorAbort`
+  （`MainWindow.StopHostButton_Click`，注释原文：「停机会强行关掉 socket，而『连接被关闭』
+  正是若干场景的通过条件。不整轮作废，就等于用一次按停操作伪造出通过」；`HostRole` 收尾处
+  同条件再标一次）→ `Settle()` 机械返回 `InvalidRun` →
+  `[RESULT] outcome=INVALID_RUN / aborted=True / exitCode=4`。
+- 所以 **GUI 流程下被控端结局字段必为 `INVALID_RUN`**，证据不受影响。**别重跑、别当缺陷。**
+- 替代形态（本机实测）：`--headless host --seconds N` 定时停机不走操作员中止路径——
+  `--seconds 5` → `outcome=PASS`、`aborted=False`、退 0（该次 0 条连接，runId `9c4298e1`；
+  顺带证明结局字段本来就不承担「场景跑没跑过」的判定）。
+- 手册已澄清 4 处（§0.2 退出码表 / §2 第 4 步 / §4 / §8），并顺手修正 §4 两处滞后内容
+  （BUCKETS 模板改为代码现状 `sum=… {桶=计数}`；UNOBSERVED 交叉引用 §5.1→§6.1）。
+  **执行用 zip 未重打包**——物料必须与真机执行的字节一致；澄清只对日后重跑 / 后续里程碑生效。
+
+**B 机 lab 全流程实测（同一份日志）**：apply ×2（第二次为 undo 后幂等重跑，两条规则均
+`rule created`；第一次 `rule exists` + `rule created`）、undo ×1（`removed 192.168.1.20`、
+两条规则删除、DHCP 恢复；网络类别保持 Private——ADR-036 既定行为）、info ×4；
+`[LAB] 转发对账` 每次一致（129/129、104/104）。首次误操作轮（起监听后立即停止）→
+INVALID_RUN 退 4、`sessionHandled=0`，与上述机制一致。
+
+**遗留（文字性，不为它单独重打包）**：A 侧交叉核对清单标题写「下面四条」而实列 5 项
+（`ClientRole` 文案）；与 `HostRole.cs` 前置失败文案一起，下次动代码时顺手改。
+
+**收尾**：两台机器各点一次「撤销准备（还原网络设置）」（= `set-lab-ip.ps1 -Undo`，用户执行）；
+撤销后 A 机回到 `172.100.166.220`（非 RFC1918）属正常。
+
 ### M3 验收器的形态教训（用户连续三次纠错后定稿）
 
 这三条是踩出来的，别改回去：
@@ -1419,8 +1495,10 @@ dotnet test LanRemote.sln -c Debug --no-build
 
 ## 16. 下一位 AI 不要重复做
 
-- **两机手工验收已完成并 PASS**（第 9.1 节，20/20）——**那一轮是 M2.1 的 discovery 发现验收**。
-  M3 的两机验收（真实 TLS + pinning）**还没跑**，物料已修到可跑，等用户在两台实机上执行
+- **M2.1 两机验收已完成并 PASS**（第 9.1 节，20/20，discovery 轮）；**M3 两机验收
+  （真实 TLS + pinning）已于 2026-09-21 跑完并 PASS**（第 15 节第 24 步记录）——
+  **不要重复跑**，也不要被被控端结局字段 `INVALID_RUN` 迷惑（收尾机制的机械产物，
+  判定看逐条连接证据）
 - **不要重复做 M2.1 那次两机验收**：2026-09-20 已 PASS（第 9.1 节）。只有改动 discovery
   收发逻辑（网卡筛选 / probe / announce / 缓存 TTL）才需要重跑
 - **不要把验收器改回「控制台 exe + 脚本驱动」**：用户已连纠三次。
