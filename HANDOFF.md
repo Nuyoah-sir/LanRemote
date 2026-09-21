@@ -713,32 +713,97 @@ dotnet test LanRemote.sln -c Debug --no-build
 
 ## 15. 下一步 —— M3（TLS Host/Client + 同子网连接校验）
 
-按 `07_MILESTONES_AND_TASKS.md`：
+**开工指令未下达**：下面是已定型的施工顺序，等用户说"开工"才动手。
+**开工前必读 `docs/M3_REVIEW_TRIAGE.md`**（外部红队评审 + 本机实测校正）。
 
-1. Host 端 TCP 45873 listener；accept 后立刻用 `SubnetPolicy.IsAllowedPeer` 校验
-   （`socket.LocalEndPoint.Address` / `RemoteEndPoint.Address`），不同子网立即关闭。
-2. `SslStream` + 自签名 ECDSA 证书；客户端按 discovery 得到的 `certSha256` 做 pinning，
-   用 `CryptographicOperations.FixedTimeEquals` 比较；**不允许 `return true` 无条件放过**。
-3. **~~ADR-018 的未关闭风险~~ 已实测收口，结论是 ADR-018 错了**（2026-09-21，见 §13 的 ADR-029）：
-   `EphemeralKeySet` 在 Windows 上做 TLS **服务端** 9/9 失败（平台不支持 ephemeral keys），
-   改用 **`X509KeyStorageFlags.Default`（0）**。
-   M3 因此要做的三件事，顺序不能变：
-   ① 把 `DeviceCertificateService.ImportFlags` 改成 `Default`；
-   ② 改掉把旧选择锁成断言的 `DeviceCertificateTests.ImportFlags_UsesEphemeralKeySetOnly`；
-   ③ 新增真实 `SslStream` 握手集成测试（断言握手成功 ∧ 协议 ∈ {Tls12,Tls13} ∧ pin 匹配 ∧ 帧收发往返）。
-4. Control channel 的 length-prefixed JSON framing（上限 1 MiB）与 `channel_hello`。
-5. M3 **不要**实现 AuthChallenge / HMAC / 访问密钥认证（那是 M4）。
-6. M3 **不要**实现 UI 网络诊断 / 防火墙一键 / 临时私有地址一键——ADR-024 属 M9、ADR-025 与 ADR-026 属 M10。
-7. **开工前必读 `docs/M3_REVIEW_TRIAGE.md`**（外部红队评审 + 本机实测校正）。其中四条是
-   **本机实测**（.NET 10.0.12 / Win11 25H2 26200），不是评审的回忆：
-   - `JsonSerializerOptions.AllowDuplicateProperties` **默认 `True`**，且实测
-     `{"type":"channel_hello","type":"video"}` 默认解析成功、`type` 取**后者** → hello 解析器必须显式设 `false`
-   - `SslClientAuthenticationOptions.AllowTlsResume` **默认 `True`**，`SslServerAuthenticationOptions.AllowTlsResume`
-     **也是 `True`** → 两端都要显式关
-   - `AllowRenegotiation`：客户端默认 **`True`**、服务端默认 **`False`** → 两端都要显式设 `false`
-   - `EnabledSslProtocols` 默认 **`None`**（= 交给系统默认）→ 必须显式传 `Tls12 | Tls13`
-8. M3 必须先跑完 triage §7 的第 1、2 条实测（EphemeralKeySet 服务端握手、TLS1.2/1.3 分别验证）收口 ADR-018。
-   **Win10 22H2 本机无法验证**（本机是 Win11 25H2 / 26200），要另找机器或明确标注未测。
+**可直接复用，不要重写**（M2 已就绪）：`ISubnetPolicy` / `SubnetPolicy` / `NetworkBinding` /
+`LocalNetworkBindingProvider` / `NetworkInterfaceSelector` / `TransportConstants`。
+
+### 阶段 0 —— 先修正证书载入（ADR-029，阻塞后面所有步骤）
+
+1. 把 `DeviceCertificateService.ImportFlags` 改成 `X509KeyStorageFlags.Default`（0）。
+2. 改掉把旧选择锁成断言的 `DeviceCertificateTests.ImportFlags_UsesEphemeralKeySetOnly`
+   ——它锁的是已被证伪的 `EphemeralKeySet`，必须改成断言新 flag 并按新语义改名 / 改注释。
+3. 新增**真实 SslStream 握手集成测试**（ADR-018 遗留的强制要求）：
+   断言握手成功 ∧ 协议 ∈ {Tls12, Tls13} ∧ pin 匹配 ∧ 真实帧收发往返成功。
+   ⚠️ 注意污染陷阱：同一进程先 `PersistKeySet` 导入过同一私钥后 `EphemeralKeySet` 会碰巧成功，
+   所以测试要用新进程 / 顺序受控，不要依赖"没报错"。
+4. `dotnet build` + `dotnet test` 通过，更新 HANDOFF。**阶段 0 不通过不得进入阶段 1。**
+
+### 阶段 1 —— 连接目标与身份契约（TOCTOU / ADR-028）
+
+5. 定义**不可变连接目标快照** `{deviceId, remoteIPv4, tcpPort, expectedCertSha256(32B)}`，
+   在用户点击连接的那一刻冻结；握手期间**不得**回读 discovery 缓存。
+   验收：握手进行中把缓存的指纹改成 B，仍必须按 A 校验成功 / 按 B 失败。
+6. 定义**不可变连接上下文** `{deviceId, endpoint, expectedPin, presentedPin}`（ADR-028）。
+   `presentedPin` 在证书校验回调里捕获、之后不可变，并**暴露给 M4**（这是 M3 的交付物）。
+7. pin 解码与比较：连之前把 hex 解成**恰好 32 字节**，畸形 / 31 / 33 字节在 `ConnectAsync` 之前失败；
+   比较用 `cert.GetRawCertData()` + `CryptographicOperations.FixedTimeEquals`，**不比 hex 字符串**
+   （.NET 10 回调参数是 `X509Certificate` 基类，没有 `RawData`）。
+
+### 阶段 2 —— Listener / 准入 / 同子网校验
+
+8. 每张合格网卡起一个 TCP 45873 listener，并把 listener 与它的 `NetworkBinding` 关联起来
+   （多网卡同端口 bind 行为需实测，见 triage B-23；先决定 Host 启动是原子的还是按网卡降级）。
+9. accept 之后**先做同子网校验**：`socket.LocalEndPoint.Address` 必须等于该 binding 的地址，
+   用该 binding 的 mask 比 `RemoteEndPoint.Address`（复用 `SubnetPolicy`），不过立即关闭。
+   顺序：accept → 同子网 → **准入** → TLS，不可调换。
+10. 准入限额在 accept 之后、**TLS 握手之前**占用：全局上限 + 更小的每源 IP 上限，`finally` 里确定释放。
+    （`TcpListener.Start(backlog)` 的 backlog 只是待 accept 队列，**不是**应用层 DoS 防线。）
+11. 有界连接登记表：Host stop 时取消、dispose socket/stream、在有限停机 deadline 内 join 全部 handler。
+    验收：多个客户端卡在握手 / 帧头 / hello 各阶段时触发 stop，全部 handler 结束且限额归零。
+
+### 阶段 3 —— TLS
+
+12. 服务端显式设置：`EnabledSslProtocols = Tls12 | Tls13`、`AllowTlsResume = false`、
+    `AllowRenegotiation = false`、`ClientCertificateRequired = false`。客户端同样显式关 resume / renegotiation。
+    （默认值实测：`AllowTlsResume` 两端都 True；`AllowRenegotiation` 客户端 True / 服务端 False；
+    `EnabledSslProtocols` 默认 `None`。三个都不能靠默认。）
+13. 客户端校验回调：仅当**精确 pin 匹配** ∧ 本地不变量全过才接受 —— leaf 存在 / 32 字节 pin 相等 /
+    ECDSA P-256 / non-CA / KU 含 digitalSignature / EKU 含 serverAuth / 有效期当前有效。
+    这些是**不变量检查不是独立安全边界**；注入时间测试过期证书（不许改系统时钟）。
+14. **阶段绝对 deadline**，不是"距上次读到字节 N 秒"：TCP connect / TLS 握手 / 4 字节帧头 / 整帧 payload /
+    首个 hello 各自独立；异步读不靠 `ReadTimeout`。
+    验收：每 `(timeout - ε)` 发一个字节，连接仍必须在原 deadline 被关闭。
+15. 实测取消延迟与异常形态（triage B-24 / B-25）：握手停滞、帧头读一半、payload 读一半、
+    空闲 pre-auth 五种情况分别取消，断言 handler 终止且限额归零，**并如实记录异常类型**（不预填）。
+
+### 阶段 4 —— Framing / hello / 状态机
+
+16. 长度前缀读取：`uint` 校验 → 拒绝 `0` → 拒绝 `> 当前阶段上限` → **之后**才转 `int`；
+    超限不 drain，直接关闭。测试长度：`0 / 1 / 上限 / 上限+1 / 0x7fffffff / 0x80000000 / 0xffffffff`。
+17. **pre-auth `channel_hello` 用独立小上限（几 KiB）**，远小于 1 MiB（未认证连接不该能逼你分配 1 MiB）。
+    验收：pre-auth 发 64 KiB 长度前缀必须断开且不分配该 payload。
+18. 严格 JSON 解析器：`AllowDuplicateProperties=false`、`UnmappedMemberHandling=Disallow`、显式 `MaxDepth`
+    （属性值默认 `0` = 内置上限 64）、拒绝注释与尾逗号、`PropertyNameCaseInsensitive=false`。
+19. 首帧必须**且仅能**是 `{type:"channel_hello", channel:"control", protocol:1}`；
+    其它 channel / 其它 protocol / 缺字段 / 重复字段 / 第二个 hello 一律断开。
+    另需覆盖：EOF 出现在长度前缀的 1/2/3 字节、payload 中途 EOF、一帧多帧粘连、非法 UTF-8（不做替换字符兜底）。
+20. 状态机：TLS + hello 完成 = 显式 `PreAuthenticated`；
+    此后除「开始 M4 认证」外，屏幕数据 / 输入能力 / session token / 权限判定 / 特权主机元数据一律拒绝。
+21. M3 单独成里程碑的终态：hello 成功后**干净关闭**，或进入 `AwaitingAuthentication` 并带**短绝对占位 deadline**；
+    M4 落地后由真实认证替换。不许把未认证 socket 无限期挂着等还不存在的 M4 代码。
+
+### 阶段 5 —— 收口
+
+22. 把 triage A 桶每条的"最小测试"落成真实测试（pre-auth inert、快照不可变、pin 字节比较、
+    accept 前准入、deadline、严格解析、终态）。
+23. `dotnet build` + `dotnet test` 全绿，更新 HANDOFF 与 `docs/DECISIONS.md`（若新增 ADR）。
+24. 两机验收（跨机真实 TLS + pinning）：**需要用户参与**，M2 的那套 `scripts/acceptance/` 可复用，
+    但要新增"跨机握手成功 / 指纹不符被拒 / 跨子网被拒"三类用例。
+
+### M3 明确不做
+
+- AuthChallenge / HMAC / 访问密钥认证（M4）；视频通道与 Video Attach（M5）。
+- UI 网络诊断（ADR-024，M9）、防火墙一键（ADR-025，M10）、临时私有地址一键（ADR-026，不早于 M10）。
+- 改动 discovery 缓存语义（ADR-027 规定：M3 不动，最晚 M4 再引入 `IdentityConflict`）。
+
+### 哪些步骤必须本机实测（**不能问模型**）
+
+- 步骤 3、15：握手与取消延迟（本机有 oracle）
+- 步骤 8：多网卡同端口 bind
+- 步骤 24：跨机真实链路
+- **TLS 1.2/1.3 在 Win10 22H2 上的行为本机无法验证**（本机是 Win11 25H2 / 26200）→ 标注未测，别外推
 
 ## 16. 下一位 AI 不要重复做
 
