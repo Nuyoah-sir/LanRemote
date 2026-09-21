@@ -61,9 +61,11 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 `Last code commit`（最后一次代码/测试提交）+ `Working tree at validation`。
 允许 HEAD 比 Last code commit 新（之后会有单独的文档提交）。
 远端 `origin` 已配（GitHub，public）：每轮记账提交后 `git push origin main` 同步。
-**该链路会间歇性抖动**（push 挂到超时，偶见 schannel 握手失败）——**重试即过**（实测 2 次内），
-不要误判为配置/代理问题；配合 `GIT_TERMINAL_PROMPT=0` + 关 GCM 交互
-（`credential.interactive=false`/`guiPrompt=false`）防凭据挂起。
+**两个已实测的坑**：① 链路间歇性抖动（push 挂到超时 / 偶见 schannel 握手失败）→ **重试即过**；
+② **全局 helper 链不可信**：`git-credential-helper-selector` 会重写 `~/.gitconfig`
+（实测把它写成 `<no helper>`；连 `--help` 都会写），且它被当 helper 调用会**挂起等交互**（20 s 超时）。
+→ 本仓库已用 repo 级「空值 + `manager`」屏蔽继承链（链上只剩 GCM），**不要改回**、不要运行那个 selector。
+push 仍带 `GIT_TERMINAL_PROMPT=0` + 关 GCM 交互（`credential.interactive=false`/`guiPrompt=false`）。
 
 ## 1.5 M2.1 — Discovery Final Fix（本轮修复明细）
 
