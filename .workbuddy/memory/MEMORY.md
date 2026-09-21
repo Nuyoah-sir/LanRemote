@@ -42,7 +42,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M0~M1.3 | 完成（`104f296` / `9e75fce`） |
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
-| **M4** | **计划草案已立（HANDOFF §18；6 阶段 21 步）；等开工**——阶段 0 = 衔接盘点（改 `ControlPreAuthSession` vs 新层）；UI 边界（local approval dialog）或需用户对齐 |
+| **M4** | 计划草案已立（HANDOFF §18；6 阶段 21 步）+ **第二轮评审已回收**（triage 在 docs/）——**M3.1 加固先行**（pre-auth 外层信封 8s + 测试补强）；衔接层定 (b)；审批边界评审建议 (b)、**待用户确认**；等开工 |
 | M5~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）。
@@ -57,10 +57,11 @@ M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`
 - **提权**：`ShellExecuteExW("runas")`+`WaitForSingleObject`+取退出码（UAC 拒绝=`ERROR_CANCELLED`1223）；主进程永不提权（ADR-035：窄域 helper + 固定动词 + TOCTOU 重校验）
 - **子进程编码契约**：.NET 10 无 CP936 解码器；PS 5.1 管道 stdout 按控制台代码页编 → 脚本须在 `IsOutputRedirected` 时切 UTF-8，harness 固定 UTF-8 解，见 U+FFFD 记 WARN
 - **M1 存储**：`secrets.bin`=`LRSC`+ver+len+DPAPI(JSON)；设备码=`Base32(SHA256(guid)[..5])`（非秘密）；证书 ECDSA P-256 自签 5 年、KU 只 digitalSignature（ADR-021）；**禁静默自动重签证书**
+- **`HelloTimeout` 未接线（2026-09-21 评审核对）**：服务端从未消费（唯二消费=验收器客户端写超时+日志行）→ post-TLS pre-auth 最坏=前缀5s+payload10s=**15s**（分段绝对≠总量有界）；M3.1 补 `PreAuthEnvelopeTimeout`(8s) 外层信封
 
 ## M3 速查（细节在 HANDOFF.md）
 
-accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 4 KiB；终态 = hello 后干净关闭。五段绝对 deadline 只验了「执行得准」（误差 0–36 ms），**数值待外部评审**。`TransportHost` 零 logger（同子网/准入/TLS 拒绝全静默 → ADR-024/M9）。
+accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 4 KiB；终态 = hello 后干净关闭。五段绝对 deadline 只验了「执行得准」（误差 0–36 ms）；**第二轮评审已回收**（两处缺陷级：外层信封缺失 / transcript 拆分；数值待本机实验后定案，M3.1 先补信封）。`TransportHost` 零 logger（同子网/准入/TLS 拒绝全静默 → ADR-024/M9）。
 验收器：双击=WPF 窗口，`--headless client|host|info|prepare-lab`；退出码 0/1/2/3/4=预期内/真失败/前置不满足/工具错/无效运行；`Combine` 优先级 `InvalidRun>HarnessError>Fail>PreconditionUnmet>Pass`；四场景 `success`→`pin-mismatch`→`timeout`→`slow-dribble`（判据 `sent=3/4`）；两机配对用 4 元组（聚合计数不算证明）；控制端只给 `PENDING-HOST-EVIDENCE`；`gui.log` 只记进程级事实、每轮证据在 per-run 文件；别拿 `LanRemote.App` 验传输层（零调用）。**被控端「停止监听」收尾 → 结局字段必为 `INVALID_RUN`（设计：按停=机械作废，防「按停伪造通过」），判定看逐条证据；`--headless host --seconds N` 定时轮不走该路径（实测 PASS）。**
 
 ## 测试/验收写法硬约束（踩过的坑）

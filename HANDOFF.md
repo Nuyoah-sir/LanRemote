@@ -1,7 +1,7 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 20:28 (+08:00)**
+> 更新时间：**2026-09-21 20:55 (+08:00)**
 >
 > 本轮（M3 第 24 步 · 续「一键准备本机」）**动了代码**：全部在
 > `tools/LanRemote.Acceptance/`（验收器）与 `scripts/acceptance/set-lab-ip.ps1` 里，
@@ -13,6 +13,10 @@
 > 起因：用户第三次指出「这程序不是可以管理员模式打开吗，怎么还要求手动跑脚本」——
 > 核对后确认验收器**当时确实没有**配置能力（是功能没做，不是权限问题），
 > 于是按用户裁定「等一键做好再用」补齐。
+>
+> **2026-09-21 晚补记**：第二轮外部评审已回收并按纪律分流
+> （`docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`；两处缺陷级发现：transcript 拆分、pre-auth 外层信封）。
+> 计划修订见 §18.4。补记轮**未动代码**。
 
 ---
 
@@ -1707,6 +1711,13 @@ Private（B 机为 `already Private`）。类别还原逻辑自 v3 起存在（�
 23. **不要在验收器里用 UI 线程做测量**：`MainWindow` 的点击处理器是 `async void`，
     而 `ClientRole` 没有 `ConfigureAwait(false)`——续体会被投回 UI 线程，
     日志区滚动/排版时会延迟执行，正好打在靠时间判定的场景上。headless 一律走 `Task.Run`。
+24. **不要把「prompt 里怎么描述」当成「代码里怎么实现」**（2026-09-21）：第二轮评审材料把
+    `HelloTimeout`（**已声明、未接线**）写成了「五段之一」，评审据此做了正确的加法推演、得出错误的
+    「~20 s」结论；服务端实际最坏 = 前缀 5 s + payload 10 s = **15 s**。写「已建成系统」类材料前，
+    每一条都要能指到代码/测试证据（该评审另有两处真发现，见 §18.4）。
+25. **分段绝对时限不蕴含「总量有界」**（2026-09-21）：`FrameReader.ReadFrameAsync` 两段各自绝对
+    （防滑动窗口），但**顺序执行即可加和**（5 s + 10 s = 15 s）；8 个准入槽循环占用依旧成立。
+    凡「多段顺序等待」的场景必须显式外层信封 + 专项测试——M3.1 落地 `PreAuthEnvelopeTimeout`（§18.4）。
 
 ## 18. 下一步 —— M4（Access Key Challenge Auth）· 计划草案
 
@@ -1749,8 +1760,10 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 3. ADR-027 `IdentityConflict` 定案（`DiscoveryDeviceCache` 冲突字段与丢弃策略）。
 4. 第二轮外部评审输入准备（M3 实现红队 + 错误消息分类 + 五个 deadline 数值；
    prompt 参照 `docs/M3_EXTERNAL_REVIEW_PROMPT.md` 模式）。**发布 / 回收需用户通道。**
-   - **2026-09-21 已备好**：`docs/M3_IMPLEMENTATION_REVIEW_PROMPT.md`（待转发）。Prompt A = M3 实现红队
+   - **2026-09-21 已备好**：`docs/M3_IMPLEMENTATION_REVIEW_PROMPT.md`（已转发）。Prompt A = M3 实现红队
      （五段 deadline 数值 / 失败消息分类学 / 实现层遗漏）；Prompt B = M4 阶段 0 决策输入（衔接层 + 本地审批边界）。
+   - **2026-09-21 晚已回收**：评审返回 → 分流 `docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`
+     （两处缺陷级发现：transcript 拆分 / pre-auth 外层信封）。修订落 §18.4。
 
 **阶段 1 —— transcript + HMAC proof（纯函数核心）**
 
@@ -1800,7 +1813,50 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 
 ### 18.3 未决点（阶段 0 / 用户对齐）
 
-- 衔接层位置：改 `ControlPreAuthSession` vs 新 `ControlAuthSession`。
-- `local approval dialog` 的 M4 边界：App 目前与 Transport **零接线**（§1 已注），
-  最小可测形态可能是「抽象 + 测试替身」，真 UI 挂接待定——**若涉及产品形态，先与用户对齐**。
-- 第二轮外部评审的时机：与 M4 实施并行 vs 先行。
+- 衔接层位置：**已定 (b)**——显式交接（`ControlPreAuthSession → ControlAuthSession`），
+  评审与本机基线一致；增强件（线性所有权对象、exactly-once、测试改写）见 §18.4。
+- `local approval dialog` 的 M4 边界：**评审建议 (b)「抽象 + 验收器最小审批面」推翻了本机此前 (a) 倾向**；
+  本机采纳评审论证；**最终拍板留给用户（M4 开工前确认）**。产品 WPF UI 仍不动。
+- 第二轮外部评审的时机：**已回收**（2026-09-21，先行完成，见 §18.4）。
+
+### 18.4 第二轮外部评审结论 → 计划修订（2026-09-21 回收）
+
+分流全文：`docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`（含 3+2 处「评审前提 ≠ 代码事实」的逐条核对）。
+计划层面的净修订如下。
+
+**A. 先做：M3.1 加固（M4 之前；少量代码 + 测试补强）**
+
+- `PreAuthEnvelopeTimeout`（初值 **8s**，provisional）：pre-auth **外层信封**——自会话进入起算、
+  永不重置，覆盖前缀 + payload + 解析 + 收尾；修复「分段绝对 ≠ 总量有界（5+10=15 s 可加和）」。
+  测试=吃满前缀再拖 payload，必须在信封到点被切（缩放值）。
+- `HelloTimeout` 语义收拾：它**从未被服务端接线**（唯一消费=验收器客户端写超时 + 日志行）——
+  文档改为写预算，不再暗示独立顺序段（§17 教训 #24）。
+- 测试补强：跨 listener 共享限额（B15）；真实 TLS 粘包（B16）；字节边界取消矩阵（B19）；
+  准入释放矩阵补路径（B20）；`StopAllAsync` 未完成计数 + false 路径测试（B18）。
+- **不重开** M3 两机验收（信封用本机真实 TLS 集成测试证明）；如再跑验收：物料需重打（src 有改动）。
+
+**B. M4 计划修订（阶段 0 落实为 ADR-027 修订）**
+
+- **transcript 拆两个**：`ClientAuthTranscript`（绑 requestedPermission）与 `ServerGrantTranscript`
+  （域分隔 + H(客户端 transcript) + grantedPermission）；`serverProof` 绑后者——修复「双 proof 同 transcript
+  无法绑定尚未决定的 granted」（评审最重要的设计发现）。规格内部冲突「`server|` vs `server\0`」以 04 为准。
+- 衔接：**(b) 显式交接**；线性所有权对象（live stream + 冻结安全上下文 + connectionId + 生命周期），
+  exactly-once；门禁改为「`PreAuthenticated` 只允许一次 `BeginAuthentication` 转移」；
+  旧空集合测试**有意识改写**而非删除。
+- dispatch 显式门禁 `state == Authenticated && granted >= required`（空集合仅 defense-in-depth）。
+- 限流：只计「到达密码学校验且失败」；聚合遥测（A8）；审批拒绝/超时**不**计（D2/D3 裁定）。
+- 审批：**v1 每个新控制连接都要批**（不做运行期记住）；`PendingApproval` 独立配额（初值全局 3 / 源 1）；
+  显示最小集 + 短关联码；请求不可变、原子终态、断连不发 token；UI 不可用 fail closed。
+- 时限初值（provisional）：机器认证 **10s** / 人类审批 **60s**（获批面受理起算）。
+- `ConnectionSecurityContext` 冻结传递（含本连接实际证书指纹）；`certSha256` 从该上下文派生。
+
+**C. 数值实验（评审 D1；全部 [NEEDS LOCAL EXPERIMENT]，先不动数值）**
+
+- ① 冷启动 + 忙 CPU（TLS 5s）；② 受控首 SYN 丢失（connect 3↔5s）；③ Wi-Fi 抖动（如适用）；
+  ④ 8 并发握手资源（顺带核 global=8）。完成后一次定案（五段 + 信封）并进 ADR。
+- **丢包实验涉及环境改动——走用户通道，不静默动网。**
+
+**D. 待用户拍板（M4 开工前）**
+
+- 审批机制边界：评审建议 (b)（验收器加最小审批面）vs 本机此前 (a)（纯抽象 + 替身）——
+  本机已采纳 (b) 论证，最终由用户确认（见 §18.3）。

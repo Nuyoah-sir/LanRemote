@@ -6,7 +6,8 @@
 > **Prompt B** = M4 衔接层（`ControlPreAuthSession` 续跑 vs 新 `ControlAuthSession`）+ 本地审批机制边界。
 > 立场：只问「我漏了什么 / 哪个决定是错的」，**不问**「Windows/.NET 实际行为是什么」——
 > 后者本机实测可定案（项目硬规矩：模型回忆不得作为 HANDOFF 结论）。
-> 状态：**待转发**（A、B 可一起转发；只发 A 也可以）。
+> 状态：**已转发、已回收（2026-09-21）**——分流见
+> `docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`（两处缺陷级发现已采纳：transcript 拆分 / pre-auth 外层信封）。
 > 前置事实：M3 已完工——574 自动化测试全绿 + 两机验收 PASS（2026-09-21）。
 > 第一轮设计评审（M3 开工前）见 `docs/M3_REVIEW_TRIAGE.md`（已回收）；验收器 UI 评审与首启 UX 评审
 > 各自已回收（`M3_ACCEPTANCE_UI_REVIEW_TRIAGE.md` / `UX_FIRST_RUN_REVIEW_TRIAGE.md`），均不在本文范围。
