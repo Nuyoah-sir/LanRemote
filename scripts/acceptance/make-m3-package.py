@@ -13,22 +13,32 @@ WHY THIS IS A SEPARATE SCRIPT FROM make-package.py
     ControlPreAuthSession. Running it on two machines would only re-prove that
     discovery still works.
 
-    This script publishes tools/LanRemote.Acceptance instead, which is the CLI
+    This script publishes tools/LanRemote.Acceptance instead, which is the GUI
     that actually exercises TLS + pinning + channel_hello.
 
 The zip contains the published self-contained output plus:
-    START.cmd           - double-click entry point (ASCII only, see below)
     START-HERE.md       - the M3 two-machine acceptance manual (Chinese)
-    run-acceptance.ps1  - interactive driver: self-check -> pick role -> run
     set-lab-ip.ps1      - put both machines on a private 192.168.1.0/24 lab net
 
-WHY START.cmd EXISTS
-    The acceptance tool is a CONSOLE app, so double-clicking
-    LanRemote.Acceptance.exe prints usage and exits immediately - it looks like
-    "there is no exe in here". START.cmd hands over to the PowerShell driver and
-    pauses afterwards. It is ASCII-only on purpose: cmd.exe mis-decodes Chinese
-    bytes in .cmd files ("is not recognized as an internal or external
-    command"), so every Chinese string lives in run-acceptance.ps1 instead.
+THE ENTRY POINT IS AN EXE, NOT A SCRIPT
+    LanRemote.Acceptance is a WinExe + WPF app: double-clicking
+    LanRemote.Acceptance.exe opens a window, and the two-machine acceptance is
+    driven entirely from that window. There is deliberately no START.cmd and no
+    run-acceptance.ps1 any more.
+
+    An earlier revision of this script shipped a console exe plus a .cmd/.ps1
+    pair. That was wrong for this project and was removed, because:
+      * M2's two-machine acceptance was run from the WPF UIs on both machines
+        (HANDOFF 9.1: "用户在 B 机界面确认", "B 点刷新");
+      * the product-form principle recorded in HANDOFF 13 / ADR-024/025/026 is
+        "终端用户永远不需要打开 PowerShell";
+      * a console exe double-clicked with no arguments prints usage and exits,
+        so the user sees a flash and concludes "there is no exe in the package".
+    Lesson: don't ship a console tool for a step the project intends to be
+    driven from a window.
+
+set-lab-ip.ps1 stays a script on purpose: it needs elevation and it touches the
+machine's network configuration, which must never happen silently.
 """
 
 import os
@@ -43,7 +53,7 @@ PUBLISH_DIR = os.path.join(REPO_ROOT, "artifacts", "m3-acceptance")
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "acceptance")
 DOC_SOURCE = os.path.join(REPO_ROOT, "docs", "M3_TWO_MACHINE_ACCEPTANCE.md")
 
-HELPERS = ("START.cmd", "run-acceptance.ps1", "set-lab-ip.ps1")
+HELPERS = ("set-lab-ip.ps1",)
 
 
 def read_version() -> str:
@@ -114,7 +124,8 @@ def main() -> None:
 
     # PowerShell 5.1 decodes .ps1 as ANSI unless a BOM says otherwise, which
     # garbles every Chinese character in the console output.
-    # .cmd is deliberately EXCLUDED: it must stay ASCII for cmd.exe.
+    # (No .cmd ships any more - and if one ever does, it must stay pure ASCII:
+    # cmd.exe decodes it with the console code page.)
     for name in HELPERS:
         if not name.lower().endswith(".ps1"):
             continue

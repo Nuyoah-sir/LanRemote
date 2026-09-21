@@ -9,13 +9,13 @@
 
 ## 0. 先说清楚：这个包里是什么，不是什么
 
-这个包**不是** LanRemote 客户端。它装的是 `LanRemote.Acceptance.exe`，一个命令行验收器。
+这个包**不是** LanRemote 客户端。它装的是 `LanRemote.Acceptance.exe`，一个验收器。
 
 原因是：`LanRemote.App`（WPF 客户端）目前只是**引用**了 `LanRemote.Transport`，
 **一行都没有调用**。在两个机器上跑 App，只能证明 M2 的 discovery 还能用，
 碰不到 M3 新写的 TLS / pinning / `channel_hello` 的任何一行代码。
 
-所以 M3 的验收必须通过这个 CLI 来做。它能真实地：
+所以 M3 的验收必须通过这个验收器来做。它能真实地：
 
 - 在合格网卡上 listen，走 `accept → 同子网校验 → 准入限额 → TLS` 这条真链路；
 - 用自签名 ECDSA P-256 证书做 TLS，靠 **证书指纹 pinning**（不是 CA 校验）认对端；
@@ -26,40 +26,33 @@
 
 ---
 
-## 0.1 怎么启动 —— 双击 `START.cmd`，不要双击 exe
+## 0.1 怎么启动 —— 双击 `LanRemote.Acceptance.exe`，就这样
 
-解压后目录里有 200 多个文件，唯一该用的程序叫 **`LanRemote.Acceptance.exe`**。
-**不要直接双击它**：它是控制台程序，不带参数时只会打印用法然后立刻退出，
-窗口一闪而过，看起来就像"包里没有 exe"。
-
-正确入口是 **`START.cmd`**：
+**双击 `LanRemote.Acceptance.exe`，会出现一个窗口。** 没有脚本，没有命令行，
+不用开 PowerShell。
 
 ```
-START.cmd          <-- 双击这个
-START-HERE.md      本手册
-run-acceptance.ps1 交互式驱动（START.cmd 就是调用它）
-set-lab-ip.ps1     配 lab 网段（需管理员）
-LanRemote.Acceptance.exe   真正的程序，但请通过 START.cmd 用
+LanRemote.Acceptance.exe   <-- 双击这个，其余全在窗口里点
+START-HERE.md              本手册
+set-lab-ip.ps1             配 lab 网段（唯一还需要管理员的步骤）
 ...其余 200+ 个是 .NET 自包含运行时的 dll
 ```
 
-双击 `START.cmd` 之后会：
+窗口从上到下四块：
 
-1. 先跑 `info` 环境自检（不合格就直接中止并告诉你原因）；
-2. 问你**这台机器是被控端还是控制端**（输 `1` 或 `2`）；
-3. 被控端 → 直接起监听；控制端 → 再问你对端的设备码，然后跑完三个场景；
-4. 跑完**窗口不关**（`START.cmd` 末尾有 `pause`），方便你把输出整段拷出来。
+| 区域 | 作用 |
+| --- | --- |
+| **本机身份与网络** | 自动检测。显示设备码、证书指纹、监听地址、以及"能不能参与两机验收" |
+| **这台机器的角色** | 两台按钮组：`本机作为被控端（开始监听）` / `本机作为控制端（跑三个场景）` |
+| **日志** | 全部证据。**整段拷走** |
+| **底部** | `复制全部日志` / `清空日志` / `打开日志目录` |
 
-想跳过交互也可以：
+打开时自动跑一次环境自检（等价于旧版的 `info`）。如果本机没有合格网卡，
+"状态"那一行会变红并直接告诉你该跑哪条命令，两个角色按钮会被**禁用**——
+所以不会出现"点了没反应、不知道为什么"的情况。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role host
-powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role client -PeerDeviceCode XXXX-XXXX
-```
-
-> `START.cmd` 里**只有 ASCII 字符**，这是有意的：cmd.exe 用控制台代码页解析 `.cmd`，
-> 中文字符（连注释里的也算）会被解错并报"不是内部或外部命令"。所有中文都放在
-> `run-acceptance.ps1`（UTF-8 with BOM）里。
+> 日志同时落盘在 `%TEMP%\lanremote-m3-acceptance\gui.log`，
+> 关窗口也不丢。`复制全部日志` 会整段进剪贴板。
 
 ---
 
@@ -68,8 +61,8 @@ powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role client -Peer
 | # | 条件 | 怎么确认 |
 | --- | --- | --- |
 | 1 | 两台 Windows 机器，接在同一个交换机 / 同一根线上 | `ipconfig` 能看到同一段地址 |
-| 2 | **两台机器都必须在 RFC1918 私有网段**（`10/8`、`172.16–172.31`、`192.168/16`） | 跑 `info`，看 `bindings` 不是 `(无)` |
-| 3 | 管理员 PowerShell（只有配 IP 那一步需要） | 标题栏带"管理员" |
+| 2 | **两台机器都必须在 RFC1918 私有网段**（`10/8`、`172.16–172.31`、`192.168/16`） | 窗口里"监听地址"不是 `(无合格 RFC1918 网卡)` |
+| 3 | 管理员 PowerShell（**只有配 IP 那一步需要**，验收本身不需要） | 标题栏带"管理员" |
 | 4 | 入站 UDP 45872 放行 | `set-lab-ip.ps1` 会顺手建规则 |
 
 ### 1.1 为什么第 2 条最容易踩
@@ -79,21 +72,24 @@ LanRemote **故意**只认 RFC1918。你这两台实机在 `172.100.166.x` 上�
 所以不做任何配置的话，LanRemote 会正确地拒绝它们，设备列表是空的——
 这是**对的**，不是 bug。（判定私有必须按数值区间，不能拿 `172.` 当前缀匹配。）
 
-`info` 会把这件事直说：
+窗口会直说这件事：
 
 ```
-[INFO][RESULT] outcome=FAIL reason=no-qualified-rfc1918-nic
+[INFO][RESULT] outcome=FAIL reason=no-qualified-rfc1918-nic // 先用 set-lab-ip.ps1 配置 lab 网段
 ```
 
 ### 1.2 配 lab 网段（每台机器跑一次，角色不同）
 
+这是**唯一**需要终端的步骤，因为它要 UAC 提权、要改本机网络配置——
+按项目约定这类动作**绝不能静默执行**，必须由你显式触发。
+
 在**管理员** PowerShell 里，把 zip 解压后的目录当成当前目录：
 
 ```powershell
-# 机器 A（控制端，待会儿跑 client）
+# 机器 A（控制端，待会儿在窗口里点"控制端"）
 powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Role A
 
-# 机器 B（被控端，待会儿跑 host）
+# 机器 B（被控端，待会儿在窗口里点"被控端"）
 powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Role B
 ```
 
@@ -102,88 +98,61 @@ powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Role B
 
 > 这个脚本为什么是"先整口切静态再追加"？因为 Windows 一张网卡**只能二选一**：
 > DHCP 或静态，不能共存。直接给 DHCP 接口追加地址会把接口翻成 `Dhcp=Disabled`
-> 并把租约丢掉——这台机器已经因此断网两次了。脚本 v2 的作法是先把当前这一套
+> 并把租约丢掉——这台机器已经因此断网两次了。脚本的作法是先把当前这一套
 > IP/掩码/网关/DNS 原样切成静态（不断网），再追加第二个地址（不带网关）。
 
-**撤销**（验收完就撤）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Undo
-```
+配完后**重开一次窗口程序**（或点一下窗口重新触发自检），
+"状态"应该变成绿色的 **可以参与两机验收**，两个角色按钮解禁。
 
 ---
 
 ## 2. 验收流程
 
-### 第 1 步：两台机器各自自检
+### 第 1 步：两台机器各自看窗口
 
-```powershell
-.\LanRemote.Acceptance.exe info
-```
+双击 `LanRemote.Acceptance.exe`，确认：
 
-**通过标准**：最后一行是
+- 状态 = `可以参与两机验收`（绿色）；
+- 记下 `设备码`（形如 `M5WC-14GX`）——**它不是秘密**，可以贴在聊天里；
+- 记下 `证书指纹`（64 位十六进制）——这是要被 pin 的那个值。
 
-```
-[INFO][RESULT] outcome=PASS // 本机可以参与两机验收
-```
+### 第 2 步：机器 B 起被控端
 
-记下每台机器的 `deviceCode`（形如 `M5WC-14GX`）和 `certSha256`。
-`deviceCode` **不是秘密**，可以贴在聊天里；`certSha256` 是要被 pin 的那个指纹。
+在 B 的窗口里点 **`本机作为被控端（开始监听）`**。
 
-### 第 2 步：在机器 B 起被控端
-
-双击 `START.cmd`，输 `1`（HOST）。它会打印 `deviceCode`、监听地址，然后等 10 分钟。
+日志会打印设备码、监听地址，然后**一直等下去**，直到你点 `停止监听`。
 **这个窗口不要关。**
 
-等价的命令行写法：
+### 第 3 步：机器 A 跑三个场景
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role host
-# 或直接用程序：
-.\LanRemote.Acceptance.exe host --seconds 600
-```
+在 A 的窗口里：
 
-### 第 3 步：在机器 A 跑三个场景
+1. 在 `对端设备码` 里填 **机器 B 的设备码**（形如 `M5WC-14GX`）；
+2. 点 **`本机作为控制端（跑三个场景）`**。
 
-双击 `START.cmd`，输 `2`（CLIENT），再输入机器 B 的 `deviceCode`（形如 `M5WC-14GX`）。
+它会依次跑 `success` → `pin-mismatch` → `timeout`，
+每个场景单独一段日志，最后弹一个框告诉你 `x/3 个符合预期`，
+并在日志末尾写一行汇总。
 
-它依次跑 `info` → `success` → `pin-mismatch` → `timeout`，
-每个场景的完整输出存到 `%TEMP%\lanremote-m3-acceptance\client-<场景>.txt`，
-最后打一张汇总表并给出总判定。
-
-非交互写法（把 `XXXX-XXXX` 换成机器 B 的 `deviceCode`）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role client -PeerDeviceCode XXXX-XXXX
-```
-
-也可以手工一个个跑：
-
-```powershell
-.\LanRemote.Acceptance.exe client --scenario success      --device-code XXXX-XXXX
-.\LanRemote.Acceptance.exe client --scenario pin-mismatch --device-code XXXX-XXXX
-.\LanRemote.Acceptance.exe client --scenario timeout      --device-code XXXX-XXXX
-```
+> 中途想停就点 `中止`。
 
 ### 第 4 步：收尾
 
-- 机器 B 上 Ctrl+C 结束 `host`（或等它自己到点），把**整段控制台输出**存下来；
+- 机器 B 上点 `停止监听`，它的日志会打印最后那一行汇总（见 §4）；
+- 两台各自点 `复制全部日志`，贴回给我；
 - 两台机器各跑一次 `set-lab-ip.ps1 -Undo`。
 
 ---
 
-## 3. 四个场景与判定标准
+## 3. 三个必做场景与判定标准
 
 退出码含义：`0` = 符合预期，`1` = **不符合预期（真失败）**，`2` = 前置条件不满足（环境没配好）。
+窗口里会把它翻译成人话：`符合预期` / `不符合预期` / `前置条件不满足`。
 
 > `2` 和 `1` 必须分清。`2` 是"没测成"，不是"测出来不合格"。
-> 看到 `2` 先去解决环境问题，不要当成 M3 的缺陷。
+> 看到"前置条件不满足"先去解决环境问题，不要当成 M3 的缺陷。
 
 ### 场景 1：success（必做）
-
-```powershell
-.\LanRemote.Acceptance.exe client --scenario success --device-code XXXX-XXXX
-```
 
 证明：真机上 TLS 1.2/1.3 握手成功、证书指纹 pinning 通过、
 `channel_hello` 被严格解析接受、服务端干净关闭。
@@ -209,10 +178,6 @@ powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role client -Peer
 
 ### 场景 2：pin-mismatch（必做）
 
-```powershell
-.\LanRemote.Acceptance.exe client --scenario pin-mismatch --device-code XXXX-XXXX
-```
-
 证明：指纹不符时握手必须失败，且**失败前不会有任何应用数据被接受**。
 工具会把期望指纹换成一个合法但不同的 64 位十六进制串。
 
@@ -226,17 +191,13 @@ powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role client -Peer
 ```
 
 **注意 `tcpProbe = open` 这一行不能少。** 如果它是 `unreachable`，
-工具会返回退出码 `2` 并拒绝判定——因为端口都没开的话，握手失败什么都证明不了
+工具会判定"前置条件不满足"并拒绝给 PASS——因为端口都没开的话，握手失败什么都证明不了
 （可能是 host 没启动、防火墙拦了），那样报 PASS 是假通过。
 
 机器 B 这边**不会打印任何 per-connection 的行**，这是预期的：
-TLS 握手死在 `TransportHost` 内部，会话处理器根本没被调用（见 §5）。
+TLS 握手死在 `TransportHost` 内部，会话处理器根本没被调用（见 §5.1）。
 
 ### 场景 3：timeout（必做）
-
-```powershell
-.\LanRemote.Acceptance.exe client --scenario timeout --device-code XXXX-XXXX
-```
 
 证明：连上 TLS 却一直不发 hello 的对端，会被**绝对时限**切断。
 
@@ -261,17 +222,13 @@ host 端的时限设置：连接 3s / 握手 5s / 长度前缀 5s / 载荷 10s /
 > 否则对端只要每 `时限-ε` 秒发一个字节就能永远挂着。这一点在步骤 15 已经用
 > 真实 SslStream 实测过（滴流式发送仍在绝对时限上被切）。
 
-### 场景 4：cross-subnet（**本次不跑**，见下）
-
-```powershell
-.\LanRemote.Acceptance.exe client --scenario cross-subnet --address <ip> --pin <64hex>
-```
+### 场景 4：cross-subnet（**本次不跑**，见 §5.2）
 
 ---
 
 ## 4. host 结束时那一行汇总
 
-`host` 退出前会打印：
+被控端点 `停止监听` 后会打印：
 
 ```
 [HOST] accepted=2 preAuthenticated=1 rejected=1 cleanStop=True
@@ -292,7 +249,7 @@ host 端的时限设置：连接 3s / 握手 5s / 长度前缀 5s / 载荷 10s /
 ### 5.1 `TransportHost` 目前完全没有 logger
 
 同子网校验失败、准入限额拒绝、TLS 握手失败，这三条都是**静默 `return`**，
-控制台一行都不会有。所以场景 2 在被控端是"看不见"的，
+一行日志都不会有。所以场景 2 在被控端是"看不见"的，
 判定完全依赖控制端的输出。
 
 这在 M9 会被 ADR-024（网络诊断进 UI）正面解决；在那之前，
@@ -326,12 +283,15 @@ B 只留 `192.168.1.20`，并且中间有路由能通），我再把场景 4 加
 
 ## 6. 请把这些贴回来
 
-判定 M3 是否通过需要下面四段，缺一段我就只能写"未运行"：
+判定 M3 是否通过需要下面几段，缺一段我就只能写"未运行"：
 
-1. 两台机器的 `info` 输出（确认都 `PASS`，并给出各自 `deviceCode` / `certSha256`）；
-2. 机器 B 的 `host` **完整**控制台输出（含最后的汇总行）；
-3. 机器 A 的 `run-acceptance.ps1` 输出（含汇总表）；
-4. `%TEMP%\lanremote-m3-acceptance\` 下的三个 `client-*.txt`（失败时尤其需要）。
+1. **两台机器**窗口顶部那块身份面板的截图或抄写（确认状态是绿色，并给出各自设备码 / 证书指纹）；
+2. 机器 B 的**完整**日志（含最后那行 `[HOST] accepted=…` 汇总）；
+3. 机器 A 的**完整**日志（含末尾 `===== 控制端汇总：x/3 …`）；
+4. 如果哪个场景不符合预期，把那一整段原样贴我，不要只贴最后一行。
+
+> 每台机器的日志也会落在 `%TEMP%\lanremote-m3-acceptance\gui.log`，
+> 关窗口也在，`打开日志目录` 一键可达。
 
 ---
 
@@ -339,12 +299,14 @@ B 只留 `192.168.1.20`，并且中间有路由能通），我再把场景 4 加
 
 | 现象 | 原因 |
 | --- | --- |
-| `reason=no-qualified-rfc1918-nic` | 没跑 `set-lab-ip.ps1`，或跑完没生效；`ipconfig` 复核 |
-| `reason=peer-not-found deviceCode=…` | A 没发现 B。查 UDP 45872 入站规则、两台是否同一广播域、B 的 `host` 是否还活着 |
-| `reason=peer-port-unreachable` | B 的 TCP 45873 连不上。`host` 没起？防火墙拦了？地址写错？ |
-| `reason=missing --device-code` | 命令行少参数 |
-| `success` 却报 `outcome=FAIL` | 真的不合格，把 `client-success.txt` 整段发我 |
-| `host` 打印 `bind 失败 <地址>: …` | 该地址已被占用；其它地址不受影响（ADR-031 按网卡降级） |
+| 状态红字 `no-qualified-rfc1918-nic` | 没跑 `set-lab-ip.ps1`，或跑完没生效；`ipconfig` 复核 |
+| 两个角色按钮是灰的 | 同上——这是**故意的**，防止点了没反应 |
+| `reason=peer-not-found deviceCode=…` | A 没发现 B。查 UDP 45872 入站规则、两台是否同一广播域、B 的窗口还在不在监听 |
+| `reason=peer-port-unreachable` | B 的 TCP 45873 连不上。被控端没点开始？防火墙拦了？设备码填错？ |
+| `缺少对端设备码` 弹框 | 控制端没填设备码，或填的不是 9 个字符（`XXXX-XXXX`） |
+| `success` 却报 `outcome=FAIL` | 真的不合格，把那一整段贴我 |
+| `bind 失败 <地址>: …` | 该地址已被占用；其它地址不受影响（ADR-031 按网卡降级） |
+| 窗口根本打不开 | 极少见。看 `%TEMP%\lanremote-m3-acceptance\crash.log`，整段贴我 |
 
 ---
 

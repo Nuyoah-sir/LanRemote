@@ -2,218 +2,197 @@
 
 ## 项目定位
 
-Windows 局域网屏幕共享与远程控制工具（自用）。**无账号、无云服务器、无公网穿透、无 UPnP/中继**。
-默认只允许同一 IPv4 子网的 RFC1918 设备发现与连接，且必须通过访问密钥挑战认证。
+Windows 局域网屏幕共享 / 远程控制（自用）。**无账号、无云、无穿透、无 UPnP/中继**。
+只允许同 IPv4 子网的 RFC1918 设备发现与连接，且必须通过访问密钥挑战认证。
 
-规格合同位于 `LanRemote_Implementation_Package/`，**当前真实进度以仓库根目录 `HANDOFF.md` 为准**。
+规格合同 `LanRemote_Implementation_Package/`（ADR 原始快照 9 条，不回写）；
+**当前真实进度一律以仓库根 `HANDOFF.md` 为准**；ADR 工作副本 `docs/DECISIONS.md`（010~033）。
 
-## 技术栈与约束（不可动摇）
+## 不可动摇的约束
 
-- C# / .NET 10 LTS / WPF / x64；Nullable + ImplicitUsings
-- TFM：`net10.0`（Core/Discovery/Transport/Sessions）与 `net10.0-windows`（App/Security/Capture/Input）
-  —— **不要**改成 `net10.0-windows10.0.19041.0`，本机没装 Windows 10 SDK（ADR-010）
-- UDP 发现端口 45872；TLS/TCP 45873；Control 与 Video 是**两条独立 TLS/TCP**（ADR-003，勿合并）
-- 访问密钥必须 128-bit `RandomNumberGenerator`，禁止 `Random`、**禁止 6 位弱密码**
-- 认证是 HMAC-SHA256 挑战，**明文 key 绝不上网**，且必须验证 serverProof——细节见规格第 9 节
-- 视频管线：bounded queue（容量 1~2）+ DropOldest，**严禁无界队列**；实时性 > 完整性
-- 输入注入必须过服务端权限闸门（session 已认证 ∧ permission==Control ∧ Host.AllowControl ∧ 本机审批 ∧ active）
-- 以下安全机制任何时候都不得删除或弱化：同子网校验、RFC1918 私网限制、TLS、证书指纹 pinning、
-  HMAC 访问密钥挑战、DPAPI 秘密存储、视频 attach token、ViewOnly/Control 权限隔离、本机审批、被控提示、紧急停止
-
-## 密码学白名单
-
-只允许：TLS、SHA-256、HMAC-SHA256、`RandomNumberGenerator`、
-`CryptographicOperations.FixedTimeEquals`、Windows DPAPI、.NET 自带 X509/SslStream。
-禁止自研算法、XOR 混淆、Base64 当加密、`Random()` 生成密码、MD5/SHA1 做认证。
-
-## 出验收包（两机验收用）
-
-```bash
-source scripts/env.sh
-dotnet publish src/LanRemote.App/LanRemote.App.csproj -c Release -r win-x64 \
-  --self-contained true -o artifacts/m2.1-acceptance
-python scripts/acceptance/make-package.py     # → LanRemote-<ver>-win-x64.zip
-```
-自包含包约 61 MiB / 444 条目，目标机无需装 runtime。手册 `docs/TWO_MACHINE_ACCEPTANCE.md`。
-两个 `.ps1` 必须是 **UTF-8 with BOM**（PS 5.1 否则中文乱码），用 `scripts/acceptance/add-bom.py` 加。
+- C# / .NET 10 LTS / WPF / x64；TFM `net10.0`（Core/Discovery/Transport/Sessions）与
+  `net10.0-windows`（App/Security/Capture/Input）。**不要**改成 `...windows10.0.19041.0`（没装 Win10 SDK，ADR-010）
+- UDP 45872 发现；TCP 45873 控制；Control 与 Video 是**两条独立 TLS**（ADR-003，勿合并）
+- 访问密钥必须 128-bit `RandomNumberGenerator`；禁止 `Random`、**禁止 6 位弱密码**
+- 认证是 HMAC-SHA256 挑战，**明文 key 绝不上网**，必须验证 serverProof（规格第 9 节）
+- 视频管线：bounded queue（1~2）+ DropOldest，**严禁无界队列**；实时性 > 完整性
+- 任何时候不得删除或弱化：同子网校验、RFC1918 限制、TLS、指纹 pinning、HMAC 挑战、
+  DPAPI 存储、视频 attach token、ViewOnly/Control 隔离、本机审批、被控提示、紧急停止
+- 密码学白名单：TLS、SHA-256、HMAC-SHA256、`RandomNumberGenerator`、
+  `FixedTimeEquals`、DPAPI、.NET 自带 X509/SslStream。禁自研算法 / XOR / Base64 当加密 / MD5-SHA1 做认证
 
 ## 常用命令
 
 ```bash
-source scripts/env.sh           # 加载用户级 .NET SDK（必须，dotnet 不在 PATH）
+source scripts/env.sh           # 必须：dotnet 装在用户级 ~/.dotnet，不在 PATH
 dotnet build LanRemote.sln -c Debug
-dotnet test LanRemote.sln -c Debug --no-build
+dotnet test  LanRemote.sln -c Debug --no-build
 ```
+
+出包：`scripts/acceptance/make-package.py`（App，M2 用）、
+`make-m3-package.py`（验收器，M3 用；`LANREMOTE_M3_SKIP_PUBLISH=1` 只重打不 publish、
+`LANREMOTE_M3_CLEAN=1` 才先清目录——默认不清，一次性删 200+ 文件会触发批量删除保护）。
+`.ps1` 必须 **UTF-8 with BOM**（PS 5.1 否则中文乱码）→ `add-bom.py`；
+**`.cmd` 必须纯 ASCII 且不加 BOM**（cmd.exe 按控制台代码页解析，中文连注释都会解错报
+「不是内部或外部命令」），所以所有中文文案放 ps1 里。
+
+**控制台程序必须有双击入口**：自包含包里 exe 混在 200+ dll 中，且双击不带参数只会
+打 usage 后退出、窗口一闪而过，用户会认为「没有 exe」。做法是加 `START.cmd`
+（切自身目录 → 调 ps1 → 末尾 `pause`）。M3 验收包入口 = `START.cmd`，
+程序本体是 `LanRemote.Acceptance.exe`。
 
 ## 用户协作偏好
 
-- 中文；要结构化输出（表格、清单、API/字段说明）
-- 结论先行，先给边界和证据，不接受「大概可能」
-- 严禁伪代码、写死的假实现、伪造构建/测试结论（没跑过就写「未运行」）
-- 改动最小化；每个里程碑必须 build + test + 更新 `HANDOFF.md` 后才能进入下一阶段
+中文；结构化输出（表格 / 清单 / 字段说明）；结论先行，先给边界和证据，不接受「大概可能」；
+严禁伪代码、写死的假实现、**伪造构建/测试结论**（没跑过就写「未运行」）；
+改动最小化；每个里程碑必须 build + test + 更新 `HANDOFF.md` 才能进入下一阶段。
+
+HANDOFF 记账用 `Last code commit` + `Working tree at validation`，**不写 HEAD hash**。
 
 ## 里程碑进度
 
-M0 仓库骨架 —— **已完成**（build PASS / 87 tests PASS）
-M1 设备身份与安全存储 —— **已完成**（build PASS / 175 tests PASS）
-M1.1 Security Hardening —— **已完成**（build PASS / 189 tests PASS，git 基线 `664e558`）
-M1.2 M1 Final Cleanup —— **已完成**（build PASS / 197 tests PASS，Last code commit `104f296`）
-M1.3 ECDSA Certificate KeyUsage Fix —— **已完成**（build PASS / 200 tests PASS，Last code commit `9e75fce`）
-M2 网卡筛选 + UDP 发现 —— **已完成**（build PASS / 382 tests PASS，Last code commit `857eaa6`）
-M2.1 Discovery Final Fix —— **已完成，两机验收 PASS（20/20，2026-09-20）**
-  build PASS / 408 tests PASS，Last code commit `313c542`
-  验收物料与文档：`905fcc8` / `5e9f245` / `846794c` / `b8dbdb3`（无产品代码）
-  ✅ 两机手工 DoD **PASS**（HANDOFF §9.1 有完整时间线 + 20 步逐条证据）
-M3 TLS Host/Client + 同子网校验 —— **阶段 0～5 代码已全部完成**（24 步里的 1～23）
-  提交 `ee1cbe3`(P1) `601d7a7`(P2) `5ba5822`(P3) `e0484ec`(P4) `5bf3cb6`(P5)
-  build 0 警告 / **573 tests PASS**
-  ⛔ **卡在第 24 步：两机验收（需用户参与）**，本机无 RFC1918 网卡无法自证 → **M3 还不算做完**
-  - 外部模型只做「设计红队评审」（prompt 在 `docs/M3_EXTERNAL_REVIEW_PROMPT.md`）；
-    **Windows/.NET 实测行为一律不问模型，本机测**；模型结论不得直接写进 HANDOFF
-  - 本机实际系统：**Windows 11 专业版 25H2 / build 26200**（`Win32_OperatingSystem.Caption` 实测）
-  - **第二轮外部评审的合适时机到了**：阶段 1 与阶段 4 的具体类型、状态机、解析器都已落地，
-    主题为「针对具体实现的红队评审」+ 错误消息分类 + 五个 deadline 数值
-M3~M11 —— 未开始
+| 里程碑 | 状态 |
+| --- | --- |
+| M0 / M1 / M1.1 / M1.2 / M1.3 | 已完成（`104f296` / `9e75fce`） |
+| M2 + M2.1 | 已完成，**两机验收 PASS 20/20**（`313c542`，408 tests） |
+| **M3 TLS Host/Client + 同子网校验** | 阶段 0~5 代码全完成（24 步里 1~23），build 0 警告 / **573 tests PASS**，Last code commit `5bf3cb6`。**卡在第 24 步两机验收，需用户参与** → M3 还不算做完 |
+| M4~M11 | 未开始 |
 
-## M3 阶段成果速查（后续里程碑会依赖）
+M3 提交链：`ee1cbe3`(P1) `601d7a7`(P2) `5ba5822`(P3) `e0484ec`(P4) `5bf3cb6`(P5) `5ae052f`(验收器)。
 
-- 传输层类型：`CertificatePin` / `ConnectionTarget`(点击时冻结的不可变快照) /
-  `ConnectionIdentity`(含 **presentedPin**，ADR-028 要求 M4 transcript 必须绑它) /
+**外部模型的用法**：只做「设计红队评审」（prompt `docs/M3_EXTERNAL_REVIEW_PROMPT.md`）；
+**Windows/.NET 实测行为一律不问模型，本机测**；模型结论不得直接写进 HANDOFF。
+本机系统 **Win11 专业版 25H2 / build 26200** → TLS 在 Win10 22H2 的行为**无法验证，标注未测**。
+第二轮外部评审时机已到：针对具体实现的红队 + 错误消息分类 + 五个 deadline 数值。
+
+## M1 关键存储事实
+
+- `secrets.bin` = `LRSC`(4)+version(1)+length(4 BE)+DPAPI(JSON)；bundle 含
+  `deviceGuid` / `accessKey`(Base32 26) / `certificatePfx` / `certificatePfxPassword`
+- 访问密钥 = `RandomNumberGenerator.GetBytes(16)`；`Regenerate` 覆盖存储 → 旧 key 立即失效
+- 设备证书 = 自签名 ECDSA P-256，5 年，serverAuth EKU，非 CA；
+  **KeyUsage 只能 digitalSignature**（RFC 5480，EC 证书不得声明 keyEncipherment，ADR-021）；
+  指纹 = `SHA256(RawData)` 大写 hex
+- **禁止**加「静默自动重签证书」逻辑（ADR-021 硬约束）
+- 设备码 = `Base32(SHA256(deviceGuid) 前 5 字节)`，展示 `XXXX-XXXX`；**不是秘密**
+- `DpapiSecretVault.UpdateAsync` copy-on-write：落盘成功才换缓存；`ReadAsync` 只发 `Clone()`；
+  证书已存在时走只读路径**不重写** secrets.bin
+- `TryDecodeExact` 失败时 out 是 `Array.Empty<byte>()`（已 ZeroMemory）
+
+## 证书私钥载入：ADR-016/018 均被证伪 → ADR-029 + ADR-030
+
+真实 SslStream 服务端实测（3 flag × 3 协议 × 3 次）：`EphemeralKeySet` **9/9 失败**
+（`does not support ephemeral keys` ← `0x8009030E`）；`PersistKeySet` 可用但**磁盘留持久密钥副本**；
+**`Default`(0) 可用且会清理临时容器 → 用它**。
+ADR-030：`CreateSelfSigned(...)` 直出的私钥本身就是 ephemeral，报错一模一样
+→ **必须「导出 PFX → DefaultKeySet 重导入」往返**，`DeviceCertificateService` 那步不是冗余，
+测试造证书也要复刻。**污染陷阱**：同进程先 `PersistKeySet` 导入过同一私钥后 `EphemeralKeySet`
+会碰巧成功 → flag 结论必须新进程 + 顺序受控。判 TLS 失败**永远抓服务端异常**，客户端只有 EOF。
+
+## 本机实测：.NET 10.0.12 默认值（别再猜）
+
+`AllowDuplicateProperties` 默认 **True 且后者覆盖前者**；`MaxDepth` 属性值默认 **0**（= 用内置 64，
+文档别写「默认 64」）；`UnmappedMemberHandling` 默认 `Skip`；尾逗号/注释默认已拒。
+`SslClientAuthenticationOptions`：`AllowTlsResume=True`、`AllowRenegotiation=**True**`；
+服务端 `AllowRenegotiation=False`（**不对称**）；两端 `EnabledSslProtocols` 默认 `None`，必须显式写。
+**证书校验回调参数是 `X509Certificate`（基类）**没有 `RawData` → 用 `GetRawCertData()`。
+`TargetHost = string.Empty` 可用（不发 SNI）；握手超时抛 `OperationCanceledException`。
+
+## M2.1 发现不变量（别写回去）
+
+- **probe unicast 回应目标 = `remote.Address : 45872`**，绝不是 `remote.Port`
+- 每个 sender 必须显式 `SetSocketOption(IP, MulticastInterface, 接口 IPv4 网络序 4 字节)`；
+  `HostToNetworkOrder` 或裸 index 都会抛「该请求的地址无效」
+
+## M3 阶段成果速查
+
+- 类型：`CertificatePin` / `ConnectionTarget`(点击时冻结的不可变快照) /
+  `ConnectionIdentity`(含 **presentedPin**，ADR-028 要求 M4 transcript 绑它) /
   `TransportTimeouts` / `PeerCertificateValidator` / `TlsClientConnector` / `TlsConnection` /
   `TransportHost`(accept→同子网→准入→TLS，**顺序不可换**) / `ConnectionAdmissionLimiter` /
   `ConnectionRegistry` / `FrameReader` / `FrameWriter` / `HelloFrame` / `ControlPreAuthSession`
-- **pre-auth 单帧上限 = `MaxPreAuthMessageBytes` 4 KiB**，与认证后 1 MiB 严格区分（ADR-033，对规格的新增约束）
-- **M3 终态 = hello 通过后干净关闭**（`SslStream.ShutdownAsync`）；
-  `AllowedOperationsWhilePreAuthenticated` 在 M4 落地前**必须是空集合**，有测试盯着
-- 五段绝对 deadline 只验证了「执行得准」（误差 0–36ms），**五个数值本身仍待第二轮外部评审**
-- 取消断言只写 `is OperationCanceledException`：SslStream 抛基类，MemoryStream 替身抛 `TaskCanceledException`
-- TLS 选项构造是 `internal` + `InternalsVisibleTo("LanRemote.Transport.Tests")`，
-  只为让「删一行也不会变红」的开关可断言
+- pre-auth 单帧上限 **4 KiB**，与认证后 1 MiB 严格区分（ADR-033，规格新增约束）
+- M3 终态 = hello 通过后**干净关闭**；`AllowedOperationsWhilePreAuthenticated` 必须空集合（有测试盯着）
+- 五段绝对 deadline 只验证了「执行得准」（误差 0–36 ms），**数值本身待第二轮评审**
+- **`TransportHost` 完全没有 logger**：同子网拒绝 / 准入拒绝 / TLS 失败全是静默 `return`
+  → 被控端看不到拒绝原因（HANDOFF §14.12，并入 ADR-024 / M9）。
+  但 pre-auth 超时发生在会话处理器**内部**，是有输出的（`rejection=pre-auth-timeout`）
 
-## 测试写法硬约束（踩过的坑，别再踩）
+### M3 验收器 `tools/LanRemote.Acceptance`
+
+**形态已定稿为 WPF 窗口程序（`WinExe` + `UseWPF`）：双击 exe = 一个窗口，零脚本。**
+曾短暂做成「控制台 exe + `START.cmd`」，用户连纠三次后废弃 ——
+本项目是桌面软件，M2 验收就是在两台机器 WPF 界面上做的（HANDOFF §9.1），
+§13 原则是「终端用户永远不需要打开 PowerShell」。**别改回控制台 + 脚本。**
+已删除 `Program.cs` / `START.cmd` / `run-acceptance.ps1`。
+
+窗口：身份面板（自动自检，不合格 → 置灰角色按钮）/ 角色按钮组 / 只读日志 /
+底部（复制全部日志、清空、打开日志目录）。日志双写 UI + `%TEMP%\lanremote-m3-acceptance\gui.log`
+（WinExe 无控制台，`Console.WriteLine` 全部不可见）。
+
+**WPF 硬坑**：`InvariantGlobalization` 必须 `false`，否则窗口首次 Measure 崩在
+`MS.Internal.FontCache.MajorLanguages`（`'en' is an invalid culture identifier`）；
+`DispatcherUnhandledException` 处理必须**防重入**（渲染期异常会弹框风暴）；
+XML 注释里不能出现 `--`（写 `--->` 直接 MSB4025）；
+`<SatelliteResourceLanguages>en</SatelliteResourceLanguages>` 去掉 13 个语言卫星目录（422→265 条目）；
+`<DebugType>embedded</DebugType>` 不单独发 pdb。
+**纠正过的猜测**：改 invariant **不会**让包多带 ICU（Windows 用系统 ICU，包里零 `icu*`），
+体积 77.8→132.2 MiB 全是 WPF 自身程序集（约 39 MiB）。
+
+退出码 **0 符合预期 / 1 真失败 / 2 前置条件不满足**（窗口翻成人话）。
+**别拿 `LanRemote.App` 验传输层**——它 ProjectReference 了 Transport 却**零调用**。
+三必做场景：`success` / `pin-mismatch` / `timeout`；`cross-subnet` 本次 lab 跑不出
+（Windows 不能指定源地址，除非给 `TlsClientConnector` 加本地绑定参数 → HANDOFF §14.13）。
+被控端汇总行应为 `accepted=2 preAuthenticated=1 rejected=1 cleanStop=True`
+（pin-mismatch 死在 TLS，进不了会话处理器故不计入 accepted）。
+手册 `docs/M3_TWO_MACHINE_ACCEPTANCE.md`（§0.1 双击 exe 启动）。
+打包 `scripts/acceptance/make-m3-package.py` → 265 条目 / 132.2 MiB / zip 57.4 MiB。
+
+## 测试 / 验收写法硬约束（踩过的坑）
 
 - **不要**从 `MemoryStream` 派生并同时重写 `Read(Span<byte>)` 与 `ReadAsync(Memory<byte>)`
-  → 一次读会被数**两遍**（`Stream.Read(Span)` 默认实现虚拟调用数组重载）。要计数就**包装**内部流
-- **不要**在原始字符串字面量 `"""…"""` 里写 `\n` 转义（那里不是转义）
-- **变异验证必须确认真变红**；「变异后仍然绿」= 测试隔离错了（ADR-032 已踩一次）
-- **阶段超时必须被 `RunAsync` 接住**，否则与「停机取消」不可区分，且结果永远产生不出来
+  → 一次读被数**两遍**（`Stream.Read(Span)` 默认实现虚拟调用数组重载）。要计数就**包装**内部流
+- **不要**在原始字符串字面量 `"""…"""` 里写 `\n`（那里不是转义）
+- 取消断言只写 `is OperationCanceledException`：SslStream 抛基类，MemoryStream 替身抛 `TaskCanceledException`
+- 阶段超时必须被 `RunAsync` 接住（`when (!ct.IsCancellationRequested)`），
+  否则与停机取消不可区分且结局永远产生不出来
+- **变异验证必须确认真变红**；「变异后仍然绿」= 测试隔离错了（ADR-032 踩过）
+- **验收器禁止「失败即 PASS」**：端口没开 / 防火墙拦 / host 没启动都会让握手失败。
+  必须先用纯 TCP 探针证明端口开着，否则退 2 不判 PASS；按 `SocketError` 区分时
+  **不要**把 `ConnectionReset` 归进「没连上」——accept 后立刻关闭正是 RST
+- 不要把「对端怎么收尾」压成一个布尔，要分 `eof` / `reset` / `still-open` / `unexpected-data`
+- 「删一行不会变红」的开关（TLS 选项）必须 `internal` + `InternalsVisibleTo` 后直接断言
 
-## M1 关键存储事实（后续里程碑会依赖）
+## 网络环境与 lab（2026-09-21 复核）
 
-- `secrets.bin` = `LRSC`(4) + version(1) + length(4 BE) + DPAPI(JSON bundle)；
-  bundle 内有 `deviceGuid` / `accessKey`(Base32 26 字符) / `certificatePfx` / `certificatePfxPassword`
-- 访问密钥 = `RandomNumberGenerator.GetBytes(16)`；`Regenerate` 直接覆盖存储字段 → 旧 key 立即失效
-- 设备证书 = 自签名 ECDSA P-256，5 年，含 serverAuth EKU，非 CA；
-  **KeyUsage 只能是 digitalSignature**（RFC 5480，EC 证书不得声明 keyEncipherment，ADR-021）；
-  指纹 = `SHA256(RawData)` 大写 hex，重载后稳定
-- **禁止**为「把旧证书换成新 profile」加入静默自动重签逻辑（ADR-021 硬约束）
-- 设备码 = `Base32(SHA256(deviceGuid) 前 5 字节)`，展示 `XXXX-XXXX`；**不是秘密**
-- 证书加载用 `X509CertificateLoader.LoadPkcs12(pfx, pwd, EphemeralKeySet)`（ADR-018，取代 ADR-016）；
-  **M3 必须补真实 SslStream 握手集成测试**才能确认这个策略够用，没测出来之前不许改回 PersistKeySet
-- `DpapiSecretVault.UpdateAsync` 是 copy-on-write：先落盘成功才替换缓存，失败时磁盘与内存同时保持旧状态
-- `ReadAsync` 只发 `Clone()`；证书已存在时加载走只读路径，**不重写 secrets.bin**
-- `TryDecodeExact` 失败时 out 是 `Array.Empty<byte>()`（已 ZeroMemory），不会返回部分解码的秘密字节
-- HANDOFF 记账用 `Last code commit` + `Working tree at validation`，**不写 HEAD hash**（避免自引用）
+- **本机唯一活跃网卡 = 以太网 `172.100.166.220/24`（Dhcp）**，**不是 RFC1918**
+  → 本机跑不通发现与验收，**这是对的不是 bug**
+- WLAN **Disconnected**（只有 APIPA）；「本地连接* 1/2」只有 APIPA
+  —— 早期记的「WLAN 连上 10.65.156.134」与「已过期」两版都不要信，以 `Get-NetIPAddress` 为准
+- 用户两台实机 `172.100.166.220` / `172.100.166.65`（网关 .254）
+- **`172.100.x.x` 不是 RFC1918**（172 段只到 172.31）→ 判私有必须按**数值区间**，不能用前缀字符串
+- 处置：`set-lab-ip.ps1 -Role A|B` → `192.168.1.10` / `192.168.1.20`（/24）+ Private + UDP 45872 放行；
+  `-Undo` 撤销
 
-## M2.1 已锁死的两条发现不变量（别写回去）
+### Windows IPv4 实测（代价是断网两次）
 
-- **probe unicast 回应目标 = `remote.Address : 45872`**，绝不是 `remote.Port`
-  （probe 源端口是对方 sender 的随机临时端口，没人监听）
-- **每个 sender 必须显式 `SetSocketOption(IP, MulticastInterface, 接口 IPv4 网络序 4 字节)`**；
-  不设则多网卡时组播全走系统默认路由。实测：对地址做 `HostToNetworkOrder` 或传裸 index 都会抛
-  `SocketException: 在其上下文中，该请求的地址无效`
-- Discovery 对 `LanRemote.Protocol.Tests` 开了 `InternalsVisibleTo`，只服务上述两个 internal 纯函数
+**一张网卡只能 DHCP 或静态，不能共存**：在 DHCP 接口上追加地址会把接口翻成 `Dhcp=Disabled`
+并**丢租约**，删掉后只剩 APIPA。正确做法：整口切静态（用当前同一套 IP/掩码/网关/DNS，不断网）
+→ 再追加第二地址（**不带网关**）。
+**netsh 退出码不可信**（已是 DHCP 时返回非 0 却实为成功）→ 必须 `Get-NetIPInterface` 复核。
+**PS 5.1 陷阱**：`($x | %{ $_.IP } -join ', ')` 会把 `-join` 当参数 → 写 `$x.IP -join ', '`。
+`Set-NetConnectionProfile` 在刚切完静态时会因 `Identifying...` 失败 → 需重试。
 
-## 本机开发残留（非阻断、勿写进产品逻辑）
+## 产品形态决策（2026-09-20 用户拍板「三个都做」）
 
-- `%LOCALAPPDATA%\LanRemote\backups\secrets.bin.pre-m1.3-reset.bak` = M1.3 手工重置身份时留的旧开发备份
-- 只存在本机，**不在源码包**（`git archive` 152 条目已验证不含 bak/secrets.bin/.workbuddy）
-- 确认不再需要旧开发身份后**由施工环境手工删除**即可
-- **硬约束：绝不把「自动删除身份备份」写进产品逻辑**（产品代码里不得出现 backups/.bak 相关清理）
+**总原则**：终端用户永不打开 PowerShell；要权限走 UAC。「一键」= **入口无感 + 触发显式 + UAC**，
+**绝不是静默自动执行**（本机已两次把自己搞断网）。三条**只定规则，未启动编码**：
+**ADR-024** 网络诊断进 UI（M9，给「原因+网卡名+实际地址」）、
+**ADR-025** 防火墙一键内置 App（M10，只放行 LocalSubnet，须可精确撤销）、
+**ADR-026** 临时私有地址一键（不早于 M10，排除虚拟网卡，撤销幂等）。
+ADR 编号缺陷已修：ADR-018（证书加载 flag，已被 029/030 取代）曾被错标成 ADR-021（KeyUsage）。
 
-## 验收用 lab 网络（两机验收现场实况）
+## 本机开发残留（非阻断）
 
-- 用户的两台实机在 **`172.100.166.220` / `172.100.166.65`**（网关 .254，1000 Mbps 互通）
-- **`172.100.x.x` 不是 RFC1918**（172 段只到 172.31）→ LanRemote 正确拒绝 → 设备列表空
-- 处置：`scripts/acceptance/set-lab-ip.ps1 -Role A|B` 给两台各安排 `192.168.1.10` / `192.168.1.20`（/24）；
-  同时 profile=Private + 放行入站 UDP 45872
-- 教训：判定私有必须按数值区间，**不能用前缀字符串**（`172.100` 会被误判成私有）
-
-## Windows IPv4 实测结论（血的教训，别再凭直觉）
-
-**一张网卡只能 DHCP 或 静态，不能共存**（2026-09-20 实测，代价是用户断网两次）：
-
-| 操作 | 预期 | 实测 |
-| --- | --- | --- |
-| `New-NetIPAddress` 在 DHCP 接口上追加地址 | 共存 | 接口 `Dhcp` → `Disabled`，租约**丢失** |
-| `netsh interface ipv4 add address` | 共存 | 同上 |
-| 追加后再删除该地址 | 复原 | 只剩 APIPA，无网关/DNS |
-
-- 正确做法：整口切静态（用**当前同一套** IP/掩码/网关/DNS，不断网）→ 再追加第二地址（**不带网关**）
-- 回滚：`netsh interface ipv4 set address source=dhcp` + `set dnsservers source=dhcp` + `ipconfig /renew`
-- **`netsh` 退出码不可信**：已是 DHCP 时 `set address source=dhcp` 返回**非 0** 并输出
-  「已在此接口上启用 DHCP。」，实为成功 → 必须用 `Get-NetIPInterface` 复核实际状态
-- **PS 5.1 陷阱**：`($x | ForEach-Object { $_.IPAddress } -join ', ')` 会把 `-join` 当参数 → 抛异常；
-  写 `$x.IPAddress -join ', '`（语法检查查不出来，只有真跑才暴露）
-- `Set-NetConnectionProfile` 在刚切完静态时因网卡 `Identifying...` 会失败 → 需重试
-
-## 本机网络环境（影响 discovery 验证）
-
-- 以太网 = **172.100.166.220**，`Dhcp`，**不属于 RFC1918**（172.16/12 只覆盖 172.16–172.31）
-- WLAN 现已连上，`10.65.156.134/24` `Dhcp` —— **是** RFC1918 私有地址
-  （2026-09-20 复测更正：早期记录说 WLAN 媒体已断开，已过期）
-- 「本地连接* 1/2」只有 APIPA `169.254.x.x`
-- 所以本机**有**合格网卡；但电脑 B 不在 `10.65.156.x`，两机仍需 `192.168.1.0/24` lab 网段
-- 改本机 IP 配置前先想清楚回滚路径 —— 已因此断网两次
-
-## 产品形态决策（2026-09-20 用户拍板「三个都做，含改 IP 一键」）
-
-**总原则**：终端用户永远不需要打开 PowerShell。要管理员权限就走 UAC（App 内提权），
-不由用户手动跑脚本。但「改 IP 要无感」= **入口无感（在 App 内）+ 触发显式（用户自己点）**，
-**绝不是静默自动执行**（本机已两次把自己搞断网）。
-
-- **ADR-024 网络诊断进 UI**（M9，最晚 M10 发布前闭合）：discovery 失败原因不能再只写日志，
-  UI 必须给「原因 + 网卡名 + 实际地址」；覆盖 05_UI_UX_SPEC §8 的未发现/防火墙阻止/网络断开
-- **ADR-025 防火墙一键内置 App + UAC**（M10）：M10 原 `configure-firewall.ps1`/`remove-firewall.ps1`
-  降级为可选离线入口；仍只放行 LocalSubnet；必须有按前缀精确撤销的契约；禁止后台静默建规则
-- **ADR-026 临时私有地址一键**（不早于 M10）：用户显式选网卡 + 排除虚拟网卡 + 先整张切静态再追加
-  + 撤销回 DHCP 并自校验；撤销幂等；只追加不删用户原地址；禁止静默自动改 IP
-- 三条都已写进 `docs/DECISIONS.md` 与 `HANDOFF.md` §13/§14/§15/§16，**只定规则，未启动编码**
-- ADR 工作副本 = `docs/DECISIONS.md`（010~026）；`LanRemote_Implementation_Package/10_DECISIONS.md`
-  保持原始 9 条规格快照，不回写
-- 已修编号缺陷：ADR-018（证书加载 EphemeralKeySet）曾被错标成 ADR-021（KeyUsage），勿再混淆
-
-## 本机实测：.NET 10.0.12 的默认值（M3 直接依赖，别再猜）
-
-- `JsonSerializerOptions.AllowDuplicateProperties` 默认 **True**，且**后者覆盖前者**——
-  `{"type":"channel_hello","type":"video"}` 默认解析为 `video`。设 `false` 才抛 `JsonException`
-- `MaxDepth` 属性值默认 **0**（= 采用内置上限 64），不是「默认 64」
-- `UnmappedMemberHandling` 默认 `Skip`；尾逗号与注释默认已拒绝（抛 `JsonException`）
-- `SslClientAuthenticationOptions`：`AllowTlsResume=**True**`、`AllowRenegotiation=**True**`
-- `SslServerAuthenticationOptions`：`AllowTlsResume=**True**`、`AllowRenegotiation=False`
-- `EnabledSslProtocols` 两端默认 `None`（= 交给系统默认），必须显式 `Tls12 | Tls13`
-- 取证方法：临时 console 项目 + 反射打印 `SslXxxAuthenticationOptions` 全部属性默认值（放在 %TEMP%，不进仓库）
-- **证书校验回调参数是 `X509Certificate`（基类）**，没有 `RawData` → pin 要用 `GetRawCertData()`
-
-## 证书私钥载入 flag：ADR-016/018 都被证伪，正确解是 ADR-029
-
-实测（真实 SslStream 服务端，3 flag × 3 协议 × 重复 3 次，本机 Win11 25H2 / .NET 10.0.12）：
-
-- **`EphemeralKeySet` 9/9 失败**：`AuthenticationException: ... platform does not support ephemeral keys.`
-  ← `Win32Exception 0x8009030E`（客户端只看到 `IOException: unexpected EOF`，要抓服务端异常）
-- `PersistKeySet` 9/9 可用，但**磁盘留持久密钥副本**（CNG user keys 文件 dispose 后不删）
-- **`X509KeyStorageFlags.Default`(0) 9/9 可用，且 dispose/GC 后删除临时容器** → M3 用这个
-- **污染陷阱**：同进程先 `PersistKeySet` 导入过同一私钥后，`EphemeralKeySet` 会碰巧成功 →
-  flag 结论必须**新进程 + 顺序受控 + 重复多次**，否则假阳性
-- M3 必须同步改掉把旧 flag 锁成断言的 `ImportFlags_UsesEphemeralKeySetOnly`
-
-## ADR-030（继 ADR-029 之后）：Schannel 拒绝的是「密钥的 ephemeral 属性」，不是 flag 名字
-
-- `CertificateRequest.CreateSelfSigned(...)` **直出的证书私钥就是 ephemeral 的**，
-  做 TLS 服务端同样失败，报错与 `EphemeralKeySet` **一模一样**（`0x8009030E`）
-- 所以「改 ImportFlags」只是必要条件；**签发后必须走「导出 PFX → `DefaultKeySet` 导入」往返**
-  ——`DeviceCertificateService` 里那步不是冗余，删掉会让服务端直接不可用
-- 测试里造证书也必须复刻同一条往返路径，否则与真实设备证书密钥形态不一致，结论不可外推
-- 判定 TLS 握手失败**永远要抓服务端异常**：客户端端只能是 `IOException: unexpected EOF`
-- .NET 10 其它实测：`TargetHost = string.Empty` 可用（不发 SNI）；
-  握手超时抛 `System.OperationCanceledException`
+`%LOCALAPPDATA%\LanRemote\backups\secrets.bin.pre-m1.3-reset.bak` 是 M1.3 手工重置身份的旧备份，
+只在本机、不在源码包。**硬约束：绝不把「自动删除身份备份」写进产品逻辑。**

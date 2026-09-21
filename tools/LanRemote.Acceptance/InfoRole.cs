@@ -11,46 +11,67 @@ namespace LanRemote.Acceptance;
 /// <remarks>
 /// M2 那次验收最大的时间浪费就是两台机器不在 RFC1918 网段却没人先确认。
 /// 这个角色存在的唯一目的就是在开跑之前把这件事说清楚。
+///
+/// 输出走 <see cref="AcceptanceLog"/>：这是 <c>WinExe</c>，没有控制台。
 /// </remarks>
 internal static class InfoRole
 {
-    public static async Task<int> RunAsync(CancellationToken cancellationToken)
+    public static async Task<InfoResult> RunAsync(
+        AcceptanceLog log,
+        CancellationToken cancellationToken)
     {
         using AcceptanceContext context = new(LogLevel.Warning);
         await context.InitializeAsync(cancellationToken);
 
         DeviceIdentity identity = context.Identity;
-
-        Console.WriteLine("deviceCode  = " + identity.DeviceCode);
-        Console.WriteLine("deviceId    = " + identity.DeviceId);
-        Console.WriteLine("deviceName  = " + identity.DeviceName);
-        Console.WriteLine("certSha256  = " + context.Certificate.Sha256FingerprintHex);
-        Console.WriteLine("configRoot  = " + context.Paths.RootDirectory);
-        Console.WriteLine("udpDiscover = " + context.Config.DiscoveryPort);
-        Console.WriteLine("tcpTransmit = " + context.Config.TransportPort);
-        Console.WriteLine("bindings    :");
-
         IReadOnlyList<NetworkBinding> bindings = context.Bindings.GetBindings();
+        IReadOnlyList<IPAddress> listen = context.ListenAddresses();
+
+        log.WriteLine("deviceCode  = " + identity.DeviceCode);
+        log.WriteLine("deviceId    = " + identity.DeviceId);
+        log.WriteLine("deviceName  = " + identity.DeviceName);
+        log.WriteLine("certSha256  = " + context.Certificate.Sha256FingerprintHex);
+        log.WriteLine("configRoot  = " + context.Paths.RootDirectory);
+        log.WriteLine("udpDiscover = " + context.Config.DiscoveryPort);
+        log.WriteLine("tcpTransmit = " + context.Config.TransportPort);
+        log.WriteLine("bindings    :");
+
         if (bindings.Count == 0)
         {
-            Console.WriteLine("  (无) —— 本机没有合格网卡，不能参与两机验收。");
+            log.WriteLine("  (无) —— 本机没有合格网卡，不能参与两机验收。");
         }
 
         foreach (NetworkBinding binding in bindings)
         {
-            Console.WriteLine(
+            log.WriteLine(
                 $"  - {binding.Address}/{binding.SubnetMask} [{binding.InterfaceName}] " +
                 $"{binding.InterfaceType} ifIndex={binding.InterfaceIndex}");
         }
 
-        IReadOnlyList<IPAddress> listen = context.ListenAddresses();
-        Console.WriteLine("listenOn    = " +
+        log.WriteLine("listenOn    = " +
             (listen.Count == 0 ? "(none)" : string.Join(", ", listen)));
 
-        Console.WriteLine(listen.Count == 0
-            ? "[INFO][RESULT] outcome=FAIL reason=no-qualified-rfc1918-nic // 先用 set-lab-ip.ps1 配置 lab 网段"
-            : "[INFO][RESULT] outcome=PASS // 本机可以参与两机验收");
+        bool ready = listen.Count > 0;
 
-        return listen.Count == 0 ? 2 : 0;
+        log.WriteLine(ready
+            ? "[INFO][RESULT] outcome=PASS // 本机可以参与两机验收"
+            : "[INFO][RESULT] outcome=FAIL reason=no-qualified-rfc1918-nic // 先用 set-lab-ip.ps1 配置 lab 网段");
+
+        return new InfoResult(
+            ready,
+            identity.DeviceCode,
+            context.Certificate.Sha256FingerprintHex,
+            listen);
     }
+
+    /// <summary>自检结果，供 UI 顶部直接展示。</summary>
+    /// <param name="Ready">本机能否参与验收。</param>
+    /// <param name="DeviceCode">本机设备码（不是秘密）。</param>
+    /// <param name="CertSha256">本机证书指纹（会被对端 pin）。</param>
+    /// <param name="ListenAddresses">将要监听的地址。</param>
+    public sealed record InfoResult(
+        bool Ready,
+        string DeviceCode,
+        string CertSha256,
+        IReadOnlyList<IPAddress> ListenAddresses);
 }

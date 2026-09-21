@@ -32,6 +32,9 @@
   **注意：不要拿 `LanRemote.App` 验收 M3**——它引用了 `LanRemote.Transport` 但一行都没调用，
   打它的包只能重证 discovery。本机所有**前置条件失败路径已实测**，happy path 必须两台
   `192.168.1.0/24` 实机才能跑 → **等用户执行**。详见第 15 节步骤 24。
+- **验收器是 WPF 窗口程序（`WinExe`），双击 `LanRemote.Acceptance.exe` 就是一个窗口**，
+  不需要任何脚本。曾短暂采用「控制台 exe + `START.cmd`」的形态，被用户连纠三次后废弃——
+  **别改回去**，理由与坑见第 15 节「M3 验收器的形态教训」。
 
 ### 关于 git 记账方式
 
@@ -998,24 +1001,32 @@ dotnet test LanRemote.sln -c Debug --no-build
     `TransportHost|TlsClientConnector|ControlPreAuthSession` **零命中**——
     打 App 的包去两机跑，只能重新证明 M2 的 discovery 还能用。
 
-    因此新建 `tools/LanRemote.Acceptance`（`net10.0-windows` 控制台，已加进 sln）：
+    因此新建 `tools/LanRemote.Acceptance`（`net10.0-windows`，**WinExe + WPF 窗口程序**，已加进 sln）：
 
     | 文件 | 作用 |
     | --- | --- |
     | `AcceptanceContext.cs` | 刻意照抄 `App.xaml.cs` 的 DI 接线（vault→证书→身份→binding→SubnetPolicy→discovery） |
-    | `InfoRole.cs` | `info`：环境自检，打印身份/指纹/端口/合格网卡 |
-    | `HostRole.cs` | `host [--seconds N]`：起 discovery + `TransportHost`，每条连接跑完整 pre-auth 会话 |
-    | `ClientRole.cs` | `client --scenario …`：发现→冻结快照→TLS→hello→等对端收尾 |
-    | `Program.cs` | 退出码 **0 = 符合预期 / 1 = 真失败 / 2 = 前置条件不满足** |
+    | `AcceptanceLog.cs` | WinExe 没有控制台 → 日志同时进 UI（`LineWritten` 事件）和磁盘（`gui.log`） |
+    | `App.xaml(.cs)` | `DispatcherUnhandledException` 落盘 `crash.log` + 弹框，**带防重入**（见下） |
+    | `MainWindow.xaml(.cs)` | 唯一入口：身份面板 + 角色按钮 + 日志区 + 复制/清空/打开目录 |
+    | `InfoRole.cs` | 等价于旧 `info`：环境自检，回填身份/指纹/端口/合格网卡 |
+    | `HostRole.cs` | 被控端：起 discovery + `TransportHost`，每条连接跑完整 pre-auth 会话 |
+    | `ClientRole.cs` | 控制端：发现→冻结快照→TLS→hello→等对端收尾，跑完三个必做场景 |
 
-    **四个场景，前三个必做、第四个本次不跑：**
+    退出码仍是 **0 = 符合预期 / 1 = 真失败 / 2 = 前置条件不满足**，
+    但窗口把它翻译成人话显示（`符合预期` / `不符合预期` / `前置条件不满足`）。
 
-    | 场景 | 命令关键参数 | 通过标准 | 状态 |
-    | --- | --- | --- | --- |
-    | `success` | `--device-code <B>` | 控制端 `presentedPin` 与 discovery 的 `pin` 逐字符一致 + `outcome=PASS peerClosed=eof`；被控端 `outcome=PreAuthenticated rejection=-` | 待真机 |
-    | `pin-mismatch` | `--device-code <B>` | 握手被拒；且 `tcpProbe=open` 必须出现 | 待真机 |
-    | `timeout` | `--device-code <B>` | 不发 hello，约 5s（= `lengthPrefixTimeout`）被切；被控端 `rejection=pre-auth-timeout` | 待真机 |
-    | `cross-subnet` | `--address <ip> --pin <64hex>` | —— | **本次不跑，见 §14 第 13 条** |
+    **双击 `LanRemote.Acceptance.exe` = 一个窗口，不需要任何脚本。** 流程全在窗口里：
+    看身份面板 → 被控端点「开始监听」→ 控制端填对端设备码点「跑三个场景」→ 复制日志。
+
+    **三个必做场景**（`ClientRole.MandatoryScenarios`）：
+
+    | 场景 | 通过标准 | 状态 |
+    | --- | --- | --- |
+    | `success` | 控制端 `presentedPin` 与 discovery 的 `pin` 逐字符一致 + `outcome=PASS peerClosed=eof`；被控端 `outcome=PreAuthenticated rejection=-` | 待真机 |
+    | `pin-mismatch` | 握手被拒；且 `tcpProbe=open` 必须出现 | 待真机 |
+    | `timeout` | 不发 hello，约 5s（= `lengthPrefixTimeout`）被切；被控端 `rejection=pre-auth-timeout` | 待真机 |
+    | `cross-subnet` | —— | **本次不跑，见 §14 第 13 条** |
 
     被控端退出前的汇总行应为 `accepted=2 preAuthenticated=1 rejected=1 cleanStop=True`
     （`pin-mismatch` 死在 TLS 阶段，进不了会话处理器，故不计入 `accepted`）。
@@ -1023,21 +1034,18 @@ dotnet test LanRemote.sln -c Debug --no-build
     **本机已实测（真实执行，不是推演）：**
 
     - `dotnet build` 0 警告 0 错误、`dotnet test` **573 PASS / 0 FAIL**（加入该工具项目后不变）
-    - `info` 真跑通 DPAPI→身份→证书整条链（deviceCode `M5WC-14GX`，
-      certSha256 `89A5C10E…5445`），正确判 `outcome=FAIL reason=no-qualified-rfc1918-nic` → exit 2
-    - `host --seconds 3` → `[HOST][RESULT] outcome=FAIL reason=no-qualified-nic` → exit 2
-    - `client --scenario success --device-code AAAA-AAAA` → discovery 真实告警 +
-      `reason=peer-not-found` → exit 2
-    - `client --scenario cross-subnet --address 192.168.1.20 …` → `tcpProbe=unreachable`
-      → `reason=peer-port-unreachable` → exit 2
-    - 发布版 `artifacts/m3-acceptance/LanRemote.Acceptance.exe info` 在 **`env -u DOTNET_ROOT`**
-      （不加载 SDK 环境）下正常运行，自包含成立
-    - `run-acceptance.ps1 -PeerDeviceCode AAAA-AAAA` 在 step 0 正确中断，exit 2，中文渲染正常
+    - WPF 窗口**真的渲染出来**（`[GUI] 窗口渲染完成。 ActualWidth=900 ActualHeight=700`），
+      已截图肉眼确认四个区块与身份面板内容正确
+    - **全新解压 + `env -u DOTNET_ROOT -u DOTNET_HOST_PATH`** 下双击 `LanRemote.Acceptance.exe`
+      → 窗口正常打开，自包含成立、也不需要任何脚本
+    - 自检真跑通 DPAPI→身份→证书整条链（deviceCode `M5WC-14GX`，
+      certSha256 `89A5C10E…5445`），正确判 `outcome=FAIL reason=no-qualified-rfc1918-nic`，
+      并在窗口里把两个角色按钮**置灰**（防止「点了没反应」）
 
     **修复的一个真实缺陷（空洞断言）**：`pin-mismatch` / `cross-subnet` 原先是
     「握手失败即 PASS」。对端端口没开 / 防火墙拦掉 / host 没启动，同样会让握手失败，
     于是照样报 PASS——而同子网闸门和 pinning 一行都没被执行到。
-    已加 ① 纯 TCP 探针（不通 → exit `2`，不判 PASS）② `LooksLikeNothingListening`
+    已加 ① 纯 TCP 探针（不通 → 退 `2`，不判 PASS）② `LooksLikeNothingListening`
     按 `SocketError` 区分「没连上」与「被拒绝」（刻意**不**把 `ConnectionReset` 算进前者，
     因为 accept 后立刻关闭正是走 RST）。**变异验证**：修复前 `192.168.1.20:45873`
     （无人监听）报 PASS/exit 0，修复后报 `peer-port-unreachable`/exit 2。
@@ -1045,29 +1053,54 @@ dotnet test LanRemote.sln -c Debug --no-build
     `eof` / `reset` / `still-open` / `unexpected-data` 四种可判定结局，不再把超时和切断混为一谈。
 
     **物料**：`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`
-    （217 条目 / 原始 77.8 MiB / zip 34.6 MiB），由 `scripts/acceptance/make-m3-package.py` 产出
+    （265 条目 / 原始 132.2 MiB / zip 57.4 MiB），由 `scripts/acceptance/make-m3-package.py` 产出
     （`LANREMOTE_M3_SKIP_PUBLISH=1` 跳过 publish 只重打包；`LANREMOTE_M3_CLEAN=1` 才先清空目录）。
-    包内含 `START-HERE.md`（=`docs/M3_TWO_MACHINE_ACCEPTANCE.md`）、`START.cmd`、
-    `run-acceptance.ps1`、`set-lab-ip.ps1`。两个 ps1 打包时强制加 BOM，
-    **`START.cmd` 不加 BOM 且必须是纯 ASCII**（cmd.exe 按控制台代码页解析 `.cmd`，
-    中文连注释都会解错并报「不是内部或外部命令」）。
-    手册：§0.1 怎么启动、§3 逐场景命令与判定、§4 host 汇总行、§5 两个已知缺口、
-    §6 要贴回来的四段证据、§7 排障表。
+    包内含 `START-HERE.md`（=`docs/M3_TWO_MACHINE_ACCEPTANCE.md`）与 `set-lab-ip.ps1`，
+    其余是自包含运行时。`set-lab-ip.ps1` 打包时强制加 BOM（PS 5.1 否则中文乱码）。
+    手册：§0.1 怎么启动（双击 exe）、§3 逐场景判定、§4 host 汇总行、§5 两个已知缺口、
+    §6 要贴回来的证据、§7 排障表。
+
+### M3 验收器的形态教训（用户连续三次纠错后定稿）
+
+这三条是踩出来的，别改回去：
+
+1. **入口必须是 exe，不是脚本。** 用户原话：「双击入口不应该就是一个exe可执行文件吗？
+   为什么要用脚本？我们这个做的是**软件**啊」。本项目是桌面软件，
+   M2 的两机验收就是两台机器开 WPF 界面跑的（§9.1「用户在 B 机界面确认」「B 点刷新」），
+   §13 又定了「终端用户永远不需要打开 PowerShell」。
+   → 验收器是 `WinExe` + `UseWPF`，双击 = 窗口。
+2. **控制台 exe + `START.cmd` 是错解**（曾短暂加过，已删除）。
+   它把验收又推回终端，而且双击控制台 exe 只会打一行 usage 然后退出，
+   窗口一闪而过，用户会得出「包里没有 exe」的结论——用户的第一次反馈
+   「你打包解压出来的，怎么没有启动exe」正是这个现象。
+3. **`WinExe` 没有控制台**，所以 `Console.WriteLine` 全部不可见 →
+   统一走 `AcceptanceLog`（UI + `gui.log` 双写），并且必须给
+   `DispatcherUnhandledException` 落盘 `crash.log`，否则未捕获异常只会让窗口无声消失。
+
+**踩到并修掉的坑：**
+
+- **`InvariantGlobalization=true` 会让 WPF 直接崩**：窗口在首次 Measure 时抛
+  `TypeInitializationException: 'MS.Internal.FontCache.MajorLanguages' 的类型初始值设定项引发异常`，
+  内层是 `CultureNotFoundException: … 'en' is an invalid culture identifier`。
+  WPF 字体缓存必须用真实 `CultureInfo`。**此项目必须 `false`。**
+- **顺手纠正一个我写错的猜测**：改 `InvariantGlobalization` **不会**让包多带 ICU——
+  Windows 上 .NET 用系统 ICU，发布目录里一个 `icu*` 文件都没有。
+  体积从 77.8 → 132.2 MiB 全部来自 WPF 自身的程序集
+  （`PresentationFramework` 15.8 MiB + `PresentationCore` 8.3 MiB + WPF 全套约 39 MiB），
+  跟 globalization 无关。这就是「先测再写」的例子。
+- **`<InvariantGlobalization>` 注释里不能出现 `--->`**：那是 XML 注释结束符，
+  直接 `MSB4025: An XML comment cannot contain '--'`。
+- **WPF 会带出 13 个语言的资源卫星目录**（`cs`/`de`/…/`zh-Hans`）→
+  `<SatelliteResourceLanguages>en</SatelliteResourceLanguages>` 限掉，
+  条目 422 → 265。配合 `<DebugType>embedded</DebugType>` 不再单独发 pdb。
+- **`DispatcherUnhandledException` 处理里必须防重入**：
+  若异常发生在排版/重绘路径（如上面的字体缓存崩溃），
+  每次重绘都会立刻再抛一次，`MessageBox` 弹 → 重绘 → 再弹 …… 变成弹框风暴，
+  用户除了强制结束进程什么都做不了。现在只弹第一次，写盘用 `AppendAllText` 保留全部现场。
+
     **提交 `5ae052f`** · 该提交只含验收器 / 手册 / 打包脚本 / HANDOFF，**无产品代码改动**
     （`Last code commit` 仍是 `5bf3cb6`）。zip 与 `artifacts/` 都在 .gitignore 里，
     需要时用 `make-m3-package.py` 重现。
-
-    **补：为什么又加了 `START.cmd`**（用户反馈「解压出来没有启动 exe」）。
-    exe 其实在包里，叫 `LanRemote.Acceptance.exe`，但 ① 混在 200 多个 dll 里，
-     ② 它是**控制台程序**，双击不带参数只会打 usage 然后 exit 2，窗口一闪而过——
-    看起来就像没有 exe。`START.cmd` 做三件事：切到自身目录 → 调 `run-acceptance.ps1`
-    → **末尾 `pause`** 让窗口不关。同时把驱动脚本改成**交互式**：
-    先跑 `info` 自检（不合格直接中止），再问「这台是被控端还是控制端」（输 1/2），
-    控制端再问对端设备码，然后跑完三个场景。非交互仍可
-    `-Role host` / `-Role client -PeerDeviceCode XXXX-XXXX`。
-    实测：`-Role host` → step 0 中止 exit 2 且中文渲染正常；`-Role bogus` → ValidateSet 拒绝；
-    **全新解压目录**端到端跑通（自动找到同目录的 exe）。
-    未本机实测：交互式 1/2 菜单与 host 分支的等待（被「本机无 RFC1918 网卡」挡在 step 0 之前）。
 
 ### M3 明确不做
 
@@ -1157,6 +1190,24 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **不要照抄直觉去改 IP**：Windows IPv4 是「DHCP 或静态」二选一；追加第二地址前必须先把整张接口
   切成静态并回填原配置，否则会丢 DHCP 租约只剩 169.254（本机已两次踩断）。撤销必须幂等，
   且**不能靠 `netsh` 退出码判成败**。完整约束见 ADR-026
+- **不要给这个项目做「控制台 exe + 批处理启动器」形态的工具**：
+  本项目是桌面软件，M2 验收就是在两台机器的 WPF 界面上做的（§9.1），
+  §13 的总原则是「终端用户永远不需要打开 PowerShell」。
+  用户已连续三次纠错（「怎么没有启动exe」→「双击入口不应该就是一个exe 」→「我们做的是软件」）。
+  验收器必须是 `WinExe` + `UseWPF`，**双击 = 窗口**，不需要任何脚本
+- **不要在前面的注释里写没验证过的因果**：我曾断言「关掉 `InvariantGlobalization` 会让包多带 ICU」——
+  实测 Windows 上 .NET 用系统 ICU，发布目录一个 `icu*` 都没有；
+  体积从 77.8 涨到 132.2 MiB 全部是 WPF 自身程序集（约 39 MiB）。
+  写注释前先 `ls` 一下，别把猜测写成事实
+- **不要给 WPF 程序开 `InvariantGlobalization`**：窗口会在首次 Measure 时崩在
+  `MS.Internal.FontCache.MajorLanguages`（`CultureNotFoundException: … 'en' is an invalid
+  culture identifier`）。同时 `DispatcherUnhandledException` 的处理**必须防重入**，
+  否则渲染期异常会造成「弹框 → 重绘 → 再弹」风暴，用户连日志都读不到
+- **不要忘了 XML 注释里不能出现 `--`**：`<PropertyGroup>` 里的注释写 `--->`（写异常链很自然）
+  会直接 `MSB4025: An XML comment cannot contain '--'`，项目都加载不了
+- **不要把「对端握手失败」当成 PASS**：端口没开 / 防火墙拦 / host 没启动同样会让握手失败。
+  必须有独立的连通性探针把「没测成」和「测出来不合格」分开（本次验收器已修，
+  这是 M3 验收里真实存在过的空洞断言）
 - **不要伪造构建/测试结果**：本文件所有数字均为实际执行输出
 - **验收脚本别再犯这 5 个错**（详见第 9.1 节末表）：`netsh` 退出码不可信、
   `-join` 在 PS 5.1 的参数绑定陷阱、自动选网卡必须排除虚拟网卡、

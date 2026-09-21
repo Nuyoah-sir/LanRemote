@@ -39,6 +39,7 @@ internal static class ClientRole
     /// <param name="cancellationToken">Ctrl+C。</param>
     /// <returns>0 = 场景表现符合预期；1 = 不符合预期；2 = 前置条件不满足。</returns>
     public static async Task<int> RunAsync(
+        AcceptanceLog log,
         string scenario,
         string? deviceCode,
         string? address,
@@ -49,9 +50,9 @@ internal static class ClientRole
         using AcceptanceContext context = new(LogLevel.Warning);
         await context.InitializeAsync(cancellationToken);
 
-        Console.WriteLine($"[CLIENT] scenario    = {scenario}");
-        Console.WriteLine($"[CLIENT] deviceCode  = {context.Identity.DeviceCode}");
-        Console.WriteLine($"[CLIENT] certSha256  = {context.Certificate.Sha256FingerprintHex}");
+        log.WriteLine($"[CLIENT] scenario    = {scenario}");
+        log.WriteLine($"[CLIENT] deviceCode  = {context.Identity.DeviceCode}");
+        log.WriteLine($"[CLIENT] certSha256  = {context.Certificate.Sha256FingerprintHex}");
 
         ConnectionTarget target;
 
@@ -59,7 +60,7 @@ internal static class ClientRole
         {
             if (string.IsNullOrWhiteSpace(address) || string.IsNullOrWhiteSpace(pinHex))
             {
-                Console.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=missing --address/--pin");
+                log.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=missing --address/--pin");
                 return 2;
             }
 
@@ -70,7 +71,7 @@ internal static class ClientRole
                     pinHex,
                     out ConnectionTarget? direct) || direct is null)
             {
-                Console.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=bad-target");
+                log.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=bad-target");
                 return 2;
             }
 
@@ -80,7 +81,7 @@ internal static class ClientRole
         {
             if (string.IsNullOrWhiteSpace(deviceCode))
             {
-                Console.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=missing --device-code");
+                log.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=missing --device-code");
                 return 2;
             }
 
@@ -89,28 +90,29 @@ internal static class ClientRole
             DiscoveredDevice? peer = await WaitForPeerAsync(context, deviceCode, cancellationToken);
             if (peer is null)
             {
-                Console.WriteLine($"[CLIENT][RESULT] outcome=FAIL reason=peer-not-found deviceCode={deviceCode}");
+                log.WriteLine($"[CLIENT][RESULT] outcome=FAIL reason=peer-not-found deviceCode={deviceCode}");
                 return 2;
             }
 
-            Console.WriteLine(
+            log.WriteLine(
                 $"[CLIENT] peer        = {peer.DeviceCode} {peer.Address}:{peer.Port} pin={peer.CertificateSha256}");
 
             if (!ConnectionTarget.TryCreate(peer, out ConnectionTarget? frozen) || frozen is null)
             {
-                Console.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=snapshot-rejected");
+                log.WriteLine("[CLIENT][RESULT] outcome=FAIL reason=snapshot-rejected");
                 return 2;
             }
 
             target = scenario == ScenarioPinMismatch
-                ? RebuildWithWrongPin(peer)
+                ? RebuildWithWrongPin(log, peer)
                 : frozen;
         }
 
-        return await ExecuteAsync(scenario, target, cancellationToken);
+        return await ExecuteAsync(log, scenario, target, cancellationToken);
     }
 
     private static async Task<int> ExecuteAsync(
+        AcceptanceLog log,
         string scenario,
         ConnectionTarget target,
         CancellationToken cancellationToken)
@@ -124,12 +126,12 @@ internal static class ClientRole
         if (scenario is ScenarioPinMismatch or ScenarioCrossSubnet)
         {
             bool open = await ProbeTcpAsync(target.RemoteAddress, target.Port, cancellationToken);
-            Console.WriteLine($"[CLIENT] tcpProbe     = {(open ? "open" : "unreachable")} " +
+            log.WriteLine($"[CLIENT] tcpProbe     = {(open ? "open" : "unreachable")} " +
                               $"{target.RemoteAddress}:{target.Port}");
 
             if (!open)
             {
-                Console.WriteLine(
+                log.WriteLine(
                     $"[CLIENT][RESULT] outcome=FAIL reason=peer-port-unreachable " +
                     $"address={target.RemoteAddress}:{target.Port} " +
                     $"// 对端 TLS 端口连不上，无法判定「被拒绝」；请先在对端跑 host 角色");
@@ -148,12 +150,12 @@ internal static class ClientRole
         catch (Exception ex)
         {
             string type = ex.GetType().FullName ?? ex.GetType().Name;
-            Console.WriteLine($"[CLIENT] handshake failed: {type}: {ex.Message}");
+            log.WriteLine($"[CLIENT] handshake failed: {type}: {ex.Message}");
 
             // 连都没连上 ≠ 被拒绝。这属于前置条件不满足，不是 PASS。
             if (LooksLikeNothingListening(ex))
             {
-                Console.WriteLine(
+                log.WriteLine(
                     $"[CLIENT][RESULT] outcome=FAIL reason=peer-port-unreachable " +
                     $"handshake={type} // TCP 层就没连上，同闸门/pinning 未被触及");
                 return 2;
@@ -164,6 +166,7 @@ internal static class ClientRole
                 scenario is ScenarioPinMismatch or ScenarioCrossSubnet;
 
             return Report(
+                log,
                 expected,
                 expected
                     ? "握手按预期被拒绝"
@@ -173,14 +176,14 @@ internal static class ClientRole
 
         using (connection)
         {
-            Console.WriteLine(
+            log.WriteLine(
                 $"[CLIENT] tls ok: proto={connection.NegotiatedProtocol} " +
                 $"presentedPin={Convert.ToHexString(connection.Identity.PresentedCertSha256.Span)}");
 
             // ② 按场景说话（或故意不说）
             if (scenario == ScenarioTimeout)
             {
-                Console.WriteLine("[CLIENT] 故意不发 hello，等服务端按 pre-auth 时限切断……");
+                log.WriteLine("[CLIENT] 故意不发 hello，等服务端按 pre-auth 时限切断……");
             }
             else
             {
@@ -188,16 +191,17 @@ internal static class ClientRole
                     connection.Stream,
                     TimeSpan.FromSeconds(5),
                     cancellationToken);
-                Console.WriteLine("[CLIENT] hello sent");
+                log.WriteLine("[CLIENT] hello sent");
             }
 
             // ③ 读回来：服务端收尾后这里必然是 EOF 或异常。
             CloseObservation close = await WaitForPeerCloseAsync(connection, cancellationToken);
-            Console.WriteLine($"[CLIENT] readBack    = {close.Kind} // {close.Detail}");
+            log.WriteLine($"[CLIENT] readBack    = {close.Kind} // {close.Detail}");
 
             return scenario switch
             {
                 ScenarioTimeout => Report(
+                    log,
                     close.Closed,
                     close.Closed
                         ? $"服务端在 pre-auth 时限内切断（{close.Kind}）"
@@ -205,6 +209,7 @@ internal static class ClientRole
                     ("peerClosed", close.Kind)),
 
                 ScenarioSuccess => Report(
+                    log,
                     close.Closed,
                     close.Closed
                         ? $"hello 已被接受、服务端干净关闭（{close.Kind}）"
@@ -212,7 +217,7 @@ internal static class ClientRole
                     ("peerClosed", close.Kind)),
 
                 // 走到这里说明握手竟然成功了——指纹不符/跨子网都不该如此。
-                _ => Report(false, "本该被拒绝却握手成功", ("handshake", "succeeded")),
+                _ => Report(log, false, "本该被拒绝却握手成功", ("handshake", "succeeded")),
             };
         }
     }
@@ -315,13 +320,17 @@ internal static class ClientRole
         return false;
     }
 
-    private static int Report(bool pass, string detail, params (string Key, string Value)[] fields)
+    private static int Report(
+        AcceptanceLog log,
+        bool pass,
+        string detail,
+        params (string Key, string Value)[] fields)
     {
         string joined = string.Join(
             " ",
             fields.Select(field => $"{field.Key}={field.Value}"));
 
-        Console.WriteLine($"[CLIENT][RESULT] outcome={(pass ? "PASS" : "FAIL")} {joined} // {detail}");
+        log.WriteLine($"[CLIENT][RESULT] outcome={(pass ? "PASS" : "FAIL")} {joined} // {detail}");
         return pass ? 0 : 1;
     }
 
@@ -362,7 +371,7 @@ internal static class ClientRole
     /// <summary>
     /// 把期望指纹改成另一个合法但不同的 64 位十六进制串。
     /// </summary>
-    private static ConnectionTarget RebuildWithWrongPin(DiscoveredDevice peer)
+    private static ConnectionTarget RebuildWithWrongPin(AcceptanceLog log, DiscoveredDevice peer)
     {
         string wrong = new string('0', 63) + "1";
         if (string.Equals(wrong, peer.CertificateSha256, StringComparison.OrdinalIgnoreCase))
@@ -370,7 +379,7 @@ internal static class ClientRole
             wrong = new string('F', 64);
         }
 
-        Console.WriteLine($"[CLIENT] 期望指纹被替换为 {wrong}（原值 {peer.CertificateSha256}）");
+        log.WriteLine($"[CLIENT] 期望指纹被替换为 {wrong}（原值 {peer.CertificateSha256}）");
 
         bool created = ConnectionTarget.TryCreate(
             peer.DeviceId,
@@ -394,7 +403,23 @@ internal static class ClientRole
     private static readonly Guid CrossSubnetPeerId =
         Guid.Parse("00000000-0000-0000-0000-000000000001");
 
-    /// <summary>给手册用的场景清单。</summary>
+    /// <summary>
+    /// UI 依次要跑的场景。
+    /// </summary>
+    /// <remarks>
+    /// <b>刻意不含 <see cref="ScenarioCrossSubnet"/></b>：它要求控制端到被控端监听地址的包
+    /// 源 IP 落在另一个子网。这套 lab 是两机同挂 <c>172.100.166.x</c> + <c>192.168.1.x</c>，
+    /// host 只听 RFC1918 绑定，Windows 会自动挑同子网源地址，做不出那个样本；
+    /// <c>New-NetRoute</c> / <c>route add</c> 都不能指定源地址。见 HANDOFF §14.13。
+    /// </remarks>
+    public static readonly string[] MandatoryScenarios =
+    {
+        ScenarioSuccess,
+        ScenarioPinMismatch,
+        ScenarioTimeout,
+    };
+
+    /// <summary>命令行用法里列出的全部场景。</summary>
     public static string UsableScenarios() => string.Join(" | ", new[]
     {
         ScenarioSuccess,

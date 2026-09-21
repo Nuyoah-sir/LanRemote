@@ -3,16 +3,48 @@
   <!-- M3 两机验收器。
        这不是产品代码，是「把 M3 的传输层真正跑起来」的最小入口：
        LanRemote.App 目前只引用了 Transport 但没有调用它，
-       所以不借助这个工具，两台机器上的验收根本碰不到 TLS / pin / hello。 -->
+       所以不借助这个工具，两台机器上的验收根本碰不到 TLS / pin / hello。
+
+       为什么它是 WPF 窗口程序而不是控制台程序：
+       本项目是桌面软件，M2 的两机验收就是两台机器开界面跑的
+       （HANDOFF §9.1：「用户在 B 机界面确认」「B 点刷新」），
+       而且 ADR-024/025/026 的总原则是「终端用户永远不需要打开 PowerShell」。
+       控制台 exe 双击只会打一行用法然后退出，等于要求用户去开终端，
+       这与项目自身的形态约定冲突。所以这里用 WinExe + UseWPF：
+       双击 = 一个窗口，不需要任何脚本。 -->
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <!-- 跟随 Security（DPAPI）：必须是 windows 目标。 -->
+    <OutputType>WinExe</OutputType>
+    <!-- 跟随 Security（DPAPI）+ WPF：必须是 windows 目标。 -->
     <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <RootNamespace>LanRemote.Acceptance</RootNamespace>
     <AssemblyName>LanRemote.Acceptance</AssemblyName>
     <IsPackable>false</IsPackable>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- WPF 会把 13 个语言的资源卫星目录（cs/de/es/fr/it/ja/ko/pl/pt-BR/ru/tr/
+         zh-Hans/zh-Hant）一起发出来。本程序全是中文、界面文案自己写，
+         用不到这些本地化资源，直接限成 en。
+         实测：目录留下但里面 0 个文件（资源被裁掉了），只是把发布目录弄得很脏。 -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- 验收器不需要外部 pdb；embedded 让它进 dll，发布目录干净一点。 -->
+    <DebugType>embedded</DebugType>
+    <!-- 这里【不能】开 InvariantGlobalization。
+         实测：开了之后窗口在首次 Measure 时崩溃 ——
+           System.TypeInitializationException:
+             'MS.Internal.FontCache.MajorLanguages' 的类型初始值设定项引发异常。
+             内层异常 = System.Globalization.CultureNotFoundException:
+                  Only the invariant culture is supported in globalization-invariant mode.
+                  'en' is an invalid culture identifier.
+         WPF 的字体缓存（MS.Internal.FontCache）必须用真实 CultureInfo，
+         invariant 模式下它连 'en' 都解析不了。
+         其他库项目（Core/Transport/…）可以继续开，那是它们自己的 runtimeconfig，互不影响。
+         顺便纠正一个我一开始写错的猜测：Windows 上 .NET 用【系统 ICU】，
+         包里不会多出 icu*.dat；改成 WPF 后体积从 77.8 涨到 132 MiB 全部来自
+         WPF 自己的程序集（PresentationFramework/Core、wpfgfx、D3DCompiler 等约 39 MiB）
+         和 WindowsDesktop 那一整套，跟 globalization 无关。 -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- WinExe 下 Console.WriteLine 没有宿主；所有输出走 AcceptanceLog。 -->
+    <DisableTransitiveProjectReferences>false</DisableTransitiveProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>

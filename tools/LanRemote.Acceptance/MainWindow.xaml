@@ -1,0 +1,119 @@
+<Window x:Class="LanRemote.Acceptance.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="LanRemote M3 两机验收器"
+        Width="900" Height="700"
+        MinWidth="720" MinHeight="520"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <Style x:Key="MonoText" TargetType="TextBox">
+            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style x:Key="MonoLabel" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style x:Key="Wrap" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,2,0,2" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题 + 说明 -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock FontSize="16" FontWeight="SemiBold" Text="LanRemote M3 两机验收器" />
+            <TextBlock Style="{StaticResource Wrap}" Foreground="#555" FontSize="12">
+                两台机器都要先跑 set-lab-ip.ps1（管理员）进入 192.168.1.0/24，然后各启动本程序：
+                一台选「被控端」先开始监听，另一台选「控制端」填入对端设备码后开始验收。
+            </TextBlock>
+        </StackPanel>
+
+        <!-- 本机身份 -->
+        <GroupBox Grid.Row="1" Header="本机身份与网络（自动检测）">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,2" Text="设备码" />
+                <TextBlock Grid.Row="0" Grid.Column="1" Style="{StaticResource MonoLabel}"
+                           x:Name="DeviceCodeText" Text="检测中…" FontWeight="SemiBold" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,2" Text="证书指纹" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource MonoLabel}"
+                           x:Name="CertPinText" Text="检测中…" TextTrimming="CharacterEllipsis" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,2" Text="监听地址" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource MonoLabel}"
+                           x:Name="ListenText" Text="检测中…" TextWrapping="Wrap" />
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,2" Text="状态" />
+                <TextBlock Grid.Row="3" Grid.Column="1" x:Name="ReadyText" Text="检测中…"
+                           FontWeight="SemiBold" TextWrapping="Wrap" />
+            </Grid>
+        </GroupBox>
+
+        <!-- 角色 -->
+        <GroupBox Grid.Row="2" Header="这台机器的角色">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button x:Name="HostButton" Content="本机作为被控端（开始监听）"
+                            Click="HostButton_Click" Margin="0,0,8,0" />
+                    <Button x:Name="StopHostButton" Content="停止监听"
+                            Click="StopHostButton_Click" IsEnabled="False" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="1" Orientation="Horizontal">
+                    <TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="对端设备码" />
+                    <TextBox x:Name="PeerCodeBox" Width="140" VerticalAlignment="Center"
+                             Style="{StaticResource MonoText}" MaxLength="9" />
+                    <Button x:Name="ClientButton" Content="本机作为控制端（跑三个场景）"
+                            Click="ClientButton_Click" Margin="8,0,0,0" />
+                    <Button x:Name="StopClientButton" Content="中止" IsEnabled="False"
+                            Click="StopClientButton_Click" Margin="8,0,0,0" />
+                </StackPanel>
+            </Grid>
+        </GroupBox>
+
+        <!-- 日志 -->
+        <GroupBox Grid.Row="3" Header="日志（验收证据，请整段拷走）">
+            <TextBox x:Name="LogBox" Style="{StaticResource MonoText}"
+                     IsReadOnly="True" AcceptsReturn="True"
+                     VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Auto"
+                     TextWrapping="NoWrap" />
+        </GroupBox>
+
+        <!-- 底部 -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="复制全部日志" Click="CopyLog_Click" Margin="0,0,8,0" />
+            <Button Content="清空日志" Click="ClearLog_Click" Margin="0,0,8,0" />
+            <Button Content="打开日志目录" Click="OpenFolder_Click" Margin="0,0,8,0" />
+            <TextBlock VerticalAlignment="Center" Foreground="#666" FontSize="11"
+                       x:Name="LogPathText" />
+        </StackPanel>
+    </Grid>
+</Window>
