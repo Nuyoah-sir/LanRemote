@@ -132,8 +132,13 @@ KU 只 digitalSignature（ADR-021）；**禁止静默自动重签证书**。
 
 - **ADR-024** 网络诊断进 UI（M9）；**ADR-025** 防火墙一键内置 App + UAC（M10，
   只放行 LocalSubnet、可精确撤销）；**ADR-026** 临时私有地址一键（不早于 M10，排除虚拟网卡、幂等撤销）
-- 首启体验问题（用户原话「运行后就应该能看到在线设备」）已写设计红队 prompt：
-  `docs/UX_FIRST_RUN_REVIEW_PROMPT.md`（**待转发**）；回来后分流到 `docs/UX_FIRST_RUN_REVIEW_TRIAGE.md`
+- **2026-09-21 增补生效**：首启 UX 评审（第三轮）已分流 → `docs/UX_FIRST_RUN_REVIEW_TRIAGE.md`；
+  **新增 ADR-035**（提权模型：主进程非提权 + 窄域 helper 固定动词集 / TOCTOU / UAC 拒绝不循环）
+  / **ADR-036**（永不自动改网络类别；可达性自足于 `Profile Any + LocalSubnet4` 规则）；
+  ADR-024/025/026 各增补（三就绪、规则模板 + Repair、Advanced 定位等）。M9/M10 施工按修订版执行
+- **已实测（M10 时别重跑）**：绑路径规则在目录移动后**静默悬挂**（Enabled=True、Program 指旧路径；
+  检测 = 读回 Program 比对）；`Set-NetFirewallRule` 支持 `-Program`；**原地修复保 InstanceID**
+  （删除+重建会换 ID）；`LocalSubnet4` 可写可读；lab 规则是宽规则（Program/RemoteAddress=Any，勿照抄）
 - M3 明确不做 ADR-024/025/026——**等对应里程碑开工指令**，不要插队
 
 ## 本机残留（非阻断）
