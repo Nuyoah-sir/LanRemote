@@ -1,30 +1,29 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 20:55 (+08:00)**
+> 更新时间：**2026-09-21 22:05 (+08:00)**
 >
-> 本轮（M3 第 24 步 · 续「一键准备本机」）**动了代码**：全部在
-> `tools/LanRemote.Acceptance/`（验收器）与 `scripts/acceptance/set-lab-ip.ps1` 里，
-> **`src/` 一行未动、产品行为零改变**。
+> 本轮（**M4 开工 · 阶段 0「衔接盘点与定案」**）**动了代码**：
+> `src/LanRemote.Discovery/DiscoveryDeviceCache.cs`（ADR-027 身份冲突语义落地）与两处测试
+> （`DiscoveryDeviceCacheTests` +8、`TlsClientConnectorTests.Frozen_Pin...` 有意识改写）；
+> 其余为定案文档（`docs/DECISIONS.md`：ADR-027 修订 + 新增 ADR-037/038）。
 >
-> 本轮的实质内容：**把「准备 lab 网段」做进窗口（ADR-035 落地）+ 抓到并修掉 3 个真缺陷
-> + 手册补一键路径**。逐条见 §15「24.8」。
->
-> 起因：用户第三次指出「这程序不是可以管理员模式打开吗，怎么还要求手动跑脚本」——
-> 核对后确认验收器**当时确实没有**配置能力（是功能没做，不是权限问题），
-> 于是按用户裁定「等一键做好再用」补齐。
+> 本轮的实质内容：**把「PreAuthenticated 之后」的衔接与 M4 认证协议全部定案并写成 ADR +
+> 落地 ADR-027**（发现层身份冲突：同 deviceId 不同指纹不再静默覆盖，标记冲突禁用入口）。
+> 逐条见 §18.5。
 >
 > **2026-09-21 晚补记**：第二轮外部评审已回收并按纪律分流
 > （`docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`；两处缺陷级发现：transcript 拆分、pre-auth 外层信封）。
-> 计划修订见 §18.4。补记轮**未动代码**。
+> 计划修订见 §18.4。
 
 ---
 
 ## 1. 当前状态
 
-- **当前里程碑：M3.1 加固 —— 已完成（2026-09-21，单机全量验证 601 PASS；执行记录见 §18.4 A 节）**
-- **下一里程碑：M4 — Access Key Challenge Auth —— 计划草案已立（见第 18 节），等开工**
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1**
+- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0 完成（2026-09-21；
+  盘点定案 + ADR-027 落地件；单机全量验证 609 PASS；执行记录见 §18.5）**
+- **下一里程碑步骤：M4 阶段 1 —— transcript + HMAC proof（纯函数核心）**
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
 - **Last code commit：`2dee00c`**（M3.1 加固：pre-auth 外层信封 + 停机报告 + 测试补强
   B15/B16/B18/B19/B20 + 验收器同步；上一条代码提交 `1d5ffc8` = M3 第 24 步「一键准备本机」）。
@@ -1720,11 +1719,13 @@ Private（B 机为 `already Private`）。类别还原逻辑自 v3 起存在（�
     （防滑动窗口），但**顺序执行即可加和**（5 s + 10 s = 15 s）；8 个准入槽循环占用依旧成立。
     凡「多段顺序等待」的场景必须显式外层信封 + 专项测试——M3.1 落地 `PreAuthEnvelopeTimeout`（§18.4）。
 
-## 18. 下一步 —— M4（Access Key Challenge Auth）· 计划草案
+## 18. 下一步 —— M4（Access Key Challenge Auth）· 计划与执行
 
-**状态：等开工。**（M3 已全链闭环：24 步 + 两机验收 PASS + 两机 lab 还原；仓库已推 GitHub。）
+**状态：进行中。**阶段 0（衔接盘点与定案）**已完成（2026-09-21）**，含 ADR-027 落地件；
+执行记录见 §18.5，下一步为阶段 1（transcript + HMAC 纯函数核心）。
+（M3 已全链闭环：24 步 + 两机验收 PASS + 两机 lab 还原；仓库已推 GitHub。）
 本计划按 `LanRemote_Implementation_Package/04_PROTOCOL_AND_SECURITY.md` §9/§14/§15 +
-`07_MILESTONES_AND_TASKS.md` M4 编制；**开工第一件事是阶段 0 的源码盘点**，届时本文档按盘点结论修订。
+`07_MILESTONES_AND_TASKS.md` M4 编制；阶段 0 的盘点结论已落为 ADR-037/038（`docs/DECISIONS.md`）。
 
 **规格任务（9 项）**：AuthChallenge；canonical transcript builder；HMAC proof；server proof；
 timeout；failed auth limiter；local approval dialog；sessionToken；session registry。
@@ -1752,19 +1753,18 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 
 ### 18.2 阶段划分（草案，21 步）
 
-**阶段 0 —— 衔接盘点与定案（开工第一件事）**
+**阶段 0 —— 衔接盘点与定案（开工第一件事）—— ✅ 已完成（2026-09-21，见 §18.5）**
 
-1. 读 `ControlPreAuthSession` / `ControlSessionState` / `TransportHost` 现状，定
-   「PreAuthenticated 之后」的衔接：在 `ControlPreAuthSession` 内续跑认证 vs 新层
-   （M3 步骤 21 选了干净关闭，**没有**预留 `AwaitingAuthentication` 占位）。
-2. 定 `AllowedOperationsWhilePreAuthenticated` 的 M4 改造形式与门禁测试的改写。
-3. ADR-027 `IdentityConflict` 定案（`DiscoveryDeviceCache` 冲突字段与丢弃策略）。
-4. 第二轮外部评审输入准备（M3 实现红队 + 错误消息分类 + 五个 deadline 数值；
-   prompt 参照 `docs/M3_EXTERNAL_REVIEW_PROMPT.md` 模式）。**发布 / 回收需用户通道。**
-   - **2026-09-21 已备好**：`docs/M3_IMPLEMENTATION_REVIEW_PROMPT.md`（已转发）。Prompt A = M3 实现红队
-     （五段 deadline 数值 / 失败消息分类学 / 实现层遗漏）；Prompt B = M4 阶段 0 决策输入（衔接层 + 本地审批边界）。
-   - **2026-09-21 晚已回收**：评审返回 → 分流 `docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`
-     （两处缺陷级发现：transcript 拆分 / pre-auth 外层信封）。修订落 §18.4。
+1. ✅ 读 `ControlPreAuthSession` / `ControlSessionState` / `TransportHost` 现状，定
+   「PreAuthenticated 之后」的衔接：**定案 (b) 显式交接**，落为 **ADR-037**
+   （`ControlPreAuthHandoff` 线性所有权 + exactly-once + `ConnectionSecurityContext` 冻结传递；
+   M3 的「成功即干净关闭」终态被显式交接取代）。
+2. ✅ 定 `AllowedOperationsWhilePreAuthenticated` 的 M4 改造形式与门禁测试的改写：**恰好一项
+   `"begin-authentication"`**；旧空集合测试**有意识改写**（精确集合 + exactly-once 行为），
+   见 ADR-037 第 5 条。
+3. ✅ ADR-027 `IdentityConflict` 定案（`DiscoveryDeviceCache` 冲突字段与丢弃策略）——
+   **并已随本阶段落地**（实现 + 8 条新测试 + 1 处既有测试有意识改写；见 §18.5）。
+4. ✅ 第二轮外部评审输入：已回收（2026-09-21，见 §18.4）。
 
 **阶段 1 —— transcript + HMAC proof（纯函数核心）**
 
@@ -1812,13 +1812,15 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 21. 全量 `build` + `test` + 端到端演练 + HANDOFF 记账；视情复用 M3 验收器模式组织两机演练
     （**不新增脚本形态**——验收器必须保持「双击即 GUI」）。
 
-### 18.3 未决点（阶段 0 / 用户对齐）
+### 18.3 未决点（阶段 0 / 用户对齐）—— 均已关闭
 
 - 衔接层位置：**已定 (b)**——显式交接（`ControlPreAuthSession → ControlAuthSession`），
   评审与本机基线一致；增强件（线性所有权对象、exactly-once、测试改写）见 §18.4。
+  **已落为 ADR-037（2026-09-21）。**
 - `local approval dialog` 的 M4 边界：**已拍板 (b)（2026-09-21）**——`ILocalApprovalGate` 库真接口
   + 单测替身 + 验收器最小审批面（评审论证推翻了本机此前 (a) 倾向；本机采纳评审论证）。
   产品 WPF UI 仍不动。
+- ADR-027 冲突字段与丢弃策略：**已定案并落地（2026-09-21）**——ADR-027 修订段 + §18.5 C 节。
 - 第二轮外部评审的时机：**已回收**（2026-09-21，先行完成，见 §18.4）。
 
 ### 18.4 第二轮外部评审结论 → 计划修订（2026-09-21 回收）
@@ -1881,3 +1883,54 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 - 审批机制边界：评审建议 (b)（验收器加最小审批面）vs 本机此前 (a)（纯抽象 + 替身）——
   用户已确认 **(b)**：`ILocalApprovalGate` 库真接口 + 单测替身 + 验收器最小审批面。
   M4 阶段 0 的审批设计按 (b) 落地。
+
+---
+
+### 18.5 阶段 0 执行记录（2026-09-21）—— 衔接盘点 / 定案 / ADR-027 落地
+
+**A. 源码盘点结论（读代码得出的事实，非推测）**
+
+- `ControlPreAuthSession.RunAsync` 成功路径 = `State=PreAuthenticated` → **立即 `ShutdownAsync`** →
+  返回 `ControlPreAuthResult(true, PreAuthenticated, null)`；结果类型**不携带**任何续行对象
+  （无流 / 无身份 / 无 connectionId）。M3 步骤 21 有意没做 `AwaitingAuthentication` 占位 → 衔接必须显式。
+- `AcceptedConnection` 只有 `(LocalAddress, RemoteAddress, RemotePort, Stream, NegotiatedProtocol)`——
+  **无 connectionId、无服务端证书指纹** → M4 需要 `ConnectionSecurityContext` 补这两样（ADR-037 第 3 条）。
+- 唯一产品级接线点 = 验收器 `HostRole`（`new ControlPreAuthSession()`）；`LanRemote.App` 未接线
+  （「别拿 `LanRemote.App` 验传输层」依旧成立）。
+- 门禁测试 = `PreAuthenticated_Allows_Nothing_Before_M4`（`Assert.Empty`）——改写方案见 ADR-037 第 5 条。
+- 流所有权：`TransportHost.HandleAsync` 的 `finally` 释放（Host 是最终拥有者）——M4 交接不改变这一点。
+
+**B. 定案产出（`docs/DECISIONS.md`）**
+
+- **ADR-027 修订**：M4 阶段 0 实现定案（冲突字段 `Entry { Device, Conflicts }` / 每目 8 条上限 /
+  `IsIdentityConflicted` 惰性清除 / 主条目整体过期的显式边界）。
+- **新增 ADR-037**：M4 衔接层（显式交接 + 线性所有权 `ControlPreAuthHandoff` + exactly-once +
+  `ConnectionSecurityContext` 冻结传递 + `ControlSessionState` 扩展 + allowed-ops 恰好一项 +
+  流所有权链 + 认证成功后的连接归宿 + 4 KiB 帧上限沿用 + 旧测试改写清单）。
+- **新增 ADR-038**：M4 认证协议定案（**双 transcript 拆分**含精确字节布局 / `server\0` 域前缀 /
+  限流只计「到达密码学校验且失败」 / 审批 v1「每个新连接都要批」+ PendingApproval 配额 3/1 /
+  时限初值 10s + 60s（provisional） / DoD 两个可执行形式）。
+
+**C. ADR-027 落地件（本阶段唯一的代码改动）**
+
+- `DiscoveryDeviceCache`：`Dictionary<Guid, DiscoveredDevice>` → `Dictionary<Guid, Entry>`；
+  `Upsert` 分流（同指纹照旧 last-write-wins；异指纹只记冲突、不覆盖主条目）；
+  新增 `IsIdentityConflicted` / `ConflictingFingerprintCount`；冲突与条目过期清理。
+- 测试：`DiscoveryDeviceCacheTests` **+8**（ADR 验证 ①②③ + 大小写不敏感 + 冲突被刷新则持续 +
+  主条目整体过期边界 + 上限有界 + unknown）；**既有测试 1 处有意识改写**：
+  `TlsClientConnectorTests.Frozen_Pin_Survives_Discovery_Cache_Mutation_Mid_Handshake`——
+  M3 版本假设「缓存会被 last-write-wins 换指纹」，ADR-027 落地后该假设失效；改写后同时断言
+  「投毒不落地（主条目保持 pinA + 冲突被标记）」与「冻结快照不受影响」+ 伪造目标必失败
+  （验证面比 M3 版本更宽）。**测试名保留**（3 处文档引用：TRIAGE / 本节 / §16 表）。
+- 变异验证（3 次；恢复后均以 `git diff` + `grep TEMP-MUTATION` 确认干净）：
+  - α「静默覆盖」（恢复旧行为）：Protocol **4 红**（4 条冲突用例精确命中）；
+  - γ 重放 α（验证改写后的 `Frozen_Pin`）：该测试亦红——**共 5 红**，两条防线都被测到；
+  - β「不清理过期冲突」：**精确 1 红**（`Conflict_Clears_AfterConflictingObservation_Expires`）。
+- 全量验证：Debug `dotnet build` **0 警告 0 错误**；`dotnet test` **609 PASS / 0 FAIL**
+  （Protocol 223 + Transport 192 + Core 125 + Security 66 + Integration 3）。
+
+**D. 遗留 / 下一站**
+
+- 下一站 = 阶段 1（transcript + HMAC proof 纯函数核心）；落地时同步
+  `docs/PROTOCOL_AND_SECURITY.md` 工作副本与 ADR-038 的差异（**以 ADR-038 为准**）。
+- 两机验收重跑仍不急：物料需重打（本轮已含 Discovery 改动），归入 M4 收口批次。

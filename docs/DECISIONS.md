@@ -333,7 +333,30 @@
 **可逆性**：可逆，但属于安全收紧，不建议回退。
 **验证**：三条用例——① `A/X@IP1` 后 `A/X@IP2` → **无**冲突；② `A/X` 后 `A/Y` → 冲突且连接被禁用；
 ③ 所有 `Y` 观察过期后 → 冲突可清除。
-**实施时机**：**M4**（最晚），**不在 M3**。
+**实施时机**：**M4**（最晚），**不在 M3**。→ 实际落地：**M4 阶段 0 落地件**（2026-09-21，见下）。
+
+**M4 阶段 0 实现定案（2026-09-21）——「冲突字段与丢弃策略」**：
+
+6. `DiscoveryDeviceCache` 内部存储改为 `Dictionary<Guid, Entry>`；
+   `Entry = { DiscoveredDevice Device; Dictionary<string, DateTimeOffset> Conflicts }`
+   （其他指纹 → 最近观察时刻）。指纹键用 `StringComparer.OrdinalIgnoreCase`
+   （生产路径已由 evaluator 规范化为 64 字符大写 hex；缓存对直接 API 调用方的任意大小写稳健）。
+7. `Upsert` 分流：同 deviceId 且指纹 ≠ 主条目指纹 → **只记冲突观察、不覆盖主条目**（即「不二选一」）；
+   同指纹（含不同 IP/端口）→ 照常 last-write-wins 更新（良性多网卡路径与 M2 语义不变）。
+   冲突观察的 `isNew` 返回 `false`（设备不算「新」）。
+8. 冲突记录**有界**：每条目最多 8 条；超出先清自己的过期项，仍满则淘汰最旧一条。
+   持续推送新指纹的攻击者 = 冲突标记持续存在（预期行为）；内存上界 = 8 × 64 字符 × `MaxCachedDevices`。
+9. 查询 API：`bool IsIdentityConflicted(Guid deviceId, DateTimeOffset now)`——
+   查询时先惰性清除该条目中过期（> TTL）的冲突记录，再判断是否非空。
+   时间由调用方传入（与既有 `RemoveExpired` / `Upsert` 风格一致，单测无需 sleep）。
+10. **显式边界（诚实写出）**：主条目整体过期 → 整条移除（含冲突记录）。
+    含义：`X` 的最后一次观察超过 TTL 后缓存退化为「从未见过 X」；若此时 `Y` 仍在广播，
+    `Y` 会作为新条目进入——这是 TTL 语义的一部分，v1 **不做跨 TTL 的身份记忆**
+    （ADR-027 第 4 条已排除持久化）。可接受性论证：discovery 条目从不是信任源
+    （连接仍须 pin + 访问密钥认证），该边界只影响「显示」，危害仍是「连错对象」而非「拿到授权」。
+11. 落地范围（M4）：cache 语义 + 单测。「禁用连接入口」的**消费点**（UI 呈现与点击拦截）
+    在 UI 里程碑接入；M4 不新增 App 侧消费，验收器不加相关场景。
+    「改动后需重跑两机验收」→ 归入 M4 收口的验证批次。
 
 ### ADR-028 — M3→M4 身份绑定契约：transcript 必须绑定「M3 实际出示的」证书指纹
 **日期**：2026-09-21（M3 红队评审产出）  
@@ -679,3 +702,130 @@ System.Security.Authentication.AuthenticationException:
 **硬约束**：只读是允许的，写入（任何形式）是禁止的。  
 **可逆性**：属于安全姿态收紧，不建议回退。  
 **实施时机**：立即（约束后续所有实现）；M10 落地检查。
+
+---
+
+### ADR-037 — M4 衔接层：`ControlPreAuthSession → ControlAuthSession` 显式交接（线性所有权 + exactly-once）
+**日期**：2026-09-21（M4 阶段 0 源码盘点定案；评审建议 (b) 与本机基线一致）  
+**Decision**：
+
+1. **衔接形态 (b) 显式交接，取代 M3 的「成功即干净关闭」终态**。
+   `ControlPreAuthSession.RunAsync` 成功路径**不再**调用 `ShutdownAsync`；它在
+   `PreAuthenticated` 状态上停下，并把「活着的流 + 冻结的安全上下文」交给一个
+   **一次性（线性所有权）交接对象** `ControlPreAuthHandoff`。
+   M3 的干净关闭是「没有后继」时的正确终态；M4 有了后继，关闭时机随所有权一并移交。
+2. **交接对象 `ControlPreAuthHandoff`** 持有：
+   - `SslStream Stream`（活的；pre-auth 会话此后不得再触碰它）；
+   - `ConnectionSecurityContext Security`（冻结值，见第 3 条）；
+   - `BeginAuthentication(...)`：**exactly-once**——用 `Interlocked.Exchange` 把
+     「`PreAuthenticated` 只允许一次 `BeginAuthentication` 转移」做成可执行形式；
+     第二次调用抛 `InvalidOperationException`（与 `RunAsync` 的「每实例只跑一次」同风格）。
+     它返回 `ControlAuthSession`（每个连接一个实例；其 `RunAsync` 同样只允许一次）。
+3. **`ConnectionSecurityContext`（冻结传递；评审点名）**：本连接的安全事实快照，
+   在 `TransportHost` 接受连接后即构造（`AcceptedConnection` 携带），字段：
+   `ConnectionId`（每连接 `Guid.NewGuid()`，日志/会话关联用）、
+   `LocalAddress` / `RemoteAddress` / `RemotePort` / `NegotiatedProtocol`、
+   `ServerCertificateSha256`（**本机服务端证书** DER 的 SHA-256，32 字节）。
+   `auth_challenge` 的 `certSha256` 字段**必须**从该上下文派生（uppercase hex），
+   保证「challenge 声称的指纹 = 本连接实际出示的证书」。
+   实现形态：`AcceptedConnection` 收编为 `(ConnectionSecurityContext Security, SslStream Stream)` +
+   便利转发属性（既有消费点不破）；落地与阶段 3 同批。
+4. **`ControlSessionState` 扩展**（一个枚举，不另立平行枚举）：
+   `AwaitingHello / PreAuthenticated / Authenticating / Authenticated / Closed`。
+   `PreAuthenticated` 是交接点状态；`Authenticating` 由 `ControlAuthSession` 推进；
+   `Authenticated` 只在认证成功后出现（DoD「auth success 才能有 session」的对应状态）；
+   其余失败/停机一律 `Closed`。后续里程碑（Video Attach 等）继续扩展本枚举。
+5. **`AllowedOperationsWhilePreAuthenticated` 的 M4 形态：恰好一项 `"begin-authentication"`**。
+   门禁测试**有意识改写而非删除**：
+   - `PreAuthenticated_Allows_Nothing_Before_M4` → 改写为**精确集合相等**
+     （`["begin-authentication"]`；任何人加第二项即红），注释保留 M3 原文与改写理由；
+   - 新增行为门禁：第二次 `BeginAuthentication` 抛 `InvalidOperationException`（exactly-once 可执行形式）。
+6. **流所有权链闭合**：Host（socket 生到死）→ pre-auth 会话（读 hello 止）→ handoff →
+   auth 会话（读 response / 写 challenge+success）→ 认证成功（连接保持，承载 session）或失败（关闭）。
+   任何路径的最终释放仍在 `TransportHost.HandleAsync` 的 `finally`——所有权转移**不改变**
+   「Host 是 socket 最终拥有者」这一 M2 起的事实。
+7. **M4 内「认证成功」的归宿**：注册 session（`SessionRegistry`）+ **连接保持打开**
+   （session 的宿主；规格 04 §10「session 断开立即废弃」）。M4 尚无 control 消息消费方，
+   行为定义到「保持直到客户端断开或停机」为止。
+8. **帧上限沿用 pre-auth 4 KiB（ADR-033）**：challenge / response / approval_pending /
+   auth_success 全在认证完成前，读取一律走 `MaxPreAuthMessageBytes`；
+   auth 帧解析照 `HelloFrame` 模式（严格 JSON：无重复键 / 无未映射成员 / 显式 MaxDepth /
+   拒绝尾随数据 / 非法 UTF-8 不兜底）。
+
+**Context**：M3 步骤 21 有意选择「hello 后干净关闭」，**没有**预留 `AwaitingAuthentication` 占位——
+所以 M4 的衔接必须是显式的（这正是评审建议 (b) 与本机盘点的结论，见 HANDOFF §18.2 阶段 0）。
+线性所有权 + exactly-once 直指两个具体失败模式：①「pre-auth 会话已经交出去了，
+有人还拿着旧引用读流」（两个读者同时消费一条流）；②「同一连接开两次认证」
+（第二份 challenge/response 重放面）。
+**Consequence**：M3 的以下证据点将被改写而不是保留：
+① `Valid_Hello_Reaches_PreAuthenticated_And_Closes` 测试（主题从「关闭」变为「成功交接」）；
+② 验收器 `HostRole` 的 `localShutdownSent=best-effort` UNOBSERVED 行（关闭时机语义变了）；
+③ 验收器客户端「等对端关闭」判据（阶段 4/5 随认证流程重写）。
+**可逆性**：不可退——M3 的「成功后立刻关」在 M4 语义下就是「认证永远不能发生」。
+**验证**：门禁测试改写 + exactly-once 行为测试 + 「第二次 BeginAuthentication」红测；
+流所有权由「交接后 pre-auth 会话不再持有可用流」的结构保证（类型层面）。
+**实施时机**：M4 阶段 3（服务端状态机）落地；门禁测试改写与实现同批（写了才有 → 能测）。
+
+---
+
+### ADR-038 — M4 认证协议定案：双 transcript 拆分、serverProof 绑 grant、限流口径、审批 v1 语义
+**日期**：2026-09-21（第二轮外部评审结论落地；HANDOFF §18.4 B 的 ADR 化）  
+**Decision**：
+
+1. **transcript 拆两个**（修复评审最重要的设计发现：「双 proof 同 transcript，无法绑定尚未决定的
+   `grantedPermission`」）。以规格 04 §9 建议为基础，**精确字节布局定案如下**
+   （`\0` 为单字节 0x00；字段值编码：uuid/枚举按 UTF-8 串、nonce 按 base64 canonical、
+   指纹按 uppercase hex；空值不存在——每个字段必选）：
+   ```text
+   ClientAuthTranscript =
+     "LANREMOTE-AUTH-V1\0"
+     sessionId "\0"
+     serverDeviceId "\0"
+     clientDeviceId "\0"
+     serverNonce(base64) "\0"
+     clientNonce(base64) "\0"
+     certSha256(UPPER HEX) "\0"
+     requestedPermission                     ← 末尾字段，无尾随 \0
+
+   clientProof = HMAC-SHA256(accessKeyBytes, ClientAuthTranscript)
+   ```
+   ```text
+   ServerGrantTranscript =
+     "LANREMOTE-GRANT-V1\0"                   ← 域分隔：与 client 档不同域
+     SHA256(ClientAuthTranscript 的 UTF-8 字节) 的 UPPER HEX "\0"
+     grantedPermission                       ← 末尾字段，无尾随 \0
+
+   serverProof = HMAC-SHA256(accessKeyBytes, "server\0" || ServerGrantTranscript)
+     （注：`server\0` 前缀以规格 04 为准；「server|」写法作废。）
+   ```
+   要点：`grantedPermission` 只进 grant 档；客户端验证 serverProof 前先按自己的 transcript 与
+   收到的 granted 重建 grant 档——**granted 被篡改即验证失败**。
+   （精确字节串同时固化于 `AuthProtocol` 常量 + 确定性单测，两处不得漂移。）
+2. **限流口径（D2/D3 裁定）**：failed auth limiter **只计「到达密码学校验且失败」**的事件
+   （proof 重算不一致 / FixedTimeEquals 失败）。以下**不**计：帧格式违规、
+   拒绝/超时/断连、审批拒绝、审批超时。原因：限流器防的是「猜密钥」；
+   把协议层噪声计进去会让攻击者用垃圾帧给受害者 IP「刷封禁」（放大面），也会把
+   用户自己的审批决定罚成攻击。其余参数照规格 04 §14：10 分钟窗口 / 5 次失败 → 拒 60s /
+   每次失败 300–800ms 随机延时 / 成功清计数 / key 与 proof 绝不进日志。
+3. **审批 v1 语义**：默认 `RequireLocalApprovalForUnknownController=true`；
+   v1 = **每个新控制连接都要批**（不做运行期记住——规格 04 §15 的两个选项中取前者，
+   保守侧）。`PendingApproval` 独立配额（初值：全局 3 / 单源 1），与连接准入配额分离；
+   显示最小集 + 短关联码；请求不可变、原子终态、断连不发 token；UI 不可用 fail closed。
+4. **时限初值（provisional，待数值实验后定案并回写）**：机器认证 10 s；
+   人类审批 60 s（自获批面受理起算）。两者与既有五段 deadline 一同进
+   数值实验批次（HANDOFF §18.4 C）。
+5. **DoD 的两个可执行形式**：raw access key 绝不上网（协议里只有 nonce/proof/token，
+   结构性保证 + 帧字段白名单测试）；auth success 后才能有 session
+   （`SessionRegistry` 的注册入口只能被认证状态机在 `Authenticated` 状态调用）。
+
+**Context**：规格 04 §9/§14/§15 与本 ADR 的关系是「细化 + 一处修订」：修订即 transcript 拆分
+（04 原文是单 transcript 双 proof 形态）；其余为把论文级描述落成可实现的定案。
+「双 proof 同 transcript」的问题：serverProof 与 clientProof 用同一 transcript 时，
+serverProof 无法证明「服务端对**这条连接请求的权限**做过承诺」，因为 granted 没进任何 proof 的覆盖范围。
+**Consequence**：`docs/PROTOCOL_AND_SECURITY.md`（工作副本）与规格 04 的差异以本 ADR 为准；
+阶段 2 的帧实现按第 1 条演算；阶段 3 的限流实现按第 2 条接线（D2/D3 的否决面）。
+**可逆性**：协议未上线（无外部对端），拆分可自由演进；一经两机验收即冻结。
+**验证**：deterministic transcript（同输入字节级相同）；
+correct / wrong key；modified cert fingerprint / modified permission（改任一字段必改 proof）；
+granted 篡改 → 客户端必须拒绝（serverProof 验证失败）。
+**实施时机**：M4 阶段 1–4 全程；数值（第 4 条）随数值实验定案。

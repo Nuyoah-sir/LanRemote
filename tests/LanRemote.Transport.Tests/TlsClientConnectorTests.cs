@@ -147,13 +147,19 @@ public sealed class TlsClientConnectorTests
     }
 
     /// <summary>
-    /// M3 步骤 5 的验收：握手<b>进行中</b>把 discovery 缓存的指纹改掉，
-    /// 这次连接仍必须按点击那一刻冻结的指纹校验。
+    /// M3 步骤 5 的验收（M4 阶段 0 按 ADR-027 有意识改写）：握手<b>进行中</b>，
+    /// 伪造广播意图用另一张证书的指纹污染发现缓存。两层防御都必须成立——
+    /// ① ADR-027：同 deviceId 不同指纹不覆盖主条目，只登记身份冲突（投毒不落地）；
+    /// ② ADR-028：本次连接仍按点击那一刻冻结的指纹校验（冻结快照不回读缓存）。
     /// </summary>
     /// <remarks>
-    /// 服务端闸门保证「改缓存」发生在 TCP 已连上、TLS 还没完成之间。
+    /// <para><b>改写说明（不是放宽断言）</b>：M3 版本的假设是「缓存会被 last-write-wins
+    /// 换成攻击者的指纹」，然后只验证已冻结连接不受影响。ADR-027 落地后该假设本身不成立——
+    /// 投毒连缓存主条目都进不去。这里把两层都断言上：主条目保持原指纹 + 冲突被标记 +
+    /// 冻结连接不受影响 + 用伪造指纹冻结的目标必然握手失败。验证面比 M3 版本更宽。</para>
+    /// <para>服务端闸门保证「投毒」发生在 TCP 已连上、TLS 还没完成之间。
     /// 如果将来有人把 <see cref="TlsClientConnector.ConnectAsync"/> 改成接受缓存 / 设备对象
-    /// 并在回调里重新取指纹，这个用例会失败。
+    /// 并在回调里重新取指纹，这个用例会失败。</para>
     /// </remarks>
     [Fact(Timeout = 60_000)]
     public async Task Frozen_Pin_Survives_Discovery_Cache_Mutation_Mid_Handshake()
@@ -187,21 +193,26 @@ public sealed class TlsClientConnectorTests
             server.Accepted.Wait(TimeSpan.FromSeconds(10)),
             "服务端没有 accept，无法构造「握手进行中」的时刻。");
 
-        // 握手进行中：伪造的广播把缓存里的指纹换成了 B。
-        cache.Upsert(CreateDevice(server.Port, pinB), DateTimeOffset.UtcNow);
-        Assert.Equal(pinB, cache.Snapshot().Single().CertificateSha256);
+        // 握手进行中：伪造的广播带着一张别的证书的指纹抵达。
+        DateTimeOffset poisonedAt = DateTimeOffset.UtcNow;
+        cache.Upsert(CreateDevice(server.Port, pinB), poisonedAt);
+
+        // ADR-027：投毒不落地——主条目仍是 pinA（不二选一地挑指纹），设备被标记为身份冲突。
+        Assert.Equal(pinA, cache.Snapshot().Single().CertificateSha256);
+        Assert.True(cache.IsIdentityConflicted(DeviceId, poisonedAt));
 
         server.HandshakeGate!.Set();
 
         using TlsConnection connection = await connect;
 
+        // ADR-028：本次连接仍按冻结的 pinA 校验成功——与缓存里正在发生的冲突无关。
         Assert.True(connection.Identity.PinsMatch);
         Assert.Equal(pinA, TestCertificateFactory.ToHex(connection.Identity.PresentedCertSha256.Span));
 
-        // 对照组：从被污染的缓存里重新冻结，必须失败。
-        Assert.True(ConnectionTarget.TryCreate(cache.Snapshot().Single(), out ConnectionTarget? poisoned));
+        // 对照组：拿伪造指纹 B 冻结出来的目标（= 攻击者想达到的状态），握手必须失败。
+        ConnectionTarget poisoned = CreateTarget(server.Port, pinB);
         await Assert.ThrowsAsync<AuthenticationException>(
-            () => connector.ConnectAsync(poisoned!));
+            () => connector.ConnectAsync(poisoned));
     }
 
     /// <summary>
