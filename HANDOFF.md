@@ -1,40 +1,41 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-20 17:25 (+08:00)**
+> 更新时间：**2026-09-21 16:35 (+08:00)**
 >
-> 本轮（15:26 之后）追加的内容**只动验收物料，不动产品代码**：
-> `set-lab-ip.ps1` 重写为 v2（v1 有缺陷会弄丢 IPv4，已归档）、验收手册 §1.2 重写、
-> HANDOFF 新增「验收核心已实证」与「v1 事故 / v2 重写」两节。
-> **`src/` 与 `tests/` 零改动**，因此 §12 的 408 tests 结论继续有效、无需重跑。
+> 本轮（M3 第 24 步「先修再跑」）**动了代码**：`src/LanRemote.Transport/TlsConnection.cs`
+> 加了一个只读观测量 `LocalEndPoint`（两机日志配对用），其余全在
+> `tools/LanRemote.Acceptance/`（验收器）与文档里。**产品行为零改变**。
+>
+> 本轮的实质内容：**11 例变异矩阵 + 4 个新抓到的真缺陷 + 3 项「待实测」实测收口
+> + 新增 headless 入口**。逐条见 §15 步骤 24。
 
 ---
 
 ## 1. 当前状态
 
-- **当前里程碑：M2.1 — Discovery Final Fix**（M2 之后的收口修复轮，不是新里程碑）
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → **M2.1**
+- **当前里程碑：M3 — TLS Host/Client + 同子网连接校验**
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`313c542`**（M2.1 代码 + 测试 + probe 回应日志；主修复提交为 `fb202eb`）
-- **Acceptance kit commit：`905fcc8`**（只含 HANDOFF / 验收手册 / `set-lab-ip.ps1` v2，无产品代码）
-- **Working tree at validation: clean**
+- **Last code commit：`5bf3cb6`**（M3 阶段 5 收口）
+- **Working tree at validation: 有未提交改动**——`src/LanRemote.Transport/TlsConnection.cs`
+  的 `LocalEndPoint`（只读）+ `tests/.../TlsClientConnectorTests.cs` + `TestTlsServer.cs` 的
+  对侧断言 + `tools/LanRemote.Acceptance/` 整目录 + 文档。
+  **本轮的改动尚未提交**（下一步应先提交，再打包）。
 - **M2.1 code 状态：Implementation complete；Two-machine manual DoD：PASS**
   （2026-09-20 17:30–18:18 两台实机跑完 20 步，20/20 通过，见第 9 节）
 - **是否满足完整 M2 DoD：是**（两机手工验收已回填）
-- 下一阶段：**M3 — TLS Host/Client + 同子网连接校验**
-- **M3 已于 2026-09-21 开工**（用户指令：「开始步骤吧，遇到要我帮忙的地方你就停」）。
-  **阶段 0～5 的代码部分已全部完成**（24 步里的第 1～23 步），
-  当前停在**第 24 步：两机验收——需要用户参与**，本机没有 RFC1918 网卡，无法自证。
-  逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节的 M3 描述可能滞后。
-  最后代码提交 `5bf3cb6`，`dotnet build` 0 警告 0 错误，`dotnet test` **573 PASS / 0 FAIL**
-- **第 24 步物料已就绪**（验收器 `tools/LanRemote.Acceptance` + 手册 `docs/M3_TWO_MACHINE_ACCEPTANCE.md`
-  + 打包 `LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`）。
-  **注意：不要拿 `LanRemote.App` 验收 M3**——它引用了 `LanRemote.Transport` 但一行都没调用，
-  打它的包只能重证 discovery。本机所有**前置条件失败路径已实测**，happy path 必须两台
-  `192.168.1.0/24` 实机才能跑 → **等用户执行**。详见第 15 节步骤 24。
+- **M3 代码状态：Implementation complete**——阶段 0～5 的 24 步里第 1～23 步已完成，
+  第 24 步（两机验收）的**物料已修到可跑**，当前停在**等用户在两台实机上执行**。
+  本机没有 RFC1918 网卡，无法自证。
+  `dotnet build` 0 警告 0 错误，`dotnet test` **574 PASS / 0 FAIL**。
+  逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节可能滞后。
 - **验收器是 WPF 窗口程序（`WinExe`），双击 `LanRemote.Acceptance.exe` 就是一个窗口**，
-  不需要任何脚本。曾短暂采用「控制台 exe + `START.cmd`」的形态，被用户连纠三次后废弃——
+  不需要任何脚本；同一个 exe 带 `--headless` 就是命令行模式。
+  曾短暂采用「控制台 exe + `START.cmd`」的形态，被用户连纠三次后废弃——
   **别改回去**，理由与坑见第 15 节「M3 验收器的形态教训」。
+- **注意：不要拿 `LanRemote.App` 验收 M3**——它引用了 `LanRemote.Transport` 但一行都没调用，
+  打它的包只能重证 discovery。
 
 ### 关于 git 记账方式
 
@@ -588,6 +589,9 @@ dotnet build LanRemote.sln -c Debug
 
 **M2.1 真实执行结果：PASS** —— 12 个项目全部生成，**0 个警告，0 个错误**（耗时 00:00:12.15）
 
+**M3 第 24 步「先修再跑」后重新执行：PASS —— 0 个警告，0 个错误**（耗时 00:00:12.71）。
+本轮产品代码只加了 `TlsConnection.LocalEndPoint`（只读），验收器改动见 §15 步骤 24。
+
 ## 12. 测试
 
 ```text
@@ -595,21 +599,34 @@ dotnet test LanRemote.sln -c Debug --no-build
 ```
 
 **M2.1 真实执行结果：408 passed / 0 failed / 0 skipped**
+**M3 阶段 5 后：573 passed / 0 failed / 0 skipped**
+**M3 第 24 步「先修再跑」后：574 passed / 0 failed / 0 skipped**（本轮 +1）
 
-| 项目 | M1.3 后 | M2 后 | M2.1 后 | 本轮增量 |
-|---|---:|---:|---:|---:|
-| LanRemote.Core.Tests | 125 | 125 | 125 | 0 |
-| LanRemote.Security.Tests | 65 | 65 | 65 | 0 |
-| LanRemote.IntegrationTests | 3 | 3 | 3 | 0 |
-| LanRemote.Protocol.Tests | 7 | 189 | **215** | **+26** |
-| **合计** | **200** | **382** | **408** | **+26** |
+| 项目 | M1.3 后 | M2 后 | M2.1 后 | M3 阶段 5 后 | 本轮后 |
+|---|---:|---:|---:|---:|---:|
+| LanRemote.Core.Tests | 125 | 125 | 125 | 125 | 125 |
+| LanRemote.Security.Tests | 65 | 65 | 65 | 66 | 66 |
+| LanRemote.IntegrationTests | 3 | 3 | 3 | 3 | 3 |
+| LanRemote.Protocol.Tests | 7 | 189 | 215 | 215 | 215 |
+| LanRemote.Transport.Tests | 0 | 0 | 0 | 164 | **165** |
+| **合计** | **200** | **382** | **408** | **573** | **574** |
 
-既有 382 条全部继续通过（**没有删除任何测试换取通过**）。
+既有 408 条全部继续通过（**没有删除任何测试换取通过**）。
 唯一被替换的测试是 `Capabilities_AreDedupedAndEmptiesRemoved`——
 它的语义（空 capability 被静默移除后仍接受整条报文）与 M2.1 收紧后的规格直接冲突，
 按规格要求重写为 6 组更严格的新测试。
 
-本轮新增的 26 条测试：
+**本轮新增的那 1 条**：
+
+| 测试 | 断言 |
+|---|---|
+| `Connect_Reports_Local_End_Point_Matching_Server_Observation` | 客户端自报的 `LocalEndPoint` 必须与服务端 accept 时看到的 `RemoteEndPoint` **同一**（地址 + 端口），且释放后返回 `null` 而不是抛异常 |
+
+> 为什么「只是个观测量」也要对侧断言：只断言非空的话，把它实现成「返回任意本地端口」
+> 测试照样绿。而错的配对键会让两份日志**配错行**，比没有配对键更坏。
+> 为此给测试用 `TestTlsServer` 加了 `AcceptedRemoteEndPoints`（accept 循环里记录远端端点）。
+
+**M2.1 那一轮新增的 26 条测试**（保留，供追溯）：
 
 | 测试 | 断言 |
 |---|---|
@@ -748,6 +765,21 @@ dotnet test LanRemote.sln -c Debug --no-build
     host 只听 RFC1918 绑定，而 Windows 会自动挑同子网源地址，做不出「源 IP 在另一子网」的样本；
     `New-NetRoute` / `route add` 都不能指定源地址，除非给 `TlsClientConnector` 加本地绑定参数。
     当前覆盖全在自动化测试（见第 15 节步骤 24 的表）。**要真机补这一条，需要用户提供第三子网或批准改产品代码。**
+14. **五个阶段 deadline 的具体取值尚未经第二轮评审**（2026-09-21 记）：
+    `connect 3s / handshake 5s / lengthPrefix 5s / payload 10s / hello 5s`。
+    已验证的只是「**执行得准**」（绝对时限在 0–36 ms 误差内生效，`slow-dribble` 也证了不可重置），
+    **不是「取值合理」**。慢网络 / 高延迟下 3 s 的连接与 5 s 的握手是否会误杀，
+    需要第二轮外部评审判定。这是「数值 vs 机制」的分界，别把机制已验当成数值已验。
+15. **验收器与产品共用一个进程，不是隔离的**：`ClientRole` / `HostRole` 在同一进程内
+    调产品代码。好处是接线与 `App.xaml.cs` 一致、能测到真实的 DI 路径；
+    代价是产品里的静态状态（若有）会跨场景泄漏——**已发现并修过一个**：
+    每个场景新建 `AcceptanceContext` 却从不停止 discovery，4 个场景残留 4 个 UDP socket，
+    失败现象伪装成「发现不到对端」。现由 `IAsyncDisposable` + `StopAsync` 收口。
+    **新增场景时务必确认 context 被释放**。
+16. **`--address/--pin` 直连模式下 `pin-mismatch` 的自检有循环性**（2026-09-21 记）：
+    该模式不知道对端真指纹，只能「翻转你给的 pin 一位」。所以若你给的本来就是错的 pin，
+    翻一位后可能翻回真指纹 → 场景反而 PASS/FAIL 反了（变异矩阵真的撞上过这个双翻）。
+    两机验收不受影响（pin 来自 discovery，是真值）。**自检时按提示传真指纹。**
 
 ## 15. 下一步 —— M3（TLS Host/Client + 同子网连接校验）
 
@@ -1005,35 +1037,38 @@ dotnet test LanRemote.sln -c Debug --no-build
 
     | 文件 | 作用 |
     | --- | --- |
-    | `AcceptanceContext.cs` | 刻意照抄 `App.xaml.cs` 的 DI 接线（vault→证书→身份→binding→SubnetPolicy→discovery） |
-    | `AcceptanceLog.cs` | WinExe 没有控制台 → 日志同时进 UI（`LineWritten` 事件）和磁盘（`gui.log`） |
-    | `App.xaml(.cs)` | `DispatcherUnhandledException` 落盘 `crash.log` + 弹框，**带防重入**（见下） |
-    | `MainWindow.xaml(.cs)` | 唯一入口：身份面板 + 角色按钮 + 日志区 + 复制/清空/打开目录 |
-    | `InfoRole.cs` | 等价于旧 `info`：环境自检，回填身份/指纹/端口/合格网卡 |
-    | `HostRole.cs` | 被控端：起 discovery + `TransportHost`，每条连接跑完整 pre-auth 会话 |
-    | `ClientRole.cs` | 控制端：发现→冻结快照→TLS→hello→等对端收尾，跑完三个必做场景 |
+    | `AcceptanceContext.cs` | 刻意照抄 `App.xaml.cs` 的 DI 接线（vault→证书→身份→binding→SubnetPolicy→discovery）；`IAsyncDisposable`，停机时 `StopAsync` 发现服务 |
+    | `AcceptanceLog.cs` | WinExe 没有控制台 → 双写 UI（`LineWritten` 事件）+ 磁盘；**每次运行一个不可变文件** `m3-<role>-<UTC>-<runId>.log` |
+    | `AcceptanceOutcome.cs` | 五类结局，**枚举值即退出码**；`Combine()` 带优先级 |
+    | `AcceptanceRun.cs` | 一轮的上下文：runId / 角色 / 日志 / 中止标记 / 后台故障；头和尾由它写 |
+    | `AcceptanceProfile.cs` | **两端共用**的五个 deadline 与各场景期望窗口（写在一处，避免两侧各写一份慢慢漂移） |
+    | `AcceptanceLoggerProvider.cs` | 把产品 `ILogger` 事件转发进验收日志（WinExe 下 `AddSimpleConsole` 是死信投递） |
+    | `App.xaml(.cs)` | 两个入口（无参开窗 / `--headless`）+ 三个异常 handler（见下） |
+    | `MainWindow.xaml(.cs)` | 窗口：身份面板 + **角色锁** + 结论横幅 + 日志区 + 复制/打开目录 |
+    | `HeadlessCommand.cs` / `HeadlessRunner.cs` | headless 参数解析与调度 |
+    | `InfoRole.cs` | 环境自检，回填身份/指纹/端口/合格网卡 |
+    | `HostRole.cs` | 被控端：起 discovery + `TransportHost`，每条连接跑完整 pre-auth 会话，**互斥终态桶** |
+    | `ClientRole.cs` | 控制端：发现→冻结快照→TLS→hello→等对端收尾，跑完四个必做场景后打**交叉核对清单** |
 
-    退出码仍是 **0 = 符合预期 / 1 = 真失败 / 2 = 前置条件不满足**，
-    但窗口把它翻译成人话显示（`符合预期` / `不符合预期` / `前置条件不满足`）。
+    退出码改为 **0 PASS / 1 FAIL / 2 UNMET / 3 HARNESS_ERROR / 4 INVALID_RUN**，
+    窗口把它翻译成人话显示。
 
-    **双击 `LanRemote.Acceptance.exe` = 一个窗口，不需要任何脚本。** 流程全在窗口里：
-    看身份面板 → 被控端点「开始监听」→ 控制端填对端设备码点「跑三个场景」→ 复制日志。
+    **双击 `LanRemote.Acceptance.exe` = 一个窗口，不需要任何脚本。**
+    同一个 exe 带 `--headless` 就是命令行模式，**两条路调用完全相同的 `HostRole`/`ClientRole`**。
 
-    **三个必做场景**（`ClientRole.MandatoryScenarios`）：
+    **四个必做场景**（`ClientRole.MandatoryScenarios`）：
 
     | 场景 | 通过标准 | 状态 |
     | --- | --- | --- |
-    | `success` | 控制端 `presentedPin` 与 discovery 的 `pin` 逐字符一致 + `outcome=PASS peerClosed=eof`；被控端 `outcome=PreAuthenticated rejection=-` | 待真机 |
-    | `pin-mismatch` | 握手被拒；且 `tcpProbe=open` 必须出现 | 待真机 |
-    | `timeout` | 不发 hello，约 5s（= `lengthPrefixTimeout`）被切；被控端 `rejection=pre-auth-timeout` | 待真机 |
+    | `success` | 控制端 `presentedPin` 与 discovery 的 `pin` 逐字符一致 + `peerClosed=eof` 且 `closedAtMs ≤ 3000`；被控端须有 `outcome=PreAuthenticated rejection=-` | 待真机 |
+    | `pin-mismatch` | 抛 `AuthenticationException` **且**消息里短码恰为 `pin-mismatch`（不是"抛了认证异常就算"） | 待真机 |
+    | `timeout` | 不发 hello，约 5 s（= `lengthPrefixTimeout`）被切；被控端 `rejection=pre-auth-timeout` | 待真机 |
+    | `slow-dribble` | 2 s 间隔滴流长度前缀 → **只发出 3/4 字节**就被切在绝对时限上 | 待真机 |
     | `cross-subnet` | —— | **本次不跑，见 §14 第 13 条** |
-
-    被控端退出前的汇总行应为 `accepted=2 preAuthenticated=1 rejected=1 cleanStop=True`
-    （`pin-mismatch` 死在 TLS 阶段，进不了会话处理器，故不计入 `accepted`）。
 
     **本机已实测（真实执行，不是推演）：**
 
-    - `dotnet build` 0 警告 0 错误、`dotnet test` **573 PASS / 0 FAIL**（加入该工具项目后不变）
+    - `dotnet build` 0 警告 0 错误、`dotnet test` **574 PASS / 0 FAIL**
     - WPF 窗口**真的渲染出来**（`[GUI] 窗口渲染完成。 ActualWidth=900 ActualHeight=700`），
       已截图肉眼确认四个区块与身份面板内容正确
     - **全新解压 + `env -u DOTNET_ROOT -u DOTNET_HOST_PATH`** 下双击 `LanRemote.Acceptance.exe`
@@ -1041,24 +1076,127 @@ dotnet test LanRemote.sln -c Debug --no-build
     - 自检真跑通 DPAPI→身份→证书整条链（deviceCode `M5WC-14GX`，
       certSha256 `89A5C10E…5445`），正确判 `outcome=FAIL reason=no-qualified-rfc1918-nic`，
       并在窗口里把两个角色按钮**置灰**（防止「点了没反应」）
+    - `--headless info` 退 2、`--headless host` 退 2（"没有任何可监听地址"）、
+      `--headless client --all` 打环回假被控端 **4/4 PASS 退 0**、参数错误五条路径全部退 3 且**都有可读输出**
 
-    **修复的一个真实缺陷（空洞断言）**：`pin-mismatch` / `cross-subnet` 原先是
-    「握手失败即 PASS」。对端端口没开 / 防火墙拦掉 / host 没启动，同样会让握手失败，
-    于是照样报 PASS——而同子网闸门和 pinning 一行都没被执行到。
-    已加 ① 纯 TCP 探针（不通 → 退 `2`，不判 PASS）② `LooksLikeNothingListening`
-    按 `SocketError` 区分「没连上」与「被拒绝」（刻意**不**把 `ConnectionReset` 算进前者，
-    因为 accept 后立刻关闭正是走 RST）。**变异验证**：修复前 `192.168.1.20:45873`
-    （无人监听）报 PASS/exit 0，修复后报 `peer-port-unreachable`/exit 2。
-    同时把 `WaitForPeerCloseAsync` 的 `catch → return true` 拆成
-    `eof` / `reset` / `still-open` / `unexpected-data` 四种可判定结局，不再把超时和切断混为一谈。
+    ### 24.1 变异矩阵：11 例，全部符合预期（2026-09-21，环回）
 
-    **物料**：`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`
-    （265 条目 / 原始 132.2 MiB / zip 57.4 MiB），由 `scripts/acceptance/make-m3-package.py` 产出
+    **这是本轮最重要的一件事**：验收器的判据在真机跑之前必须先在环回上被**看见红过**。
+    为此写了一个可切换行为的假被控端（`Mode.Real / Deaf / Resettable` + `AllowAllPolicy` + `StubHost`），
+    用**真 exe** 打它：
+
+    | # | 用例 | 变异内容 | 期望 | 实测 |
+    | --- | --- | --- | --- | --- |
+    | 1 | `real/success` | 真 `ControlPreAuthSession` | 退 0 | ✅ 退 0（43–59 ms 收尾） |
+    | 2 | `real/pin-mismatch` | 同上 | 退 0 | ✅ 退 0，`rejection=pin-mismatch` |
+    | 3 | `real/timeout` | 同上 | 退 0 | ✅ 退 0（4982 ms） |
+    | 4 | `real/slow-dribble` | 同上 | 退 0 | ✅ 退 0（`sent=3/4`，4976 ms） |
+    | 5 | `real/pin-mismatch-doubleflip` | 故意把**已翻转**的 pin 再给一次 | 退 1 | ✅ 退 1（证明「翻转一位」是**承重的**） |
+    | 6 | `deaf/success` | 握完手**一个字节都不读**，等满时限才关 | **退 1** | ✅ 退 1（`reset`，4994 ms） |
+    | 7 | `deaf/timeout` | 同上 | 退 0（本来就该等时限） | ✅ 退 0 |
+    | 8 | `resettable/slow-dribble` | 把绝对时限改成**每读到字节就重置**的空闲时限 | **退 1** | ✅ 退 1（`sent=4/4`，16054 ms） |
+    | 9 | `resettable/timeout` | 同上 | 退 0 | ✅ 退 0 ← **这条证明旧判据是空的** |
+    | 10 | `resettable/success` | 同上 | 退 0 | ✅ 退 0 |
+    | 11 | `nothing-listening/success` | 端口上什么都不开 | 退 **2**（UNMET，不是 PASS） | ✅ 退 2 |
+
+    三条由此**坐实**的结论：
+
+    - **第 9 条是关键**：`resettable` 下 `timeout` 仍然绿 → 单靠 `timeout` 区分不出
+      「绝对时限」和「可重置空闲时限」。**`slow-dribble` 才是那个场景存在的唯一理由**
+      （评审第 1 条是真缺陷，不是理论担忧）。
+    - **第 6 条允许删掉 TCP 探针**：`deaf/success` 能红，靠的是「收尾时刻贴不贴时限」，
+      而这条判据成立的前提是 TCP 真连上了——第 11 条证明「没连上」会落到退 2 而不是退 0。
+      于是探针（污染被控端计数、制造 TIME_WAIT）可以删掉，改用更强的结构化断言。
+    - **第 5 条保证「删一行不会变红」不会发生**：如果哪天有人把 `FlipOneBit` 的调用删掉，
+      第 5 条会和第 2 条一起变红。
+
+    完整输出留档：`%TEMP%\lrmut\matrix-full.txt`（94 行，含每例的 `[CLIENT][RESULT]` 与被控端逐条记录）。
+
+    ### 24.2 交叉核对清单：从「猜出来的数字」改成「可证伪的约束」
+
+    控制端跑完会给被控端列一份核对清单，**它永不宣布里程碑通过**：
+
+    ```
+    ① outcome=PreAuthenticated 的行恰好 1 条（只有 success 该走到这）
+    ② rejection=pre-auth-timeout 的行恰好 2 条（timeout + slow-dribble）
+    ③ 其余任何一行都不得是 PreAuthenticated，也不得是 pre-auth-timeout
+    ④ connectionsEnteringSessionHandler 落在 3..4
+    ⑤ listenersStoppedCleanly=True 且 activeAtStop=0
+    ```
+
+    **④ 为什么是区间**——这里我先写错过一次，被实测抓住：
+
+    我原以为 `pin-mismatch` 死在 TLS 阶段、服务端不会留行，于是断言「应为 3（4 减 1）」。
+    实测**是 4**：客户端拒绝证书发的是 TLS alert，而 **TLS 1.3 下服务端在收到该 alert
+    之前就已经认为握手完成**，于是它照样进了会话处理器，读到 EOF 后给出
+    `rejection=pre-auth-eof`（本机环回实测值）；TLS 1.2 下服务端握手会直接失败、才真的不留行。
+
+    这正是「从症状推断因果」的典型错误：从「客户端看到握手失败」推到「服务端没进会话」，
+    中间那一步（TLS 1.3 的半开窗口）被我先入为主地跳过了。
+    现在 ④ 只依赖「连接走到了哪一步」（`ReachedWire` / `TlsStageRejection`），**不依赖场景通过与否**——
+    否则场景一失败，区间自己就跟着漂，读者会以为区间是实测值。
+
+    ①②③ 在**有场景未通过**时会额外打一行 ⚠ 说明「这些数字是『本该是多少』，不是实测值」。
+
+    ### 24.3 配对方法：4 元组，不是计数相等
+
+    控制端每个场景打 `[CLIENT][CORRELATE] local=<本机IP>:<临时端口> peerHost=<对端IP>:<端口>`，
+    被控端每条连接打 `[HOST][RESULT] conn#N peer=<同一个端点>`。
+    用 `local` ≡ `peer` **唯一配对**一条连接。
+
+    > 为此给 `TlsConnection` 加了只读属性 `LocalEndPoint`（**不参与任何判定**）。
+    > 它不参与判定 ≠ 可以不做对侧断言：只断言「非空」的话，把它实现成
+    > `返回任意本地端口` 测试照样绿，而错的配对键会让两份日志配错行——
+    > 比没有配对键更坏。所以测试断言的是**同一性**：
+    > `TlsClientConnectorTests.Connect_Reports_Local_End_Point_Matching_Server_Observation`
+    > 要求客户端自报的本地端点 == 服务端 accept 时看到的远端端点。
+
+    ### 24.4 本轮新抓到的四个真缺陷（都不是模型提出来的，是跑出来的）
+
+    | # | 缺陷 | 现象 | 根因 |
+    | --- | --- | --- | --- |
+    | 1 | **`--all` 下 `pin-mismatch` 必然 FAIL** | 退 1，信息写着「本该在 TLS 阶段被拒绝，实际握手成功了」，看上去像产品坏了 | 直连模式漏了「翻转一位」，四个场景共用同一个 `--pin` → 拿真指纹去连 |
+    | 2 | **交叉核对输出自相矛盾** | 逐条期望写 `pin-mismatch → (无行)`，而 ④ 写 `3..4`（承认可能有幽灵行） | 同一份输出里两句话互相打脸，比两句都错更危险 |
+    | 3 | **参数错误静默退出** | `--headless client --bogus` → 退 3、stdout/stderr **均 0 字节**，只有 `crash.log` 里一行 NRE | `HeadlessCommand.TryParse` 在错误分支写 `return true`，调用方按「成功」处理 → `RunHeadless(null)` → NRE → 被顶层兜底吞掉，**错误消息全程丢失** |
+    | 4 | **④ 的下界在失败轮次里偏大** | 全部死在 TLS 时仍写 `3..4`，会让人去找不存在的行 | `success/timeout/slow-dribble` 的 TLS 失败分支漏标 `TlsStageRejection` |
+
+    四个的共性：**都不是产品代码错，而是「证据/接口自己说谎」**。
+    所以严重性高于普通 bug——验收器的错误会污染结论。
+
+    教训各一条：
+
+    - 同一件事有两处实现时（发现路径 vs 直连路径的翻转），**只改一个**必然出事；
+      所以 `FlipOneBit` 现在是唯一实现，两条路共用。
+    - 跨工具的隐含契约（「验收器会自己翻一位」）必须写在**两边**的注释里，
+      否则改一边会以「看起来像产品坏了」的方式炸（变异矩阵的 `real/pin-mismatch` 就是这样被炸出来的）。
+    - **返回值的语义必须和调用方的理解一致**。`TryParse` 那个 `return true` 极可能当时想的是
+      "这确实是一次 headless 调用"——但调用方按字面意思读。这种错**不可能**被单元测试发现
+      （因为两边各自自洽），只能靠端到端跑一遍、并且**看输出字节数**。
+
+    ### 24.5 三个「待实测」项已全部实测收口
+
+    评审把三条 .NET 行为标成「不得据模型结论下判断」，现已在本机测完（详见
+    `docs/M3_ACCEPTANCE_UI_REVIEW_TRIAGE.md` §2）：
+
+    | 评审断言 | 实测结论 |
+    | --- | --- |
+    | 裸后台线程异常不会被 `DispatcherUnhandledException` 转发 | **成立且更极端**：进程**当场死亡**（exit 127，无任何输出，handler 来不及做什么） |
+    | `TaskScheduler.UnobservedTaskException` 默认不终止进程 | **成立**：进程存活且**完全静默**（.NET Core 起终结器不再杀进程） |
+    | TCP 未连通时不会走到证书校验 | **成立**：抛 `SocketException` / `IOException`（内层 `SocketException`），**永不**是 `AuthenticationException` → TCP 探针删除的依据 |
+    | `ReadAsync == 0` 不等于 `close_notify` | **成立**：裸 TCP FIN 也返回 0（RST 抛 `IOException`）；`SslStream.ShutdownAsync` 只有显式调用时才发 `close_notify` → 全部文案降级为「**有序 EOF**（TLS 记录层 EOF）」 |
+
+    两个 handler（`AppDomain.UnhandledException` + `TaskScheduler.UnobservedTaskException`）
+    与 `AcceptanceRun.ReportBackgroundFault` 就是按这两条实测结论加的。
+    `MainWindow` 的点击处理器是 `async void`、`ClientRole` 里没有 `ConfigureAwait(false)`——
+    所以 headless 走 `Task.Run`，绝不让测量被 UI 线程污染。
+
+    **物料**：`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`，由
+    `scripts/acceptance/make-m3-package.py` 产出
     （`LANREMOTE_M3_SKIP_PUBLISH=1` 跳过 publish 只重打包；`LANREMOTE_M3_CLEAN=1` 才先清空目录）。
     包内含 `START-HERE.md`（=`docs/M3_TWO_MACHINE_ACCEPTANCE.md`）与 `set-lab-ip.ps1`，
     其余是自包含运行时。`set-lab-ip.ps1` 打包时强制加 BOM（PS 5.1 否则中文乱码）。
-    手册：§0.1 怎么启动（双击 exe）、§3 逐场景判定、§4 host 汇总行、§5 两个已知缺口、
-    §6 要贴回来的证据、§7 排障表。
+    手册：§0.1 双击启动、§0.2 headless 用法与退出码、§3 逐场景判定（含 `slow-dribble`）、
+    §4 汇总与五条约束、§5 配对方法、§6 两个已知缺口、§7 要贴回来的证据、§8 排障表。
 
 ### M3 验收器的形态教训（用户连续三次纠错后定稿）
 
@@ -1117,15 +1255,17 @@ dotnet test LanRemote.sln -c Debug --no-build
 
 ## 16. 下一位 AI 不要重复做
 
-- **两机手工验收已完成并 PASS**（第 9.1 节，20/20）。M3 的开工前提已满足，
-  但仍需用户明确下达开工指令——不要在没被要求时自行开始 M3
+- **两机手工验收已完成并 PASS**（第 9.1 节，20/20）——**那一轮是 M2.1 的 discovery 发现验收**。
+  M3 的两机验收（真实 TLS + pinning）**还没跑**，物料已修到可跑，等用户在两台实机上执行
+- **不要重复做 M2.1 那次两机验收**：2026-09-20 已 PASS（第 9.1 节）。只有改动 discovery
+  收发逻辑（网卡筛选 / probe / announce / 缓存 TTL）才需要重跑
+- **不要把验收器改回「控制台 exe + 脚本驱动」**：用户已连纠三次。
+  入口必须是 exe（双击开窗），headless 只是**同一个 exe** 的另一个入口
 - **不要把 probe 回应发回 `remote.Port`**：probe 源端口是随机临时端口，回应必须打到 `remote.Address:45872`
   （实测三次源端口 `50193` / `54670` / `58869`，均为随机端口，回源端口对端必收不到）
 - **不要删掉 sender 的 `MulticastInterface` 设置**：不设就会全部走系统默认组播路由（多网卡必踩）
 - **不要在 capabilities 里恢复「空项静默跳过」或「按去重后数量判上限」**（两者都是可绕过的校验）
 - **不要**为了图省事把 `StartDiscoveryAsync` 改回 `void`、或让 `LoadAsync` 无条件覆盖状态文本
-- **不要重复做两机验收**：2026-09-20 已 PASS（第 9.1 节）。只有改动了 discovery
-  收发逻辑（网卡筛选 / probe / announce / 缓存 TTL）才需要重跑
 - **不要重新定义** `ISubnetPolicy` / `DiscoveredDevice` / `DeviceIdentity` / `DeviceCode`
 - **不要**用字符串前缀或「前三段相同」判断同网段
 - **不要**往 announcement 里加地址字段并相信它（地址必须来自 UDP source）
@@ -1245,3 +1385,28 @@ dotnet test LanRemote.sln -c Debug --no-build
 14. **ADR-018 曾被错标成 ADR-021**（2026-09-20 已修正）：ADR-016 说的是「证书加载改用 EphemeralKeySet」
     被 ADR-018 取代，而 ADR-021 是另一条「ECDSA 证书 KeyUsage 只允许 digitalSignature」。
     引用时看清条目正文，不要按编号顺序去猜
+15. **不要给验收器写「凭症状推断出来的数字」**（2026-09-21）：交叉核对里那个
+    「`connectionsEnteringSessionHandler` 应为 3」就是这么写出来的，实测是 4（TLS 1.3 幽灵行）。
+    只写**可证伪的约束**，并让区间取决于「连接走到了哪一步」而不是「场景是否通过」。
+16. **不要让验收器的返回值语义和调用方的理解相反**（2026-09-21）：
+    `HeadlessCommand.TryParse` 曾用 `return true` 表示「参数错误」，调用方按字面读成「成功」，
+    于是 `RunHeadless(null)` → NRE → 被顶层兜底成退 3，**错误消息一个字都没打出来**。
+    这种错两边各自自洽、单元测试发现不了——只有端到端跑一遍并**核对输出字节数**才看得见。
+    现在加了一条铁律：**新增任何 CLI 参数的第一件事，是把错误路径的输出字节数核一遍。**
+17. **不要靠「计数相等」配对两条日志**（2026-09-21）：用 4 元组
+    （控制端 `local=<IP>:<临时端口>` ≡ 被控端 `peer=<IP>:<端口>`）。
+    聚合数相等不构成配对证明。
+18. **不要把 `ReadAsync == 0` 说成「对端发了 `close_notify`」**（2026-09-21 实测）：
+    裸 TCP FIN 也返回 0。措辞只能是「**有序 EOF（TLS 记录层 EOF）**」。
+19. **不要从「客户端看到握手失败」推出「服务端没进会话」**（2026-09-21 实测）：
+    TLS 1.3 下服务端可能已经完成握手、照样进会话处理器并给出 `rejection=pre-auth-eof`。
+    判定 TLS 失败**永远抓服务端异常**，客户端只有 EOF。
+20. **`slow-dribble` 不能省**：`timeout` 单独区分不出「绝对时限」和「可重置空闲时限」
+    （变异矩阵第 9 例实测：`resettable` 下 `timeout` 仍然绿）。它是那个场景存在的唯一理由。
+21. **不要拿 `LanRemote.App` 验收传输层**：它 `ProjectReference` 了 `LanRemote.Transport`
+    却**零调用**。打它的包只能重证 discovery。
+22. **不要为了跑通场景去改产品协议**：评审提过「成功场景可以在应用数据里带场景 ID」，
+    这是典型的「为测试改被测对象」。用 4 元组关联即可。
+23. **不要在验收器里用 UI 线程做测量**：`MainWindow` 的点击处理器是 `async void`，
+    而 `ClientRole` 没有 `ConfigureAwait(false)`——续体会被投回 UI 线程，
+    日志区滚动/排版时会延迟执行，正好打在靠时间判定的场景上。headless 一律走 `Task.Run`。

@@ -19,7 +19,7 @@ Windows 局域网屏幕共享与远程控制工具，自用性质。
 | --- | --- |
 | M0 脚手架 / M1 身份与秘密 / M1.1~M1.3 安全收口 | ✅ 完成 |
 | M2 局域网发现 + M2.1 收口修复 | ✅ 完成，两机验收 PASS 20/20 |
-| **M3 TLS Host/Client + 同子网校验** | 🟡 **代码完成，573 tests PASS；两机验收待执行** |
+| **M3 TLS Host/Client + 同子网校验** | 🟡 **代码完成，574 tests PASS；两机验收待执行** |
 | M4 ~ M11 | 未开始 |
 
 实时进度与逐步明细**一律以根目录 [`HANDOFF.md`](HANDOFF.md) 为准**——README 会滞后。
@@ -145,11 +145,55 @@ set-lab-ip.ps1             配 lab 网段（唯一需要管理员的步骤）
 
 它是 **WPF 窗口程序**——双击就是一个窗口，不需要任何脚本。
 流程：两台机器各跑 `set-lab-ip.ps1 -Role A` / `-Role B`（保留原 IP 不断网）
-→ 一台点「被控端（开始监听）」→ 另一台填对端设备码点「控制端（跑三个场景）」
+→ 一台点「被控端（开始监听）」→ 另一台填对端设备码点「控制端（跑全部场景）」
 → 两边各点「复制全部日志」。
 
-三个必做场景：`success` / `pin-mismatch` / `timeout`。
-被控端汇总行应为 `accepted=2 preAuthenticated=1 rejected=1 cleanStop=True`。
+**四个必做场景**：`success` / `pin-mismatch` / `timeout` / **`slow-dribble`**。
+
+> `timeout` 单独**证明不了「绝对时限」**：一个「每读到字节就重置」的空闲超时同样会在
+> 约 5 s 断开并 PASS。`slow-dribble` 才是唯一能区分两者的场景——它按 2 s 间隔逐字节
+> 发长度前缀，服务端必须在**从进入阶段起算**的 5 s 上切断（即只发出 3/4 字节）。
+
+### 判定是**交叉核对**，不是单侧自宣
+
+控制端每个场景都以 `hostEvidence=REQUIRED` + `hostExpect="…"` 结尾，
+并在最后打 `[VERDICT] M3 = PENDING-HOST-EVIDENCE`——**它永远不宣布里程碑通过**。
+被控端结束时给 `[HOST][SUMMARY]`，两者的**连接用 4 元组配对**
+（控制端 `local=<IP>:<端口>` ≡ 被控端 `peer=<IP>:<端口>`；靠计数相等配对是错的）。
+
+被控端汇总行要满足五条约束，其中第 ④ 条是**区间不是数字**：
+
+```
+④ connectionsEnteringSessionHandler 落在 3..4
+```
+
+原因是被实测纠正过的：客户端拒绝服务端证书时发的是 TLS alert，
+而 **TLS 1.3 下服务端在收到 alert 前就已认为握手完成**，于是照样进会话处理器、
+读到 EOF 给出 `rejection=pre-auth-eof`；TLS 1.2 下才真的不留行。
+原先写的「应为 3」是**从症状推断因果**，已被实测证伪。
+
+> 这套判据本身是**变异验证过**的：环回上用一个可切换行为的假被控端打了 11 例变异矩阵
+> （`real` / `deaf` / `resettable` + `nothing-listening` 对照组），
+> 确认每条判据都能在**该红的地方红、其他地方不红**。逐例结果见 `HANDOFF.md`。
+
+### 同一个 exe 也有命令行入口
+
+带 `--headless` 就是 headless 模式，供脚本/自动化使用，与窗口**调用完全相同的代码**：
+
+```bash
+LanRemote.Acceptance.exe --headless info
+LanRemote.Acceptance.exe --headless host [--seconds N]
+LanRemote.Acceptance.exe --headless client --peer <设备码> [--scenario <场景>]... [--all]
+LanRemote.Acceptance.exe --headless client --address <IP> --pin <指纹> --all   # 直连，用于自检
+```
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | PASS — 符合预期 |
+| 1 | FAIL — 真的不符合预期 |
+| 2 | UNMET — 前置条件不满足（**不是**产品失败） |
+| 3 | HARNESS_ERROR — 验收器自身故障（参数写错等） |
+| 4 | INVALID_RUN — 操作员中止，整轮作废 |
 
 打包：
 
@@ -168,11 +212,12 @@ python scripts/acceptance/make-m3-package.py
 | 文件 | 内容 |
 | --- | --- |
 | [`HANDOFF.md`](HANDOFF.md) | **权威进度与交接说明**，下一位接手先读这个 |
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | ADR 决策记录（010~033），含被证伪的结论 |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | ADR 决策记录（010~034），含被证伪的结论 |
 | [`docs/PROTOCOL_AND_SECURITY.md`](docs/PROTOCOL_AND_SECURITY.md) | 协议与安全约束 |
 | [`docs/M3_TWO_MACHINE_ACCEPTANCE.md`](docs/M3_TWO_MACHINE_ACCEPTANCE.md) | M3 两机验收手册 |
 | [`docs/M3_EXTERNAL_REVIEW_PROMPT.md`](docs/M3_EXTERNAL_REVIEW_PROMPT.md) | 外部设计评审 prompt |
 | [`docs/M3_ACCEPTANCE_UI_REVIEW_PROMPT.md`](docs/M3_ACCEPTANCE_UI_REVIEW_PROMPT.md) | 验收器 UI 设计评审 prompt |
+| [`docs/M3_ACCEPTANCE_UI_REVIEW_TRIAGE.md`](docs/M3_ACCEPTANCE_UI_REVIEW_TRIAGE.md) | 该评审的逐条裁定（含三项「待实测」的实测结论） |
 | [`LanRemote_Implementation_Package/`](LanRemote_Implementation_Package/) | 原始施工规格快照（不回写） |
 
 ---

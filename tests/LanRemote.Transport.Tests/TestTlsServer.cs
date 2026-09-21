@@ -24,6 +24,7 @@ internal sealed class TestTlsServer : IDisposable
     private readonly X509Certificate2 _certificate;
     private readonly CancellationTokenSource _stop = new();
     private readonly ConcurrentQueue<Exception> _failures = new();
+    private readonly ConcurrentQueue<IPEndPoint> _remoteEndPoints = new();
     private readonly ConcurrentQueue<Task> _sessions = new();
     private readonly ManualResetEventSlim _accepted = new(false);
     private bool _disposed;
@@ -54,6 +55,14 @@ internal sealed class TestTlsServer : IDisposable
     /// <summary>服务端侧捕获到的异常。</summary>
     public IReadOnlyList<Exception> Failures => _failures.ToArray();
 
+    /// <summary>服务端 accept 到的远端端点（即客户端的 <c>本地IP:临时端口</c>）。</summary>
+    /// <remarks>
+    /// 存在的唯一理由：让「客户端 <c>LocalEndPoint</c>」这个观测量有**对侧**可断言。
+    /// 没有对侧，那个属性写成 <c>return null</c> 测试也照样绿——
+    /// 这正是本项目说的「删一行不会变红的开关」。
+    /// </remarks>
+    public IReadOnlyList<IPEndPoint> AcceptedRemoteEndPoints => _remoteEndPoints.ToArray();
+
     private async Task RunAcceptLoopAsync()
     {
         try
@@ -62,6 +71,12 @@ internal sealed class TestTlsServer : IDisposable
             {
                 TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token).ConfigureAwait(false);
                 _accepted.Set();
+
+                if (client.Client.RemoteEndPoint is IPEndPoint remote)
+                {
+                    _remoteEndPoints.Enqueue(remote);
+                }
+
                 _sessions.Enqueue(Task.Run(() => ServeOneAsync(client)));
             }
         }

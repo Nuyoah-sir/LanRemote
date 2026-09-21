@@ -6,10 +6,13 @@ using System.Windows.Threading;
 namespace LanRemote.Acceptance;
 
 /// <summary>
-/// 验收器应用入口。
+/// 验收器应用入口，同时是两个入口的调度点。
 /// </summary>
 /// <remarks>
-/// <para>这里的异常处理有一条硬性要求：<b>WinExe 没有控制台</b>，未捕获异常只会让窗口
+/// <para><b>两个入口</b>：无参数 → 开窗口（给人用，双击就是这个）；
+/// 带 <c>--headless</c> → 跑命令行（给脚本用）。两条路调用完全相同的
+/// <see cref="HostRole"/> / <see cref="ClientRole"/>。</para>
+/// <para><b>异常处理有硬性要求</b>：<c>WinExe</c> 没有控制台，未捕获异常只会让窗口
 /// 无声消失，用户既不知道发生了什么，也拿不到任何证据。所以任何逃逸到这里的异常
 /// 都必须先落到磁盘上的 crash 文件，再弹出来——验收的价值全在证据能带走。</para>
 /// <para><b>为什么要防重入</b>：如果异常发生在渲染/排版路径上
@@ -17,15 +20,82 @@ namespace LanRemote.Acceptance;
 /// 于是 <c>MessageBox</c> 弹出 → 重绘 → 再弹出 …… 变成弹框风暴，
 /// 用户除了强制结束进程什么也做不了，连日志都读不到。
 /// 这里用两个闸门阻断：只弹第一个框；并且第二次异常开始只写盘不弹。</para>
+/// <para><b>本轮新增的两个 handler 是被实测逼出来的</b>（HANDOFF §15）：
+/// <c>AppDomain.UnhandledException</c> 覆盖非 UI 线程——这类异常会直接带走进程；
+/// <c>TaskScheduler.UnobservedTaskException</c> 覆盖 fire-and-forget 任务——这类异常
+/// <b>不会</b>带走进程，因而会完全静默。两个方向都要有落盘动作。</para>
 /// </remarks>
 public partial class App : Application
 {
     private static int _crashReportCount;
+    private static int _headless;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
         base.OnStartup(e);
+
+        if (e.Args.Length > 0)
+        {
+            Interlocked.Exchange(ref _headless, 1);
+
+            bool parsed = HeadlessCommand.TryParse(e.Args, out HeadlessCommand? command, out string? error);
+
+            // 两个条件都要判。只判 parsed 是不够的——曾经就因为 TryParse 在参数错误时
+            // 返回 true，于是这里拿着 null 命令走下去，参数错误的消息被彻底丢掉，
+            // 用户看到的只有「退出码 3、零输出」。详见 HeadlessCommand.TryParse 的 remarks。
+            if (!parsed || error is not null || command is null)
+            {
+                HeadlessRunner.WriteUsage(
+                    error ?? "参数里没有 --headless。不带任何参数双击才是打开窗口。");
+
+                Shutdown((int)AcceptanceOutcome.HarnessError);
+                return;
+            }
+
+            RunHeadless(command);
+            return;
+        }
+
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
+        MainWindow window = new();
+        MainWindow = window;
+        window.Show();
+    }
+
+    /// <summary>
+    /// 无界面执行。
+    /// </summary>
+    /// <remarks>
+    /// <b>绝不能在 <see cref="OnStartup"/> 里同步等待</b>：此刻消息循环还没开始转，
+    /// UI 线程上的 <c>SynchronizationContext</c> 却已经装好了，任何
+    /// <c>await</c> 的续体都会被投回一个不转的泵——直接死锁。
+    /// 所以放到 <see cref="Task.Run(Func{Task})"/> 上跑（线程池上没有 WPF 的上下文，
+    /// 续体不会被投回 UI 线程），跑完再用 <see cref="Dispatcher"/> 回到 UI 线程退出。
+    /// </remarks>
+    private void RunHeadless(HeadlessCommand command)
+    {
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        _ = Task.Run(async () =>
+        {
+            int code;
+
+            try
+            {
+                code = await HeadlessRunner.RunAsync(command);
+            }
+            catch (Exception ex)
+            {
+                TryWriteCrash(ex);
+                code = (int)AcceptanceOutcome.HarnessError;
+            }
+
+            Dispatcher.Invoke(() => Shutdown(code));
+        });
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs args)
@@ -34,12 +104,13 @@ public partial class App : Application
         string path = TryWriteCrash(args.Exception);
         int seen = Interlocked.Increment(ref _crashReportCount);
 
-        if (seen == 1)
+        // 无界面模式下不许弹窗——脚本跑着跑着卡在一个没人能点的框上是最坏的结果。
+        if (seen == 1 && Volatile.Read(ref _headless) == 0)
         {
             MessageBox.Show(
                 "验收器发生未处理异常：\n\n" + args.Exception.Message +
                 "\n\n完整信息已写入：\n" + path +
-                (seen < 2 ? "\n\n（若窗口继续闪退，请直接把 crash.log 整段贴回。）" : string.Empty),
+                "\n\n（若窗口继续闪退，请直接把 crash.log 整段贴回。）",
                 "LanRemote M3 验收器",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -49,15 +120,39 @@ public partial class App : Application
         args.Handled = true;
     }
 
+    /// <remarks>
+    /// 非 UI 线程上的未处理异常<b>无法被处理</b>——本机实测确认进程会当场结束。
+    /// 这里唯一能做的是把现场写进日志，让事后能知道发生了什么。
+    /// 那个 <c>IsTerminating</c> 判断就是说明这件事的。
+    /// </remarks>
+    private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs args)
+    {
+        if (args.ExceptionObject is Exception exception)
+        {
+            TryWriteCrash(exception);
+        }
+    }
+
+    /// <remarks>
+    /// fire-and-forget 任务里漏出来的异常。本机实测：.NET 上它<b>不会</b>终止进程，
+    /// 所以不处理就等于彻底静默。这里一律标记为已观察并落盘。
+    /// </remarks>
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs args)
+    {
+        TryWriteCrash(args.Exception);
+        args.SetObserved();
+    }
+
     private static string TryWriteCrash(Exception exception)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "lanremote-m3-acceptance");
+        string directory = AcceptanceLog.DefaultDirectory;
+
         try
         {
             Directory.CreateDirectory(directory);
 
-            // 覆盖写 + 追加：同一次会话里崩溃多次时，没有 AppendAllText 会把之前的现场抹掉。
-            // 用 append 而不是覆盖，是为了保住「第一次崩在哪」这个最有用的信息。
+            // 用 append 而不是覆盖，是为了保住「第一次崩在哪」这个最有用的信息；
+            // 同一次会话里崩溃多次时，覆盖写会把之前的现场抹掉。
             string path = Path.Combine(directory, "crash.log");
             File.AppendAllText(
                 path,

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -41,6 +42,40 @@ public sealed class TlsConnection : IDisposable
 
     /// <summary>协商出的 TLS 协议版本。</summary>
     public SslProtocols NegotiatedProtocol => Stream.SslProtocol;
+
+    /// <summary>本端 TCP 端点（<c>本地IP:临时端口</c>）；socket 已释放或拿不到时为 <c>null</c>。</summary>
+    /// <remarks>
+    /// <para><b>只读观测量，不参与任何判定</b>。它的用途单一：两机验收时把控制端的一条连接
+    /// 与被控端的一条 <c>peer=…</c> 记录**唯一配对**。没有它，就只能靠「聚合计数相等」
+    /// 去猜「被计入的就是这几个场景」，而聚合数相等不构成配对证明
+    /// （见 <c>docs/M3_ACCEPTANCE_UI_REVIEW_TRIAGE.md</c> §1.2）。</para>
+    /// <para>放在这里而不是让验收器自己连 socket：验收器必须走产品路径，
+    /// 自己连一条 TCP 再交给 <c>SslStream</c> 就等于把被测对象换掉了。</para>
+    /// </remarks>
+    public IPEndPoint? LocalEndPoint
+    {
+        get
+        {
+            if (_disposed)
+            {
+                return null;
+            }
+
+            try
+            {
+                return _client.Client.LocalEndPoint as IPEndPoint;
+            }
+            catch (SocketException)
+            {
+                // socket 已被对端/内核拆掉。这是观测，不是判定，拿不到就不给。
+                return null;
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+        }
+    }
 
     /// <summary>释放底层 socket 与 TLS 流。</summary>
     public void Dispose()

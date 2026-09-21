@@ -203,6 +203,45 @@ public sealed class TlsClientConnectorTests
             () => connector.ConnectAsync(poisoned!));
     }
 
+    /// <summary>
+    /// <c>LocalEndPoint</c> 必须与对端 accept 到的远端端点**完全一致**，且释放后不再抛异常。
+    /// </summary>
+    /// <remarks>
+    /// <para>这个属性不参与任何判定，只是两机验收的配对键。但「不参与判定」不等于「可以不做对侧断言」：
+    /// 如果只断言它非空，那么把它实现成 <c>返回任意本地端口</c> 测试照样绿——
+    /// 而错的配对键会让两份日志配错行，比没有配对键更坏。</para>
+    /// <para>所以这里断言的是**同一性**：客户端自己说的本地端点 == 服务端 accept 时看到的远端端点。</para>
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Connect_Reports_Local_EndPoint_Matching_Server_Observation()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        using TestTlsServer server = new(certificate);
+        TlsClientConnector connector = new();
+
+        ConnectionTarget target = CreateTarget(
+            server.Port,
+            TestCertificateFactory.Fingerprint(certificate));
+
+        TlsConnection connection = await connector.ConnectAsync(target);
+
+        IPEndPoint? local = connection.LocalEndPoint;
+        Assert.NotNull(local);
+
+        // 回环上客户端与「服务端看到的远端」是同一台机器：地址必须是 IPv4 回环，端口必须一致。
+        Assert.Equal(IPAddress.Loopback, local!.Address);
+        Assert.NotEqual(0, local.Port);
+
+        IPEndPoint observed = Assert.Single(server.AcceptedRemoteEndPoints);
+        Assert.Equal(observed.Port, local.Port);
+        Assert.Equal(observed.Address, local.Address);
+
+        // 释放之后必须「拿不到」而不是「抛异常」——验收器在 using 块外才打印日志时不能炸。
+        connection.Dispose();
+        Assert.Null(connection.LocalEndPoint);
+        Assert.Null(connection.LocalEndPoint); // 幂等，第二次调用行为一致
+    }
+
     private static ConnectionTarget CreateTarget(int port, string pinHex)
     {
         bool created = ConnectionTarget.TryCreate(

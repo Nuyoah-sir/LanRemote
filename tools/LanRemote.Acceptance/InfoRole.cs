@@ -17,20 +17,22 @@ namespace LanRemote.Acceptance;
 internal static class InfoRole
 {
     public static async Task<InfoResult> RunAsync(
-        AcceptanceLog log,
+        AcceptanceRun run,
         CancellationToken cancellationToken)
     {
-        using AcceptanceContext context = new(LogLevel.Warning);
+        AcceptanceLog log = run.Log;
+
+        await using AcceptanceContext context = new(LogLevel.Warning, log.WriteLine);
         await context.InitializeAsync(cancellationToken);
 
         DeviceIdentity identity = context.Identity;
         IReadOnlyList<NetworkBinding> bindings = context.Bindings.GetBindings();
         IReadOnlyList<IPAddress> listen = context.ListenAddresses();
 
-        log.WriteLine("deviceCode  = " + identity.DeviceCode);
-        log.WriteLine("deviceId    = " + identity.DeviceId);
+        run.WriteHeader(timeouts: null);
+        run.WriteIdentity(identity, context.Certificate, listen);
+
         log.WriteLine("deviceName  = " + identity.DeviceName);
-        log.WriteLine("certSha256  = " + context.Certificate.Sha256FingerprintHex);
         log.WriteLine("configRoot  = " + context.Paths.RootDirectory);
         log.WriteLine("udpDiscover = " + context.Config.DiscoveryPort);
         log.WriteLine("tcpTransmit = " + context.Config.TransportPort);
@@ -47,9 +49,6 @@ internal static class InfoRole
                 $"  - {binding.Address}/{binding.SubnetMask} [{binding.InterfaceName}] " +
                 $"{binding.InterfaceType} ifIndex={binding.InterfaceIndex}");
         }
-
-        log.WriteLine("listenOn    = " +
-            (listen.Count == 0 ? "(none)" : string.Join(", ", listen)));
 
         bool ready = listen.Count > 0;
 

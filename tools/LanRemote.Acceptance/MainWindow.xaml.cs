@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
 using LanRemote.Discovery;
 
 namespace LanRemote.Acceptance;
@@ -16,27 +17,20 @@ namespace LanRemote.Acceptance;
 /// <para>因此本程序是 <c>WinExe</c> + WPF：<b>双击就是一个窗口</b>，不需要任何脚本。
 /// 所有输出走 <see cref="AcceptanceLog"/>（UI + 磁盘各一份），
 /// 「复制全部日志」把证据一次性带走。</para>
+/// <para><b>每次点开始都开一轮新的运行</b>：新一轮 = 新的 Run ID + 新的不可变日志文件。
+/// 于是「这一次到底测了什么」有确定边界，不会和上一次混在同一个文件里。
+/// UI 日志区是累积的（方便一次拷走），但每轮的开头都会打出自己的 Run ID 与文件名。</para>
 /// </remarks>
 public partial class MainWindow : Window
 {
-    private readonly AcceptanceLog _log;
+    private readonly string _logDirectory = AcceptanceLog.DefaultDirectory;
+    private AcceptanceRun? _run;
     private CancellationTokenSource? _runCts;
 
     public MainWindow()
     {
         InitializeComponent();
 
-        string directory = Path.Combine(Path.GetTempPath(), "lanremote-m3-acceptance");
-        _log = new AcceptanceLog(directory, "gui.log");
-
-        // 日志行可能来自任意后台线程（accept 循环、discovery、TLS 回调），
-        // 所以每次回调都要回到 UI 线程再追加。
-        _log.LineWritten += line =>
-        {
-            Dispatcher.BeginInvoke(new Action<string>(AppendLine), line);
-        };
-
-        LogPathText.Text = "日志目录：" + directory;
         Loaded += OnLoaded;
 
         // 渲染完成 = WPF 排版/字体缓存真的跑通了。
@@ -48,8 +42,31 @@ public partial class MainWindow : Window
     private void OnContentRendered(object? sender, EventArgs e)
     {
         ContentRendered -= OnContentRendered;
-        _log.WriteLine($"[GUI] 窗口渲染完成。 ActualWidth={ActualWidth} ActualHeight={ActualHeight}");
+        AppendLine($"[GUI] 窗口渲染完成。 ActualWidth={ActualWidth} ActualHeight={ActualHeight}");
     }
+
+    // -----------------------------------------------------------------------
+    // 运行生命周期
+    // -----------------------------------------------------------------------
+    /// <summary>开一轮新的运行：新 Run ID、新不可变日志文件。</summary>
+    private AcceptanceRun BeginRun(string role)
+    {
+        if (_run is not null)
+        {
+            _run.Log.LineWritten -= OnLineWritten;
+        }
+
+        _run = AcceptanceRun.Create(_logDirectory, role);
+        _run.Log.LineWritten += OnLineWritten;
+
+        // 日志行可能来自任意后台线程（accept 循环、discovery、TLS 回调），
+        // 所以每次回调都要回到 UI 线程再追加。
+        LogPathText.Text = "本轮日志：" + (_run.Log.FilePath ?? "(落不了盘，只有 UI 里这一份)");
+        return _run;
+    }
+
+    private void OnLineWritten(string line) =>
+        Dispatcher.BeginInvoke(new Action<string>(AppendLine), line);
 
     private void AppendLine(string line)
     {
@@ -57,14 +74,40 @@ public partial class MainWindow : Window
         LogBox.ScrollToEnd();
     }
 
+    private void ShowResult(AcceptanceOutcome outcome, string extra)
+    {
+        (Brush background, Brush foreground) = outcome switch
+        {
+            AcceptanceOutcome.Pass =>
+                (new SolidColorBrush(Color.FromRgb(0xE6, 0xF4, 0xEA)), Brushes.DarkGreen),
+            AcceptanceOutcome.PreconditionUnmet =>
+                (new SolidColorBrush(Color.FromRgb(0xFF, 0xF6, 0xE0)), Brushes.DarkOrange),
+            _ => (new SolidColorBrush(Color.FromRgb(0xFD, 0xEC, 0xEA)), Brushes.DarkRed),
+        };
+
+        ResultBanner.Background = background;
+        ResultBanner.Visibility = Visibility.Visible;
+        ResultBannerText.Foreground = foreground;
+        ResultBannerText.Text = $"本轮结论：{outcome.Describe()}（{outcome.Code()}）。{extra}";
+    }
+
+    private void ShowBanner(string text, Brush background, Brush foreground)
+    {
+        RoleBanner.Background = background;
+        RoleBannerText.Foreground = foreground;
+        RoleBannerText.Text = text;
+    }
+
     // -----------------------------------------------------------------------
     // 启动自检
     // -----------------------------------------------------------------------
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        AcceptanceRun run = BeginRun("info");
+
         try
         {
-            InfoRole.InfoResult info = await InfoRole.RunAsync(_log, CancellationToken.None);
+            InfoRole.InfoResult info = await InfoRole.RunAsync(run, CancellationToken.None);
 
             DeviceCodeText.Text = info.DeviceCode;
             CertPinText.Text = info.CertSha256;
@@ -75,22 +118,22 @@ public partial class MainWindow : Window
             if (info.Ready)
             {
                 ReadyText.Text = "可以参与两机验收";
-                ReadyText.Foreground = System.Windows.Media.Brushes.DarkGreen;
+                ReadyText.Foreground = Brushes.DarkGreen;
                 SetRoleButtonsEnabled(true);
             }
             else
             {
                 ReadyText.Text = "不能参与：本机没有合格的 RFC1918 私有网卡。"
                     + " 请先用管理员 PowerShell 跑 set-lab-ip.ps1 -Role A（或 -Role B）。";
-                ReadyText.Foreground = System.Windows.Media.Brushes.DarkRed;
+                ReadyText.Foreground = Brushes.DarkRed;
                 SetRoleButtonsEnabled(false);
             }
         }
         catch (Exception ex)
         {
             ReadyText.Text = "自检失败：" + ex.Message;
-            ReadyText.Foreground = System.Windows.Media.Brushes.DarkRed;
-            _log.WriteLine("[FATAL] 自检失败：" + ex);
+            ReadyText.Foreground = Brushes.DarkRed;
+            run.Log.WriteLine("[FATAL] 自检失败：" + ex);
             SetRoleButtonsEnabled(false);
         }
     }
@@ -106,35 +149,45 @@ public partial class MainWindow : Window
     // -----------------------------------------------------------------------
     private async void HostButton_Click(object sender, RoutedEventArgs e)
     {
+        AcceptanceRun run = BeginRun("host");
+
         CancellationTokenSource cts = new();
         _runCts = cts;
 
-        HostButton.IsEnabled = false;
-        ClientButton.IsEnabled = false;
-        StopHostButton.IsEnabled = true;
+        // 角色锁：选定被控端后，控制端那组到停机为止都不能再用。
+        // 同一台机器既当被控端又当控制端，会让「对端」的语义消失，
+        // 测出来的东西无法解释。
+        LockRole(lockedToHost: true);
 
         try
         {
-            _log.WriteLine("===== 被控端开始监听 " + DateTime.Now.ToString("HH:mm:ss") + " =====");
-            await HostRole.RunAsync(_log, HostRole.RunUntilCancelled, cts.Token);
+            AcceptanceOutcome outcome = await HostRole.RunAsync(
+                run, HostRole.RunUntilCancelled, cts.Token);
+
+            ShowResult(outcome, outcome == AcceptanceOutcome.Pass
+                ? "把这一整段日志拷走，它就是被控端的证据；控制端日志要能对上这里的汇总行。"
+                : "看日志末尾的 [HOST][SUMMARY] 与 [RESULT]。");
         }
         catch (Exception ex)
         {
-            _log.WriteLine("[FATAL] 被控端崩溃：" + ex);
+            run.Log.WriteLine("[FATAL] 被控端崩溃：" + ex);
+            ShowResult(AcceptanceOutcome.HarnessError, "被控端抛出未预期异常，见日志。");
         }
         finally
         {
-            StopHostButton.IsEnabled = false;
-            HostButton.IsEnabled = true;
-            ClientButton.IsEnabled = true;
+            UnlockRoles();
             _runCts = null;
         }
     }
 
     private void StopHostButton_Click(object sender, RoutedEventArgs e)
     {
-        _log.WriteLine("[UI] 用户点了「停止监听」。");
+        _run?.Log.WriteLine("[UI] 用户点了「停止监听」。");
         StopHostButton.IsEnabled = false;
+
+        // 停机会强行关掉 socket，而「连接被关闭」正是若干场景的通过条件。
+        // 不整轮作废，就等于用一次按停操作伪造出通过。
+        _run?.MarkOperatorAbort("UI 停止监听");
         _runCts?.Cancel();
     }
 
@@ -144,6 +197,7 @@ public partial class MainWindow : Window
     private async void ClientButton_Click(object sender, RoutedEventArgs e)
     {
         string peerCode = PeerCodeBox.Text.Trim();
+
         if (peerCode.Length == 0)
         {
             MessageBox.Show(
@@ -153,77 +207,115 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (IsSelf(peerCode))
+        {
+            MessageBox.Show(
+                "对端设备码就是本机自己。\n\n" +
+                "两机验收必须一台当被控端、另一台当控制端；" +
+                "填自己的设备码会让「同一子网校验」「pinning」全部失去意义。",
+                "对端不能是本机", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        AcceptanceRun run = BeginRun("client");
+
         CancellationTokenSource cts = new();
         _runCts = cts;
 
-        HostButton.IsEnabled = false;
-        ClientButton.IsEnabled = false;
-        StopClientButton.IsEnabled = true;
+        LockRole(lockedToHost: false);
 
         try
         {
-            _log.WriteLine("===== 控制端开始验收 " + DateTime.Now.ToString("HH:mm:ss") +
-                           " 对端=" + peerCode + " =====");
+            run.Log.WriteLine("[CLIENT] 对端设备码 = " + peerCode);
 
-            int passed = 0;
-            int total = ClientRole.MandatoryScenarios.Length;
+            AcceptanceOutcome outcome = await ClientRole.RunAllAsync(
+                run,
+                ClientRole.MandatoryScenarios,
+                peerCode,
+                address: null,
+                pinHex: null,
+                DiscoveryConstants.ExpectedTransportPort,
+                cts.Token);
 
-            foreach (string scenario in ClientRole.MandatoryScenarios)
-            {
-                if (cts.IsCancellationRequested)
-                {
-                    break;
-                }
-
-                _log.WriteLine("");
-                _log.WriteLine("----- 场景 " + scenario + " -----");
-
-                int code = await ClientRole.RunAsync(
-                    _log,
-                    scenario,
-                    peerCode,
-                    null,
-                    null,
-                    DiscoveryConstants.ExpectedTransportPort,
-                    cts.Token);
-
-                if (code == 0)
-                {
-                    passed++;
-                }
-
-                _log.WriteLine($"----- 场景 {scenario} 结束，退出码 {code} " +
-                               $"({code switch { 0 => "符合预期", 1 => "不符合预期", _ => "前置条件不满足" }}) -----");
-            }
-
-            _log.WriteLine("");
-            _log.WriteLine($"===== 控制端汇总：{passed}/{total} 个场景符合预期 =====");
-
-            MessageBox.Show(
-                $"三个场景跑完，{passed}/{total} 个符合预期。\n\n" +
-                "请把「被控端」那台机器的日志也一起拷回来——\n" +
-                "两个场景的判定需要两边对得上（详见日志末尾的说明）。",
-                "验收结束", MessageBoxButton.OK,
-                passed == total ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            ShowResult(outcome, outcome == AcceptanceOutcome.Pass
+                ? "控制端自己只给到 PASS-CLIENT；里程碑是否通过，要拿被控端汇总行核 " +
+                  "日志末尾的「两机交叉核对」。"
+                : "看日志末尾的 [CLIENT][RESULT] 与「两机交叉核对」。");
         }
         catch (Exception ex)
         {
-            _log.WriteLine("[FATAL] 控制端崩溃：" + ex);
+            run.Log.WriteLine("[FATAL] 控制端崩溃：" + ex);
+            run.ReportBackgroundFault("MainWindow 控制端", ex);
+            ShowResult(AcceptanceOutcome.HarnessError, "控制端抛出未预期异常，见日志。");
         }
         finally
         {
-            StopClientButton.IsEnabled = false;
-            HostButton.IsEnabled = true;
-            ClientButton.IsEnabled = true;
+            UnlockRoles();
             _runCts = null;
         }
     }
 
     private void StopClientButton_Click(object sender, RoutedEventArgs e)
     {
-        _log.WriteLine("[UI] 用户点了「中止」。");
+        _run?.Log.WriteLine("[UI] 用户点了「中止」。");
         StopClientButton.IsEnabled = false;
+
+        // 同被控端：中止会让 socket 被强行关掉，而「被关掉」是若干场景的通过条件。
+        _run?.MarkOperatorAbort("UI 中止");
         _runCts?.Cancel();
+    }
+
+    /// <summary>本机设备码是否等于用户填的对端设备码。</summary>
+    private bool IsSelf(string peerCode)
+    {
+        string self = DeviceCodeText.Text;
+
+        if (string.IsNullOrWhiteSpace(self) || self.StartsWith("检测", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        static string Normalize(string value) =>
+            value.Replace("-", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+
+        return string.Equals(Normalize(self), Normalize(peerCode), StringComparison.Ordinal);
+    }
+
+    // -----------------------------------------------------------------------
+    // 角色锁
+    // -----------------------------------------------------------------------
+    private void LockRole(bool lockedToHost)
+    {
+        HostButton.IsEnabled = false;
+        ClientButton.IsEnabled = false;
+        PeerCodeBox.IsEnabled = false;
+
+        if (lockedToHost)
+        {
+            StopHostButton.IsEnabled = true;
+            ShowBanner("HOST —— 让这台机器继续监听，不要点别的。被控端本轮的日志就是这里的证据。",
+                new SolidColorBrush(Color.FromRgb(0xE3, 0xF2, 0xFD)), Brushes.DarkBlue);
+        }
+        else
+        {
+            StopClientButton.IsEnabled = true;
+            ShowBanner("CLIENT —— 这台机器在跑测试。四个场景会自动依次跑完，中途别切角色。",
+                new SolidColorBrush(Color.FromRgb(0xE6, 0xF4, 0xEA)), Brushes.DarkGreen);
+        }
+
+        ResultBanner.Visibility = Visibility.Collapsed;
+    }
+
+    private void UnlockRoles()
+    {
+        HostButton.IsEnabled = true;
+        ClientButton.IsEnabled = true;
+        PeerCodeBox.IsEnabled = true;
+        StopHostButton.IsEnabled = false;
+        StopClientButton.IsEnabled = false;
+
+        ShowBanner("本轮结束。要换角色请直接点另一组；换角色会开一轮新的运行（新 Run ID、新日志文件）。",
+            new SolidColorBrush(Color.FromRgb(0xEE, 0xEE, 0xEE)), Brushes.DimGray);
     }
 
     // -----------------------------------------------------------------------
@@ -233,9 +325,11 @@ public partial class MainWindow : Window
     {
         try
         {
-            Clipboard.SetText(_log.All);
-            MessageBox.Show("已把整段日志复制到剪贴板。", "复制完成",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            Clipboard.SetText(LogBox.Text);
+            MessageBox.Show(
+                "已把整段日志复制到剪贴板。\n\n" +
+                "两机验收要两份：这一份，加上对端那台机器的。",
+                "复制完成", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -244,15 +338,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ClearLog_Click(object sender, RoutedEventArgs e)
-    {
-        LogBox.Clear();
-    }
-
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
     {
-        string? path = _log.FilePath is null ? null : Path.GetDirectoryName(_log.FilePath);
-        if (path is null || !Directory.Exists(path))
+        string? path = Directory.Exists(_logDirectory) ? _logDirectory : null;
+
+        if (path is null)
         {
             MessageBox.Show("日志目录还不存在。", "打开日志目录",
                 MessageBoxButton.OK, MessageBoxImage.Information);
