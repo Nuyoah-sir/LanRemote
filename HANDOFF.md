@@ -30,8 +30,10 @@
 - **两机 lab 环境均已就绪，且第 24 步两机验收已跑完（PASS，2026-09-21）**：
   A（本机）= `192.168.1.10`、B = `192.168.1.20`，UDP 45872 + TCP 45873 入站放行；
   A 侧四场景 4/4 PASS（runId `8a7e3d03`）、B 侧四条连接行与五条汇总约束全部对上
-  （runId `0e7f03d0`）。**收尾待办：两台机器各点一次「撤销准备（还原网络设置）」**
-  （用户执行；判定明细与 `INVALID_RUN` 口径见第 15 节第 24 步记录）。
+  （runId `0e7f03d0`）。**收尾已完成：两机 lab 均已撤销还原**——B 机 2026-09-21 11:13Z
+  （用户点窗口按钮）、A 机 11:21Z / 本地 19:21（管理员直跑同物料 `--headless lab-undo`，
+  runId `037fd836`）；两机撤销后 `--headless info` 均 `qualifiedNic=(无)`。判定明细与
+  `INVALID_RUN` 口径见第 15 节第 24 步记录。
 - **M2.1 code 状态：Implementation complete；Two-machine manual DoD：PASS**
   （2026-09-20 17:30–18:18 两台实机跑完 20 步，20/20 通过，见第 9 节）
 - **是否满足完整 M2 DoD：是**（两机手工验收已回填）
@@ -1427,8 +1429,27 @@ INVALID_RUN 退 4、`sessionHandled=0`，与上述机制一致。
 **遗留（文字性，不为它单独重打包）**：A 侧交叉核对清单标题写「下面四条」而实列 5 项
 （`ClientRole` 文案）；与 `HostRole.cs` 前置失败文案一起，下次动代码时顺手改。
 
-**收尾**：两台机器各点一次「撤销准备（还原网络设置）」（= `set-lab-ip.ps1 -Undo`，用户执行）；
-撤销后 A 机回到 `172.100.166.220`（非 RFC1918）属正常。
+**收尾（已完成，两机 lab 均已不存在，第 24 步至此全链闭环）**：
+B 机 2026-09-21 11:13Z 由用户在窗口点「撤销准备」（`lab-undo` PASS，转发对账 104/104：
+`removed 192.168.1.20` + 两条规则删除 + DHCP 恢复）；
+A 机 2026-09-21 11:21Z（本地 19:21）由开发侧以管理员身份直跑同物料 `--headless lab-undo`
+（runId `037fd836`，`outcome=PASS` / 退 0；**不弹 UAC**——直跑的是提升动词本体，
+进程本身已是管理员、没有父进程编排那一层，故没有「转发对账」行）。
+A 机脚本自述：`removed 192.168.1.10` / `not present 192.168.1.20` / 两条规则删除 /
+`switching interface back to DHCP … lease renewed.`；撤销后以太网 = `172.100.166.220/24`
+（Dhcp，续租拿回同地址；非 RFC1918 属正常）。
+撤销后两机 `--headless info` 均 `qualifiedNic=(无)` / `UNMET reason=no-qualified-rfc1918-nic`
+（A 侧 runId `2f18741c` 退 2；B 侧 `8e702a4a`）。
+A 机 undo 日志里的两条提示是**设计内路径**（脚本 v4 头部 revision notes 已预记，非缺陷）：
+① `WARNING: saved state points at a lab address (192.168.1.10)`——旧版脚本曾把 lab 状态
+写成「原始状态」，v3 起识别毒化状态文件并弃用、走 DHCP 兜底（脚本注释里的 "Measured on
+machine A" 说的就是本机）；
+② `network profile left as-is (no saved category to restore)`——无可用类别记录时保持
+Private（B 机为 `already Private`）。类别还原逻辑自 v3 起存在（有记录才还原），
+无记录不还原属设计内兜底——`UX_FIRST_RUN_REVIEW_TRIAGE` §6 已就此闭合（见该文件 §3.3 勘误）。
+**本轮文档修订（手册 §1.2 / §9、TRIAGE §3.3 / §6）均不重打包**——执行用 zip 必须与
+真机执行的字节一致；包内 `START-HERE.md` 保持打包时快照（25427 B），此后与
+`docs/M3_TWO_MACHINE_ACCEPTANCE.md` 不再逐字节相同，属预期，日后重打自然刷新。
 
 ### M3 验收器的形态教训（用户连续三次纠错后定稿）
 
