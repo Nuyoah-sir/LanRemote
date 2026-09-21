@@ -817,6 +817,9 @@ dotnet test LanRemote.sln -c Debug --no-build
 | 原始字符串字面量 `"""…\n…"""` | `\n` **不是转义**，是字面反斜杠（我自己先踩了一次，测试假红） |
 | 变异：pre-auth 改用认证后的 1 MiB 额度（A-9） | 该用例 **720 ms** 以 `pre-auth-frame:…` vs `pre-auth-timeout` 变红 |
 | 变异：`HelloFrame.TryParse` 无条件返回 true | **43 条**测试变红 |
+| 变异：删掉客户端 `AllowTlsResume = false` | `Client_Options_Are_Explicit` 4 ms 内变红 |
+| .NET 10 `SslClientAuthenticationOptions` 默认值 | `AllowTlsResume=True`、`AllowRenegotiation=True`、`EnabledSslProtocols=None` —— 三个都必须显式写 |
+| .NET 10 `SslServerAuthenticationOptions` 默认值 | `AllowTlsResume=True`、`AllowRenegotiation=**False**`、`EnabledSslProtocols=None`（两端不对称） |
 
 **⚠️ ADR-032：别过度声称 `ExclusiveAddressUse`**。我最初据此写的注释与测试断言是错的
 （以为开了它就能发现"别人先占了更宽地址"）。实测矩阵如上：
@@ -933,14 +936,43 @@ dotnet test LanRemote.sln -c Debug --no-build
 
     **阶段 4 结果**：`dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **568 PASS / 0 FAIL**
     （阶段 3 的 513 + 新增 55：44 条 `HelloFrameTests` + 11 条 `ControlPreAuthSessionTests`）。
+    **Last code commit：`e0484ec`** · **Working tree at validation: clean**
 
 ### 阶段 5 —— 收口
 
-22. 把 triage A 桶每条的"最小测试"落成真实测试（pre-auth inert、快照不可变、pin 字节比较、
-    accept 前准入、deadline、严格解析、终态）。
-23. `dotnet build` + `dotnet test` 全绿，更新 HANDOFF 与 `docs/DECISIONS.md`（若新增 ADR）。
-24. 两机验收（跨机真实 TLS + pinning）：**需要用户参与**，M2 的那套 `scripts/acceptance/` 可复用，
-    但要新增"跨机握手成功 / 指纹不符被拒 / 跨子网被拒"三类用例。
+22. ✅ **已完成** triage A 桶 18 条逐条对账（`docs/M3_REVIEW_TRIAGE.md` §2）。
+    对账时发现 **3 个真实缺口**（A-6 的本地地址来源、A-16/17 的 TLS 选项、A-1 的终态 e2e），已补。
+
+    | A# | 约束 | 落在哪个测试 |
+    | --- | --- | --- |
+    | 1 | TLS 成功 = 显式 `PreAuthenticated`，不是"已认证" | `PreAuthenticated_Allows_Nothing_Before_M4`、`Valid_Hello_Reaches_PreAuthenticated_And_Closes`、`After_Hello_The_Connection_Is_Closed_And_A_Second_Hello_Gets_Nothing` |
+    | 2 | 点击时冻结不可变快照，握手期间不回读缓存 | `Frozen_Pin_Survives_Discovery_Cache_Mutation_Mid_Handshake`、`TryCreate_FromDiscoveredDevice_FreezesAddressAndPin`、`ExpectedCertSha256_IsNotSharedWithCaller` |
+    | 3 | pin 先解码成恰好 32 字节，比较用 `FixedTimeEquals` | `TryDecode_*`、`Matches_*`、`TryCreate_RejectsMalformedPin`、`TryCreate_RejectsPresentedWithWrongLength` |
+    | 4 | 同 deviceId 不同指纹不得静默覆盖 | **ADR-027 有意推迟到 M4 之前**，M3 靠第 2 条止血；**本条在 M3 故意没有测试** |
+    | 5 | M3 暴露不可变 `PresentedCertSha256`（ADR-028） | `Connect_Succeeds_And_Captures_Presented_Pin`、`TryCreate_CapturesExpectedAndPresented`、`Identity_IsNotAffectedByMutatingThePresentedArrayAfterCreation` |
+    | 6 | 同子网在 accept 后、TLS 前，用<b>接受它的那个 listener 地址</b> | `Rejects_Peer_That_Fails_Subnet_Check_Before_Any_Tls`、`Real_SubnetPolicy_Rejects_Loopback_Peer_...`、**新增** `Subnet_Check_Receives_The_Accepting_Listener_Address` |
+    | 7 | 准入在 accept 后、握手前；`finally` 释放 | `Admission_Limit_Refuses_The_Extra_Connection`、`Acquires_Up_To_Global_Limit_Then_Refuses`、`Refuses_Same_Address_Beyond_Per_Address_Limit_...`、`Release_Is_Idempotent` |
+    | 8 | 阶段绝对 deadline | `Slow_Trickle_Does_Not_Extend_The_Absolute_Deadline`、`Prefix_And_Payload_Deadlines_Are_Independent`、`Handshake_Deadline_Fires_Even_When_Peer_Keeps_Silence`、`PreAuthDeadlineTests` ×4 |
+    | 9 | pre-auth 独立小上限 | `Pre_Auth_Frame_Larger_Than_4KiB_Is_Rejected` |
+    | 10 | `uint` 先校验，超限不 drain | `Validate_Length_Covers_The_Interesting_Boundaries`、`Oversized_Length_Is_Rejected_Without_Draining_The_Payload` |
+    | 11 | 严格 JSON 解析器 | `HelloFrameTests` ×44 |
+    | 12 | 首帧必须且仅能是 hello | `First_Frame_Must_Be_Exactly_The_Hello` ×5、`A_Session_Cannot_Be_Run_Twice` |
+    | 13 | M3 必须有明确终态 | `Valid_Hello_Reaches_PreAuthenticated_And_Closes`、`After_Hello_...` |
+    | 14 | pin 是唯一边界；其余是不变量 | `Rejects_Pin_Mismatch`、`Rejects_Ca_Certificate`、`Rejects_Rsa_Key`、`Rejects_Key_Usage_Without_Digital_Signature`、`Rejects_Enhanced_Key_Usage_Without_Server_Auth`、`Rejects_Missing_*` |
+    | 15 | 有效期必须查，用注入时钟 | `Rejects_Expired_Certificate_Using_Injected_Clock`、`Rejects_Not_Yet_Valid_Certificate_Using_Injected_Clock`、`Accepts_Certificate_That_Expires_One_Second_Later` |
+    | 16/17 | 两端显式 `AllowTlsResume=false` / `AllowRenegotiation=false` | **新增** `TlsOptionHardeningTests` ×3（`Defaults_Are_What_We_Must_Not_Rely_On` 把默认值也一起钉住，作为"为什么必须显式写"的证据） |
+    | 18 | 连接任务有界 + 停机 join | `Stop_Cancels_Connections_Stuck_In_Handshake_And_Releases_Admission`、`Stop_Cancels_Ignored_Cancellation_And_Still_Joins`、`Stop_Marks_Stopping_And_Refuses_New_Registrations` |
+
+    为了让 A-16/17 可测，把两端的选项构造提成 `internal`
+    （`TlsClientConnector.CreateClientOptions` / `TransportHost.CreateServerOptions`），
+    并对 `LanRemote.Transport.Tests` 开 `InternalsVisibleTo`——
+    **不这么做的话，删掉一行 `false` 不会有任何东西变红**。
+    已变异验证：注释掉客户端的 `AllowTlsResume = false` 后该用例立即变红。
+23. ✅ **已完成** `dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **573 PASS / 0 FAIL**；
+    HANDOFF 与 `docs/DECISIONS.md`（ADR-033）已更新、变更已提交。
+24. ⛔ **未开始 —— 需要用户参与**：两机验收（跨机真实 TLS + pinning）。
+    M2 的 `scripts/acceptance/` 可复用，但要新增「跨机握手成功 / 指纹不符被拒 / 跨子网被拒」三类用例。
+    **M3 在步骤 24 回填之前不算做完**，本机没有 RFC1918 网卡，这一步无法自证。
 
 ### M3 明确不做
 

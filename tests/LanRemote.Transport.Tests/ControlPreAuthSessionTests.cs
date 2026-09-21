@@ -118,6 +118,53 @@ public sealed class ControlPreAuthSessionTests
     }
 
     /// <summary>
+    /// 步骤 21 的端到端形式：hello 之后连接必须<b>已经关闭</b>，
+    /// 第二个 hello 换不到任何东西。不许把未认证 socket 挂着等 M4。
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task After_Hello_The_Connection_Is_Closed_And_A_Second_Hello_Gets_Nothing()
+    {
+        (ControlPreAuthResult result, _) = await RunAgainstHostAsync(
+            async (connection, _) =>
+                await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline),
+            afterOutcome: async connection =>
+            {
+                bool writeFailed = false;
+                try
+                {
+                    await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline);
+                }
+                catch (Exception)
+                {
+                    writeFailed = true;
+                }
+
+                bool closed = writeFailed;
+                if (!closed)
+                {
+                    // 写被本机缓冲下来也不算成功——必须读回来是个 EOF。
+                    byte[] buffer = new byte[1];
+                    try
+                    {
+                        int read = await connection.Stream
+                            .ReadAsync(buffer)
+                            .AsTask()
+                            .WaitAsync(TimeSpan.FromSeconds(5));
+                        closed = read == 0;
+                    }
+                    catch (Exception)
+                    {
+                        closed = true;
+                    }
+                }
+
+                Assert.True(closed, "hello 之后连接必须已关闭，第二个 hello 换不到任何东西。");
+            });
+
+        Assert.True(result.Completed, result.Rejection);
+    }
+
+    /// <summary>
     /// 握完手就沉默：被自己的长度前缀时限切断，而且必须留下原因。
     /// </summary>
     /// <remarks>
@@ -162,7 +209,9 @@ public sealed class ControlPreAuthSessionTests
     /// 客户端按脚本说话，把服务端结局取回来。
     /// </summary>
     private static async Task<(ControlPreAuthResult Result, ControlPreAuthSession Session)>
-        RunAgainstHostAsync(Func<TlsConnection, CancellationToken, Task> client)
+        RunAgainstHostAsync(
+            Func<TlsConnection, CancellationToken, Task> client,
+            Func<TlsConnection, Task>? afterOutcome = null)
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
         int port = GetFreePort();
@@ -212,6 +261,13 @@ public sealed class ControlPreAuthSessionTests
             ControlPreAuthResult result = await outcomeTask;
 
             stall.Cancel();
+
+            if (afterOutcome is not null)
+            {
+                // 连接此刻还开着，正好用来验证「服务端那一侧已经关了」。
+                await afterOutcome(connection);
+            }
+
             connection.Dispose();
 
             try

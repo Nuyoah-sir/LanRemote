@@ -326,7 +326,14 @@ public sealed class TransportHost : IAsyncDisposable
         }
     }
 
-    private SslServerAuthenticationOptions CreateServerOptions()
+    /// <summary>
+    /// 服务端 TLS 选项。
+    /// </summary>
+    /// <remarks>
+    /// 单独成一个方法是为了让这些<b>必须显式设置</b>的开关能被测试直接断言
+    /// （见 <c>TlsOptionHardeningTests</c>）——否则删掉一行不会有任何东西变红。
+    /// </remarks>
+    internal SslServerAuthenticationOptions CreateServerOptions()
     {
         return new SslServerAuthenticationOptions
         {

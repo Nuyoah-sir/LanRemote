@@ -353,6 +353,39 @@ public sealed class TransportHostTests
         }
     }
 
+    /// <summary>
+    /// 同子网校验拿到的<b>本地地址</b>必须是「接受它的那个 listener 的地址」（triage A-6），
+    /// 不是别的什么地址——掩码要靠它去查绑定，拿错了整道闸门就白设。
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Subnet_Check_Receives_The_Accepting_Listener_Address()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        int port = GetFreePort();
+
+        RecordingSubnetPolicy policy = new(allow: true);
+
+        TransportHost host = new(
+            new[] { IPAddress.Loopback },
+            policy,
+            certificate,
+            (_, _) => Task.CompletedTask,
+            new TransportHostOptions { Port = port });
+
+        await using (host)
+        {
+            host.Start();
+
+            ConnectionTarget target = CreateTarget(port, TestCertificateFactory.Fingerprint(certificate));
+            using TlsConnection connection = await new TlsClientConnector().ConnectAsync(target);
+
+            Assert.True(await WaitUntilAsync(() => policy.LastLocal is not null));
+
+            Assert.Equal(IPAddress.Loopback, policy.LastLocal);
+            Assert.Equal(IPAddress.Loopback, policy.LastRemote);
+        }
+    }
+
     private static ConnectionTarget CreateTarget(int port, string pinHex)
     {
         bool created = ConnectionTarget.TryCreate(
@@ -415,6 +448,20 @@ public sealed class TransportHostTests
         }
 
         public bool IsAllowedPeer(IPAddress localAddress, IPAddress remoteAddress) => _allow;
+    }
+
+    private sealed class RecordingSubnetPolicy(bool allow) : ISubnetPolicy
+    {
+        public IPAddress? LastLocal { get; private set; }
+
+        public IPAddress? LastRemote { get; private set; }
+
+        public bool IsAllowedPeer(IPAddress localAddress, IPAddress remoteAddress)
+        {
+            LastLocal = localAddress;
+            LastRemote = remoteAddress;
+            return allow;
+        }
     }
 
     private sealed class StubBindingProvider : INetworkBindingProvider

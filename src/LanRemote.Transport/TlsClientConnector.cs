@@ -85,17 +85,7 @@ public sealed class TlsClientConnector
                     return accepted;
                 });
 
-            SslClientAuthenticationOptions options = new()
-            {
-                // 空串 = 不发 SNI、不做主机名校验（见类型说明）。
-                TargetHost = string.Empty,
-                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                AllowTlsResume = false,
-                AllowRenegotiation = false,
-
-                // 自签名 + pinning，没有 CRL 可分发的分发点；不要依赖默认值。
-                CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-            };
+            SslClientAuthenticationOptions options = CreateClientOptions();
 
             using (CancellationTokenSource handshakeCts =
                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
@@ -138,4 +128,24 @@ public sealed class TlsClientConnector
             client?.Dispose();
         }
     }
+
+    /// <summary>
+    /// 客户端 TLS 选项。
+    /// </summary>
+    /// <remarks>
+    /// 单独成一个方法是为了让这些<b>必须显式设置</b>的开关能被测试直接断言
+    /// （见 <c>TlsOptionHardeningTests</c>）——否则删掉一行不会有任何东西变红。
+    /// </remarks>
+    internal static SslClientAuthenticationOptions CreateClientOptions() =>
+        new()
+        {
+            // 空串 = 不发 SNI、不做主机名校验（见类型说明）。
+            TargetHost = string.Empty,
+            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+            AllowTlsResume = false,
+            AllowRenegotiation = false,
+
+            // 自签名 + pinning，没有 CRL 可分发的分发点；不要依赖默认值。
+            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+        };
 }
