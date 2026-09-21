@@ -686,6 +686,18 @@ dotnet test LanRemote.sln -c Debug --no-build
 两条不变量已就近写进代码注释与类型 XML doc（`DiscoveryReplyTarget`、`MulticastInterfaceOption`），
 并由单元测试锁住。
 
+### 2026-09-21 追加：ADR-029 被再次收紧 → **ADR-030**
+
+- **ADR-030 — `CertificateRequest.CreateSelfSigned()` 直接产出的证书，私钥是 ephemeral 的，
+  不能用作 Windows TLS 服务端凭据；必须经「导出 PFX → `DefaultKeySet` 导入」往返。**
+- 实测：服务端在 `AcquireCredentialsHandle` 处抛
+  `AuthenticationException: Authentication failed because the platform does not support ephemeral keys.`
+  ← `Win32Exception 0x8009030E`；客户端只看到 `IOException: unexpected EOF`。
+- **关键推论**：这与 ADR-029 的 `EphemeralKeySet` 失败是**同一个错**。说明 Schannel 拒绝的是
+  **密钥的 ephemeral 属性本身**，而不是某个导入 flag 的名字。
+  ADR-029 改 flag 只是必要条件；`DeviceCertificateService` 里那步 PFX 往返**不是冗余代码**。
+- 守护测试：`SelfSignedKeyEphemeralTests.CreateSelfSigned_Certificate_Cannot_Serve_Tls_Without_Pfx_Roundtrip`。
+
 ## 14. 已知问题 / 技术债
 
 1. ~~**M2 手工 DoD 未完成**~~ —— **已于 2026-09-20 两机验收 PASS（20/20）关闭**，见第 9.1 节。
@@ -738,14 +750,51 @@ dotnet test LanRemote.sln -c Debug --no-build
 
 ### 阶段 1 —— 连接目标与身份契约（TOCTOU / ADR-028）
 
-5. 定义**不可变连接目标快照** `{deviceId, remoteIPv4, tcpPort, expectedCertSha256(32B)}`，
+5. ✅ **已完成** 定义**不可变连接目标快照** `{deviceId, remoteIPv4, tcpPort, expectedCertSha256(32B)}`，
    在用户点击连接的那一刻冻结；握手期间**不得**回读 discovery 缓存。
-   验收：握手进行中把缓存的指纹改成 B，仍必须按 A 校验成功 / 按 B 失败。
-6. 定义**不可变连接上下文** `{deviceId, endpoint, expectedPin, presentedPin}`（ADR-028）。
-   `presentedPin` 在证书校验回调里捕获、之后不可变，并**暴露给 M4**（这是 M3 的交付物）。
-7. pin 解码与比较：连之前把 hex 解成**恰好 32 字节**，畸形 / 31 / 33 字节在 `ConnectAsync` 之前失败；
-   比较用 `cert.GetRawCertData()` + `CryptographicOperations.FixedTimeEquals`，**不比 hex 字符串**
-   （.NET 10 回调参数是 `X509Certificate` 基类，没有 `RawData`）。
+   - 产物 `src/LanRemote.Transport/ConnectionTarget.cs`（`TryCreate(DiscoveredDevice)` /
+     `TryCreate(Guid, IPAddress, int, string)`；指纹**复制**进内部数组，只暴露 `ReadOnlyMemory`）。
+   - 验收用例 `TlsClientConnectorTests.Frozen_Pin_Survives_Discovery_Cache_Mutation_Mid_Handshake`：
+     真实握手 + `DiscoveryDeviceCache`，服务端闸门保证「改缓存」发生在 TCP 已连上、TLS 未完成之间；
+     改完仍按 A 校验成功，并从被污染的缓存重新冻结 → 按 B **失败**（对照组）。
+     **已做变异验证**：把 pin 比较短路掉后，本用例的对照组与 `Connect_Rejects_Pin_Mismatch`
+     同时失败（`No exception was thrown`），证明不是空断言。
+   - ⚠️ 诚实边界：`ConnectAsync` 的参数类型就是快照、不持有缓存引用，所以「回读」在类型层面
+     已不可表达；这个用例锁的是**这个契约**，不是在运行期抓到了一次真的回读。
+6. ✅ **已完成** 定义**不可变连接上下文** `{deviceId, endpoint, expectedPin, presentedPin}`（ADR-028）。
+   产物 `src/LanRemote.Transport/ConnectionIdentity.cs`：`presentedPin` 在证书校验回调里捕获、
+   之后不可变、暴露给 M4；不保存 `IPEndPoint` 实例（其 `Port` 可写），每次调用返回新对象。
+   另见步骤 13 的客户端校验器，它同时承担「pin 之外还有哪些不变量」。
+7. ✅ **已完成** pin 解码与比较：连之前把 hex 解成**恰好 32 字节**，畸形 / 31 / 33 字节在
+   `ConnectAsync` 之前失败；比较用 `cert.GetRawCertData()` +
+   `CryptographicOperations.FixedTimeEquals`，**不比 hex 字符串**。
+   产物 `src/LanRemote.Transport/CertificatePin.cs`
+   （`TryDecode` 失败时 `out` 恒为 `Array.Empty<byte>()`；新增 `ReadOnlySpan` 比较重载避免临时分配）。
+
+**阶段 1 附带产出（原本属于步骤 12/13，提前只为让步骤 5 的验收可测）**：
+
+- `src/LanRemote.Transport/TransportTimeouts.cs`：五段**绝对**时限（连接 / 握手 / 长度前缀 /
+  payload / hello），各自独立重新计时。**数值是初始值，不是实测结论**——步骤 15 实测后再调。
+- `src/LanRemote.Transport/PeerCertificateValidator.cs`：客户端对服务端证书的校验。
+  pin 是唯一安全边界；其后是形状不变量（ECDSA P-256 / 非 CA / KU 含 digitalSignature /
+  EKU 含 serverAuth / 有效期）。**刻意不要求 `sslPolicyErrors == None`**——自签名必然触发
+  `RemoteCertificateChainErrors`，本项目不用 CA、不用系统信任库（ADR-027）。
+  时间用 `TimeProvider` 注入，**不改系统时钟**。
+- `src/LanRemote.Transport/TlsClientConnector.cs` + `TlsConnection.cs`：客户端 TLS 连接器。
+  `TargetHost = string.Empty`（**不发 SNI**——CN 是 `LanRemote-<设备码>`，放进 SNI 等于明文广播设备标识；
+  pinning 下主机名校验不参与安全判定）。实测空串可用，握手正常完成。
+- **阶段 1 结果**：`dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **464 PASS / 0 FAIL**
+  （阶段 0 的 409 + 新增 55）。
+
+#### M3 已实测记录（只写实际跑出来的，不预填）
+
+| 场景 | 实测结果 |
+| --- | --- |
+| `CreateSelfSigned` 直出证书做服务端 | **失败**：`AuthenticationException: ... does not support ephemeral keys.` ← `Win32Exception 0x8009030E`；客户端只看到 `IOException: unexpected EOF`（ADR-030） |
+| PFX 往返 + `DefaultKeySet` 后做服务端 | **成功**，协商到 TLS 1.3 |
+| `TargetHost = string.Empty` | **成功**：不发 SNI、不做主机名校验，握手正常完成 |
+| 对端 accept 后一直不握手，握手时限 400 ms | 客户端在 **~400 ms** 被切断，异常类型是 **`System.OperationCanceledException`**（实测 `GetType().FullName`，非推断） |
+| 证书按真实时间有效、按注入时钟已过期 | 客户端抛 `AuthenticationException`，消息含 `expired`（说明是**我们的**校验器拦下的） |
 
 ### 阶段 2 —— Listener / 准入 / 同子网校验
 
@@ -847,6 +896,18 @@ dotnet test LanRemote.sln -c Debug --no-build
   真实原因在**服务端**异常里（`AuthenticationException` + Win32 inner）。spike 必须两边都捕获
 - **别忘了 .NET 10 的证书校验回调参数是 `X509Certificate`（基类）**，没有 `RawData` 属性；
   算 pin 要用 `cert.GetRawCertData()`（或转型成 `X509Certificate2`）。编译器会直接报错提醒，别绕过去
+- **不要把 `CertificateRequest.CreateSelfSigned(...)` 的结果直接当 TLS 服务端证书**（ADR-030）：
+  它的私钥是 ephemeral 的，服务端会在 `AcquireCredentialsHandle` 处失败
+  （`... does not support ephemeral keys.` ← `0x8009030E`，与 ADR-029 同一个错）。
+  **必须**导出 PFX 后用 `DefaultKeySet` 重新导入——`DeviceCertificateService` 里那步
+  PFX 往返是必需环节，不是可以"简化"掉的冗余
+- **不要给 `SslClientAuthenticationOptions.TargetHost` 填设备相关的名字**：CN 是
+  `LanRemote-<设备码>`，SNI 是明文，等于向整个局域网广播设备标识。pinning 下主机名校验不参与
+  安全判定，`TargetHost = string.Empty` 实测可用（不发 SNI、不做名字校验）
+- **不要把 `TransportTimeouts` 里的数值当成实测结论**：它们是初始值，步骤 15 实测取消延迟后要回来调
+- **不要用改系统时钟来测证书有效期**：一律用 `TimeProvider` 注入（测试里 `FakeClock`）。
+  另外造过期证书时要注意——证书按真实时间也得有效，否则服务端 Schannel 会先因过期自行拒绝，
+  测出来的就不是"我们的校验器拒绝了它"
 - **不要照抄直觉去改 IP**：Windows IPv4 是「DHCP 或静态」二选一；追加第二地址前必须先把整张接口
   切成静态并回填原配置，否则会丢 DHCP 租约只剩 169.254（本机已两次踩断）。撤销必须幂等，
   且**不能靠 `netsh` 退出码判成败**。完整约束见 ADR-026

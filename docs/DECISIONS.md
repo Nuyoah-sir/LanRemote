@@ -339,3 +339,46 @@ EKU serverAuth / 5 年 / PFX 随机口令），矩阵 = 3 种 flag × 3 种协�
 断言：握手成功 ∧ 协商协议 ∈ {Tls12, Tls13} ∧ pin 匹配 ∧ 真实帧收发往返成功。
 **实施时机**：**M3 第一步**——先改 flag 并跑通该集成测试，再写其它代码。
 
+
+---
+
+## ADR-030 — 自签发的私钥是 ephemeral 的，必须经 PFX 往返才能做服务端凭据
+
+**日期**：2026-09-21（M3 阶段 1 实测）
+**状态**：已定，实测结论
+**关联**：收紧 **ADR-029**（不是取代）
+
+**Context**：M3 阶段 1 写测试时，用 `CertificateRequest.CreateSelfSigned(...)` 直接造证书当 TLS
+服务端，结果 4 个真实握手用例全挂，且客户端只报
+`IOException: Received an unexpected EOF or 0 bytes from the transport stream`。
+抓服务端异常后才看到真实原因。
+
+**实测**（Windows 11 25H2 / build 26200，.NET 10.0.12，loopback + 真实 `SslStream`）：
+
+```
+System.Security.Authentication.AuthenticationException:
+  Authentication failed because the platform does not support ephemeral keys.
+ ---> System.ComponentModel.Win32Exception (0x8009030E): 安全包中没有可用的凭证
+   at System.Net.SSPIWrapper.AcquireCredentialsHandle(...)
+   at System.Net.Security.SslStreamPal.AcquireCredentialsHandle(...)
+```
+
+**这与 ADR-029 里 `EphemeralKeySet` 的失败是同一个错、同一个 `0x8009030E`。**
+
+**Decision**：
+
+1. Schannel 拒绝的是**密钥本身的 ephemeral 属性**，不是"某个叫 `EphemeralKeySet` 的导入 flag"。
+   ADR-029 把导入 flag 改成 `DefaultKeySet` **只是必要条件**——
+   如果签发得到的私钥本身就是 ephemeral 的，改 flag 也救不了。
+2. 因此 `DeviceCertificateService` 里"签发后立刻导出 PFX、再用 `DefaultKeySet` 导入"这步
+   **不是冗余代码，是必需环节**。任何人不得为了"简化"把它删掉。
+3. 测试造证书时也必须复刻同一条路径（`X509CertificateLoader.LoadPkcs12(pfx, pwd, DefaultKeySet)`），
+   否则测试证书与真实设备证书的密钥形态不一致，得出的结论不可外推。
+
+**Consequence**：
+- 新守护测试 `SelfSignedKeyEphemeralTests.CreateSelfSigned_Certificate_Cannot_Serve_Tls_Without_Pfx_Roundtrip`
+  把这条行为钉住（非 Windows 平台自动跳过——这是 Schannel 的行为）。
+- 再次印证：判定握手失败**不能只看客户端异常**。客户端端永远是 `IOException: unexpected EOF`，
+  真实原因在对端。测试基建（含 `TestTlsServer`）必须收集服务端异常。
+
+**可逆性**：不可回退。

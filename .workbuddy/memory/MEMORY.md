@@ -179,3 +179,14 @@ M3~M11 —— 未开始
 - **污染陷阱**：同进程先 `PersistKeySet` 导入过同一私钥后，`EphemeralKeySet` 会碰巧成功 →
   flag 结论必须**新进程 + 顺序受控 + 重复多次**，否则假阳性
 - M3 必须同步改掉把旧 flag 锁成断言的 `ImportFlags_UsesEphemeralKeySetOnly`
+
+## ADR-030（继 ADR-029 之后）：Schannel 拒绝的是「密钥的 ephemeral 属性」，不是 flag 名字
+
+- `CertificateRequest.CreateSelfSigned(...)` **直出的证书私钥就是 ephemeral 的**，
+  做 TLS 服务端同样失败，报错与 `EphemeralKeySet` **一模一样**（`0x8009030E`）
+- 所以「改 ImportFlags」只是必要条件；**签发后必须走「导出 PFX → `DefaultKeySet` 导入」往返**
+  ——`DeviceCertificateService` 里那步不是冗余，删掉会让服务端直接不可用
+- 测试里造证书也必须复刻同一条往返路径，否则与真实设备证书密钥形态不一致，结论不可外推
+- 判定 TLS 握手失败**永远要抓服务端异常**：客户端端只能是 `IOException: unexpected EOF`
+- .NET 10 其它实测：`TargetHost = string.Empty` 可用（不发 SNI）；
+  握手超时抛 `System.OperationCanceledException`
