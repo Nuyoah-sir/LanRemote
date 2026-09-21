@@ -64,12 +64,39 @@ M2.1 Discovery Final Fix —— **已完成，两机验收 PASS（20/20，2026-0
   build PASS / 408 tests PASS，Last code commit `313c542`
   验收物料与文档：`905fcc8` / `5e9f245` / `846794c` / `b8dbdb3`（无产品代码）
   ✅ 两机手工 DoD **PASS**（HANDOFF §9.1 有完整时间线 + 20 步逐条证据）
-M3 TLS Host/Client + 同子网校验 —— 下一步（验收已 PASS，**等用户开工指令**）
-  - 开工前先跑 **SslStream server/client 握手 spike**（本机实测）收口 ADR-018 的 EphemeralKeySet 风险
+M3 TLS Host/Client + 同子网校验 —— **阶段 0～5 代码已全部完成**（24 步里的 1～23）
+  提交 `ee1cbe3`(P1) `601d7a7`(P2) `5ba5822`(P3) `e0484ec`(P4) `5bf3cb6`(P5)
+  build 0 警告 / **573 tests PASS**
+  ⛔ **卡在第 24 步：两机验收（需用户参与）**，本机无 RFC1918 网卡无法自证 → **M3 还不算做完**
   - 外部模型只做「设计红队评审」（prompt 在 `docs/M3_EXTERNAL_REVIEW_PROMPT.md`）；
     **Windows/.NET 实测行为一律不问模型，本机测**；模型结论不得直接写进 HANDOFF
   - 本机实际系统：**Windows 11 专业版 25H2 / build 26200**（`Win32_OperatingSystem.Caption` 实测）
+  - **第二轮外部评审的合适时机到了**：阶段 1 与阶段 4 的具体类型、状态机、解析器都已落地，
+    主题为「针对具体实现的红队评审」+ 错误消息分类 + 五个 deadline 数值
 M3~M11 —— 未开始
+
+## M3 阶段成果速查（后续里程碑会依赖）
+
+- 传输层类型：`CertificatePin` / `ConnectionTarget`(点击时冻结的不可变快照) /
+  `ConnectionIdentity`(含 **presentedPin**，ADR-028 要求 M4 transcript 必须绑它) /
+  `TransportTimeouts` / `PeerCertificateValidator` / `TlsClientConnector` / `TlsConnection` /
+  `TransportHost`(accept→同子网→准入→TLS，**顺序不可换**) / `ConnectionAdmissionLimiter` /
+  `ConnectionRegistry` / `FrameReader` / `FrameWriter` / `HelloFrame` / `ControlPreAuthSession`
+- **pre-auth 单帧上限 = `MaxPreAuthMessageBytes` 4 KiB**，与认证后 1 MiB 严格区分（ADR-033，对规格的新增约束）
+- **M3 终态 = hello 通过后干净关闭**（`SslStream.ShutdownAsync`）；
+  `AllowedOperationsWhilePreAuthenticated` 在 M4 落地前**必须是空集合**，有测试盯着
+- 五段绝对 deadline 只验证了「执行得准」（误差 0–36ms），**五个数值本身仍待第二轮外部评审**
+- 取消断言只写 `is OperationCanceledException`：SslStream 抛基类，MemoryStream 替身抛 `TaskCanceledException`
+- TLS 选项构造是 `internal` + `InternalsVisibleTo("LanRemote.Transport.Tests")`，
+  只为让「删一行也不会变红」的开关可断言
+
+## 测试写法硬约束（踩过的坑，别再踩）
+
+- **不要**从 `MemoryStream` 派生并同时重写 `Read(Span<byte>)` 与 `ReadAsync(Memory<byte>)`
+  → 一次读会被数**两遍**（`Stream.Read(Span)` 默认实现虚拟调用数组重载）。要计数就**包装**内部流
+- **不要**在原始字符串字面量 `"""…"""` 里写 `\n` 转义（那里不是转义）
+- **变异验证必须确认真变红**；「变异后仍然绿」= 测试隔离错了（ADR-032 已踩一次）
+- **阶段超时必须被 `RunAsync` 接住**，否则与「停机取消」不可区分，且结果永远产生不出来
 
 ## M1 关键存储事实（后续里程碑会依赖）
 

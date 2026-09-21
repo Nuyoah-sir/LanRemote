@@ -23,8 +23,10 @@
 - **是否满足完整 M2 DoD：是**（两机手工验收已回填）
 - 下一阶段：**M3 — TLS Host/Client + 同子网连接校验**
 - **M3 已于 2026-09-21 开工**（用户指令：「开始步骤吧，遇到要我帮忙的地方你就停」）。
-  阶段 0～3 已完成，当前推进到阶段 4（Framing / hello / 状态机）。
-  逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节的 M3 描述可能滞后
+  **阶段 0～5 的代码部分已全部完成**（24 步里的第 1～23 步），
+  当前停在**第 24 步：两机验收——需要用户参与**，本机没有 RFC1918 网卡，无法自证。
+  逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节的 M3 描述可能滞后。
+  最后提交 `5bf3cb6`，`dotnet build` 0 警告 0 错误，`dotnet test` **573 PASS / 0 FAIL**
 
 ### 关于 git 记账方式
 
@@ -968,8 +970,9 @@ dotnet test LanRemote.sln -c Debug --no-build
     并对 `LanRemote.Transport.Tests` 开 `InternalsVisibleTo`——
     **不这么做的话，删掉一行 `false` 不会有任何东西变红**。
     已变异验证：注释掉客户端的 `AllowTlsResume = false` 后该用例立即变红。
-23. ✅ **已完成** `dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **573 PASS / 0 FAIL**；
-    HANDOFF 与 `docs/DECISIONS.md`（ADR-033）已更新、变更已提交。
+23. ✅ **已完成** `dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **573 PASS / 0 FAIL**
+    （阶段 4 的 568 + 新增 5）。HANDOFF 与 `docs/DECISIONS.md`（ADR-033）已更新、变更已提交。
+    **Last code commit：`5bf3cb6`** · **Working tree at validation: clean**
 24. ⛔ **未开始 —— 需要用户参与**：两机验收（跨机真实 TLS + pinning）。
     M2 的 `scripts/acceptance/` 可复用，但要新增「跨机握手成功 / 指纹不符被拒 / 跨子网被拒」三类用例。
     **M3 在步骤 24 回填之前不算做完**，本机没有 RFC1918 网卡，这一步无法自证。
