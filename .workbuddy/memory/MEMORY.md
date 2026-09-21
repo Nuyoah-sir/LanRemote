@@ -45,7 +45,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M4~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）。
-远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 首次全量推送成功（52 提交/693 对象）；`gh` 未装也不需要（`gh auth login` 挂账解除）。推送防挂起：`GIT_TERMINAL_PROMPT=0` + `credential.interactive=false credential.guiPrompt=false`（裸 push 曾静默 SIGTERM）。此后每轮收尾 `git push origin main`。
+远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）；2026-09-21 起首推 + 后续记账提交均推送成功（远端 `main` = 本地，54 提交）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**链路间歇性抖动**：push 会挂到超时 `exit 124`/schannel 握手失败，与代理/配置无关 → **解法=重试**（实测 2 次内过）；`GIT_TERMINAL_PROMPT=0` + 关 GCM 交互仅防凭据挂起。此后每轮收尾 `git push origin main`。
 
 ## 实测事实（别再猜）
 
