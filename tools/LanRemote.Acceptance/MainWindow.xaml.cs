@@ -24,8 +24,29 @@ namespace LanRemote.Acceptance;
 public partial class MainWindow : Window
 {
     private readonly string _logDirectory = AcceptanceLog.DefaultDirectory;
+
+    /// <summary>
+    /// 进程级事实（窗口渲染完成这类「一次进程只有一次」的事）的落盘点。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>为什么不写进本轮运行文件</b>：本轮文件是围着「一次验收运行」建的，
+    /// 而渲染发生在任何运行之前，一次进程只发生一次——两者生命周期不同，
+    /// 硬塞进某一轮会让「这一轮到底测了什么」的边界变模糊。</para>
+    /// <para><b>名字沿用 <c>gui.log</c></b>：HANDOFF 与外部评审 prompt 都是按这个名字找它的。
+    /// （它一度只剩文档——<c>AcceptanceLog</c> 在 f080581 改成 per-run 文件之后，
+    /// 「渲染完成」这行就只进 UI 不落盘了，于是「窗口没崩」这个证据反而带不走。）
+    /// 构造时清空、每行追加：一台机器一次启动对应一份，不会和历史混起来。</para>
+    /// </remarks>
+    private readonly AcceptanceLog _processLog = new(AcceptanceLog.DefaultDirectory, "gui.log");
+
     private AcceptanceRun? _run;
     private CancellationTokenSource? _runCts;
+
+    /// <summary>本机当前能不能参与验收（自检结论）。</summary>
+    private bool _ready;
+
+    /// <summary>窗口正忙：自检或准备动作在进行中。</summary>
+    private bool _busy;
 
     public MainWindow()
     {
@@ -42,7 +63,10 @@ public partial class MainWindow : Window
     private void OnContentRendered(object? sender, EventArgs e)
     {
         ContentRendered -= OnContentRendered;
-        AppendLine($"[GUI] 窗口渲染完成。 ActualWidth={ActualWidth} ActualHeight={ActualHeight}");
+
+        string line = $"[GUI] 窗口渲染完成。 ActualWidth={ActualWidth} ActualHeight={ActualHeight}";
+        AppendLine(line);
+        _processLog.WriteLine(line);
     }
 
     // -----------------------------------------------------------------------
@@ -99,9 +123,17 @@ public partial class MainWindow : Window
     }
 
     // -----------------------------------------------------------------------
-    // 启动自检
+    // 自检
     // -----------------------------------------------------------------------
-    private async void OnLoaded(object sender, RoutedEventArgs e)
+    private async void OnLoaded(object sender, RoutedEventArgs e) => await RunSelfCheckAsync();
+
+    private async void SelfCheckButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync(RunSelfCheckAsync);
+    }
+
+    /// <summary>跑一次环境自检，并按结论刷新整个上半屏。</summary>
+    private async Task RunSelfCheckAsync()
     {
         AcceptanceRun run = BeginRun("info");
 
@@ -115,33 +147,175 @@ public partial class MainWindow : Window
                 ? "(无合格 RFC1918 网卡)"
                 : string.Join(", ", info.ListenAddresses);
 
-            if (info.Ready)
-            {
-                ReadyText.Text = "可以参与两机验收";
-                ReadyText.Foreground = Brushes.DarkGreen;
-                SetRoleButtonsEnabled(true);
-            }
-            else
-            {
-                ReadyText.Text = "不能参与：本机没有合格的 RFC1918 私有网卡。"
-                    + " 请先用管理员 PowerShell 跑 set-lab-ip.ps1 -Role A（或 -Role B）。";
-                ReadyText.Foreground = Brushes.DarkRed;
-                SetRoleButtonsEnabled(false);
-            }
+            _ready = info.Ready;
+            ShowReadyState();
         }
         catch (Exception ex)
         {
             ReadyText.Text = "自检失败：" + ex.Message;
             ReadyText.Foreground = Brushes.DarkRed;
             run.Log.WriteLine("[FATAL] 自检失败：" + ex);
+            _ready = false;
+
             SetRoleButtonsEnabled(false);
         }
     }
 
+    /// <summary>
+    /// 把「能不能参与验收」讲清楚，<b>并且给出出路</b>。
+    /// </summary>
+    /// <remarks>
+    /// 早先这里写的是「请先用管理员 PowerShell 跑 set-lab-ip.ps1」——
+    /// 那是把用户推回终端，与「双击就是一个窗口」的形态约定直接冲突。
+    /// 现在这条出路就是下面那个按钮，文案只说按钮。
+    /// </remarks>
+    private void ShowReadyState()
+    {
+        if (_ready)
+        {
+            ReadyText.Text = "可以参与两机验收";
+            ReadyText.Foreground = Brushes.DarkGreen;
+        }
+        else
+        {
+            ReadyText.Text = "不能参与：本机还没有 192.168.1.0/24 的私有地址。"
+                + "点下面的「准备为 A 机 / B 机」一键配好（会弹一次 UAC），配完自动重新自检。";
+            ReadyText.Foreground = Brushes.DarkRed;
+        }
+
+        SetRoleButtonsEnabled(!_busy);
+        SetLabButtonsEnabled(!_busy);
+    }
+
     private void SetRoleButtonsEnabled(bool enabled)
     {
-        HostButton.IsEnabled = enabled;
-        ClientButton.IsEnabled = enabled;
+        // 还要看自检结论：没准备好的机器不该能点「开始监听」——
+        // 点了只会得到「监听 0 个地址」，然后被读成产品缺陷。
+        HostButton.IsEnabled = enabled && _ready;
+        ClientButton.IsEnabled = enabled && _ready;
+    }
+
+    private void SetLabButtonsEnabled(bool enabled)
+    {
+        SelfCheckButton.IsEnabled = enabled;
+        PrepareAButton.IsEnabled = enabled;
+        PrepareBButton.IsEnabled = enabled;
+        UndoPrepareButton.IsEnabled = enabled;
+    }
+
+    /// <summary>在一个「窗口正忙」的窗口期里跑一段工作，期间禁用所有会改状态的动作。</summary>
+    private async Task RunBusyAsync(Func<Task> work)
+    {
+        if (_busy || _runCts is not null)
+        {
+            return;
+        }
+
+        _busy = true;
+        SetRoleButtonsEnabled(false);
+        SetLabButtonsEnabled(false);
+
+        try
+        {
+            await work();
+        }
+        finally
+        {
+            _busy = false;
+            SetRoleButtonsEnabled(true);
+            SetLabButtonsEnabled(true);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 一键准备本机 lab 网段
+    // -----------------------------------------------------------------------
+    private async void PrepareAButton_Click(object sender, RoutedEventArgs e) =>
+        await PrepareLabAsync(LabAction.ApplyA);
+
+    private async void PrepareBButton_Click(object sender, RoutedEventArgs e) =>
+        await PrepareLabAsync(LabAction.ApplyB);
+
+    private async void UndoPrepareButton_Click(object sender, RoutedEventArgs e) =>
+        await PrepareLabAsync(LabAction.Undo);
+
+    /// <summary>
+    /// 一键准备：显式确认 → 请管理员权限 → 等提升实例跑完 → 自动重新自检。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>「一键」不等于「静默」</b>。按下去先有一个说清楚要改什么的确认框，
+    /// 再由系统弹 UAC；只有两处都点同意了才会动本机网络配置。
+    /// 静默改网络是这台机器上真出过事故的事（跑 M2 时断过网），
+    /// 所以 ADR-024/025/026 与 ADR-035 都把「显式触发」写成硬约束。</para>
+    /// <para><b>按钮与 <c>--headless prepare-lab</c> 走同一段代码</b>
+    /// （<see cref="LabSetupRole.PrepareAsync"/>）：窗口这条路多出来的只有确认框。
+    /// 判断逻辑放在这一层，就没法在命令行里复现——那种差异本工具最不想要。</para>
+    /// </remarks>
+    private async Task PrepareLabAsync(LabAction action)
+    {
+        if (_busy || _runCts is not null)
+        {
+            return;
+        }
+
+        bool undo = action == LabAction.Undo;
+
+        string question = undo
+            ? "撤销会把本机退回原状：\n\n" +
+              "  • 删掉 lab 地址（192.168.1.10 / 192.168.1.20）\n" +
+              "  • 删掉两条入站规则（UDP 45872、TCP 45873）\n" +
+              "  • 把网卡交还给 DHCP（或它原来的静态配置）\n\n" +
+              "需要管理员权限，会弹一次 UAC。继续吗？"
+            : "把本机准备成「" + action.Describe() + "」——" + action.Address() + "：\n\n" +
+              "  • 给上网这块网卡再加一个 192.168.1.x 地址（原来的地址保留，不会断网）\n" +
+              "  • 网络配置文件设为「专用」\n" +
+              "  • 放行入站 UDP 45872（发现）与 TCP 45873（控制）\n\n" +
+              "需要管理员权限，会弹一次 UAC。做完随时可以点「撤销准备」退回原状。\n\n" +
+              "继续吗？";
+
+        MessageBoxResult answer = MessageBox.Show(
+            question,
+            undo ? "撤销 lab 网络设置" : action.Describe(),
+            MessageBoxButton.OKCancel,
+            undo ? MessageBoxImage.Warning : MessageBoxImage.Question);
+
+        if (answer != MessageBoxResult.OK)
+        {
+            AppendLine("[UI] 用户取消了「" + action.Describe() + "」，本机没有任何更改。");
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            AcceptanceRun run = BeginRun(action.Verb());
+
+            ShowBanner(
+                "正在准备本机…… 若弹出 UAC 请点「是」。提升实例是另一个进程，它的日志会实时出现在下面。",
+                new SolidColorBrush(Color.FromRgb(0xFF, 0xF6, 0xE0)), Brushes.DarkOrange);
+
+            try
+            {
+                AcceptanceOutcome outcome = await LabSetupRole.PrepareAsync(run, action, CancellationToken.None);
+
+                ShowResult(outcome, outcome switch
+                {
+                    AcceptanceOutcome.Pass => "本机已就绪，接着按对端那台机器的角色开始验收。",
+                    AcceptanceOutcome.PreconditionUnmet =>
+                        "本机没有任何更改（多半是 UAC 没同意）。随时可以再点一次。",
+                    _ => "看日志里的 [LAB] 那几行：提升实例与脚本的原话都在上面。",
+                });
+            }
+            catch (Exception ex)
+            {
+                run.Log.WriteLine("[FATAL] 准备动作崩溃：" + ex);
+                run.ReportBackgroundFault("MainWindow 准备 lab", ex);
+                ShowResult(AcceptanceOutcome.HarnessError, "准备动作抛出未预期异常，见日志。");
+            }
+
+            // 无论成败都重新自检：面板上的地址与状态必须反映这台机器<b>现在</b>的样子，
+            // 而不是「刚才那一步的意图」。
+            await RunSelfCheckAsync();
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -290,6 +464,10 @@ public partial class MainWindow : Window
         ClientButton.IsEnabled = false;
         PeerCodeBox.IsEnabled = false;
 
+        // 跑验收的过程中不许准备网络：改地址会把正在监听/正在连的 socket 换掉，
+        // 结果是一批无法解释的证据。
+        SetLabButtonsEnabled(false);
+
         if (lockedToHost)
         {
             StopHostButton.IsEnabled = true;
@@ -308,8 +486,10 @@ public partial class MainWindow : Window
 
     private void UnlockRoles()
     {
-        HostButton.IsEnabled = true;
-        ClientButton.IsEnabled = true;
+        // 用 SetRoleButtonsEnabled 而不是直接赋值：角色按钮还要看自检结论，
+        // 「上一轮跑完了」不等于「本机现在能参与验收」。
+        SetRoleButtonsEnabled(true);
+        SetLabButtonsEnabled(true);
         PeerCodeBox.IsEnabled = true;
         StopHostButton.IsEnabled = false;
         StopClientButton.IsEnabled = false;

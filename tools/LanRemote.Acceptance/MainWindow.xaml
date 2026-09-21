@@ -2,8 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="LanRemote M3 两机验收器"
-        Width="960" Height="740"
-        MinWidth="760" MinHeight="560"
+        Width="960" Height="820"
+        MinWidth="780" MinHeight="640"
         WindowStartupLocation="CenterScreen">
 
     <Window.Resources>
@@ -36,8 +36,9 @@
         <StackPanel Grid.Row="0" Margin="0,0,0,8">
             <TextBlock FontSize="16" FontWeight="SemiBold" Text="LanRemote M3 两机验收器" />
             <TextBlock Style="{StaticResource Wrap}" Foreground="#555" FontSize="12">
-                两台机器都要先跑 set-lab-ip.ps1（管理员）进入 192.168.1.0/24，然后各启动本程序：
-                一台选「被控端」先开始监听，另一台选「控制端」填入对端设备码后开始验收。
+                两台机器各启动本程序：一台选「被控端」先开始监听，另一台选「控制端」填入对端设备码后开始验收。
+                若本机还没有进入 192.168.1.0/24，点下面的「准备为 A 机 / B 机」一键配置（会弹一次 UAC），
+                不需要自己开 PowerShell。
             </TextBlock>
         </StackPanel>
 
@@ -49,6 +50,8 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -70,6 +73,25 @@
                 <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,2" Text="状态" />
                 <TextBlock Grid.Row="3" Grid.Column="1" x:Name="ReadyText" Text="检测中…"
                            FontWeight="SemiBold" TextWrapping="Wrap" />
+
+                <!-- 一键准备：本机没进 192.168.1.0/24 时用它。
+                     「一键」不等于「静默」——按下去先有确认框，再有 UAC（ADR-024/025/026/035）。 -->
+                <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
+                            Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button x:Name="SelfCheckButton" Content="重新自检"
+                            Click="SelfCheckButton_Click" Margin="0,0,8,0" />
+                    <Button x:Name="PrepareAButton" Content="准备为 A 机（192.168.1.10）"
+                            Click="PrepareAButton_Click" Margin="0,0,8,0" />
+                    <Button x:Name="PrepareBButton" Content="准备为 B 机（192.168.1.20）"
+                            Click="PrepareBButton_Click" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,6,0,0">
+                    <Button x:Name="UndoPrepareButton" Content="撤销准备（还原网络设置）"
+                            Click="UndoPrepareButton_Click" HorizontalAlignment="Left" />
+                    <TextBlock Style="{StaticResource Wrap}" Foreground="#666" FontSize="11"
+                               Text="准备动作会改本机网络配置（给上网这块网卡再加一个 192.168.1.x 地址、设为「专用」、放行 UDP 45872 与 TCP 45873），需要管理员权限，会弹一次 UAC；原来的地址保持不变。做完随时可以「撤销准备」退回原状。" />
+                </StackPanel>
             </Grid>
         </GroupBox>
 

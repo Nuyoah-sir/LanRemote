@@ -84,6 +84,26 @@ internal sealed class AcceptanceRun
         return new AcceptanceRun(runId, prefix, log) { StartedUtc = DateTimeOffset.UtcNow };
     }
 
+    /// <summary>
+    /// 按调用方给出的绝对路径建一次运行（<b>只给提升实例用</b>）。
+    /// </summary>
+    /// <remarks>
+    /// 提升实例是 <c>WinExe</c>，它的父进程拿不到它的 stdout，只能双方约定一个
+    /// <b>确定的</b>日志路径再读回来。所以这里是全工具唯一「日志文件名由外面定」的地方，
+    /// 其余一律走 <see cref="Create"/>——理由是不变的：验收仪器不该允许选择性抹除证据，
+    /// 而「谁都能指定文件名」离那件事只有一步。
+    /// </remarks>
+    /// <param name="filePath">日志文件的绝对路径。</param>
+    /// <param name="prefix">角色名（写进运行头的 <c>[RUN] role</c>）。</param>
+    public static AcceptanceRun CreateAtFile(string filePath, string prefix)
+    {
+        string directory = Path.GetDirectoryName(filePath) ?? AcceptanceLog.DefaultDirectory;
+        string fileName = Path.GetFileName(filePath);
+        string runId = Guid.NewGuid().ToString("N")[..8];
+        AcceptanceLog log = new(directory, fileName);
+        return new AcceptanceRun(runId, prefix, log) { StartedUtc = DateTimeOffset.UtcNow };
+    }
+
     /// <summary>标记操作员中止——整轮作废。</summary>
     public void MarkOperatorAbort(string where)
     {

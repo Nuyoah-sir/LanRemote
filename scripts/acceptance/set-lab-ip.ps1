@@ -7,15 +7,16 @@
 #   and logs "no eligible private IPv4 NIC". This script puts a real private
 #   address on the SAME wire so both machines can talk RFC1918 to each other.
 #
-# HOW IT WORKS (v2 - read this before trusting any other doc)
+# HOW IT WORKS (v4 - read this before trusting any other doc)
 #   Windows IPv4 is "DHCP OR static" per interface. It is NOT possible to keep a
 #   DHCP lease and append an extra static address: both New-NetIPAddress and
 #   "netsh interface ipv4 add address" silently flip the interface to
 #   Dhcp=Disabled and drop the lease. (Measured on this machine, see
 #   docs/TWO_MACHINE_ACCEPTANCE.md section 1.2.)
 #
-#   So v2 does the honest thing:
-#     1. read the CURRENT IPv4 config (address/mask/gateway/DNS/Dhcp flag)
+#   So v2 did the honest thing, and v3 keeps it:
+#     1. read the CURRENT IPv4 config (address/mask/gateway/DNS/Dhcp flag) AND
+#        the network profile category
 #     2. save it to %TEMP%\lanremote-lab-ip-state.json
 #     3. switch the interface to STATIC with exactly that config  -> no outage
 #     4. append 192.168.1.10 (role A) or 192.168.1.20 (role B), /24, no gateway
@@ -23,17 +24,47 @@
 #        (discovery AND control - opening only UDP makes M3 fail silently)
 #   Result: the NIC keeps 172.100.166.x AND gains 192.168.1.x at the same time.
 #
-#   -Undo removes the lab address, deletes those two firewall rules and puts the
-#   interface back to DHCP (or back to the original static config, if that is how
-#   it was). It self-verifies and, if only an APIPA 169.254.x.x address is left,
-#   prints the manual fix commands.
+#   -Undo removes the lab address, deletes those two firewall rules, puts the
+#   network profile category back the way it was, and returns the interface to
+#   DHCP (or to the original static config, if that is how it was). It
+#   self-verifies and, if only an APIPA 169.254.x.x address is left, prints the
+#   manual fix commands.
+#
+# WHAT v3 FIXED (both found by reading a real machine's leftovers)
+#   1. The snapshot was taken BEFORE the "lab address already present" check and
+#      written unconditionally, so running the script a SECOND time (the
+#      documented way to re-check the firewall rules) recorded the already
+#      configured lab state as "the original". -Undo then re-added 192.168.1.10
+#      and failed its own self-check. Now the snapshot happens only on a real
+#      apply, and an existing state file is never overwritten.
+#      Measured on machine A: the state file said Address=192.168.1.10 /
+#      WasDhcp=false. A poisoned file like that is now detected and ignored.
+#   2. -Undo did not restore the network profile category, so a machine that was
+#      Public ended up Private forever. "Undo" has to mean undo.
+#
+# WHAT v4 FIXED (found by reading the acceptance window's own log)
+#   When stdout is a PIPE, Windows PowerShell 5.1 encodes Write-Host text with
+#   the console output code page (936 = GBK here). The window captured that pipe
+#   and decoded it as UTF-8, because .NET 10 cannot decode CP936 unless the
+#   System.Text.Encoding.CodePages package is referenced - so every Chinese line
+#   showed up as U+FFFD replacement characters in the live view ("��̫��" instead
+#   of "以太网"). ASCII and the numbers survived, which is the nasty part: the
+#   output looked broken rather than obviously wrong. Fixed here, in the side
+#   that actually owns its output encoding: when stdout is a pipe we speak UTF-8
+#   (see "console output encoding" below). A human in a real console is
+#   unaffected, and Invoke-Netsh still sets/restores CP936 around netsh calls.
 #
 # USAGE (ADMIN PowerShell, run once per machine with a different -Role)
 #   Machine A:  powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Role A
 #   Machine B:  powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Role B
 #
+#   The window program (LanRemote.Acceptance.exe) can also do this for you:
+#   "准备为 A 机 / B 机" runs THIS script through a narrow elevated helper.
+#   Same script, same result - the manual command above stays valid.
+#
 # TO UNDO (any time, on any machine)
 #   powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Undo
+#   (or the window's "撤销准备" button)
 #
 # Stored as UTF-8 WITH BOM so Windows PowerShell 5.1 decodes the Chinese text.
 
@@ -64,6 +95,35 @@ function Say {
     param([string]$Text = '', [string]$Color = 'Gray')
     if ($Text -ne '') { Write-Host $Text -ForegroundColor $Color }
     Add-Content -LiteralPath $logFile -Value $Text -Encoding UTF8
+}
+
+# ---------------------------------------------------------------------------
+# console output encoding (v4)
+#
+# MEASURED: with stdout redirected to a pipe, Windows PowerShell 5.1 encodes
+# Write-Host text using the console output code page (936 / GBK on this machine).
+# Whoever reads that pipe needs a CP936 decoder - and .NET 10 does not have one
+# built in (it needs the System.Text.Encoding.CodePages package), so the
+# acceptance window fell back to UTF-8 and Chinese came out as U+FFFD.
+#
+# The fix belongs HERE: this script is the side that decides what it emits.
+# When stdout is not a real console, speak UTF-8.
+#   * a human in a console: IsOutputRedirected is false, nothing is touched,
+#     output stays CP936 and stays readable
+#   * Invoke-Netsh still saves/restores [Console]::OutputEncoding around each
+#     netsh call, so decoding netsh's GBK text is unaffected
+# If the switch fails we say so below instead of pretending it worked.
+# ---------------------------------------------------------------------------
+$pipeOut  = $false
+$pipeUtf8 = $false
+try {
+    $pipeOut = [Console]::IsOutputRedirected
+    if ($pipeOut) {
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $pipeUtf8 = $true
+    }
+} catch {
+    $pipeUtf8 = $false
 }
 
 function Say-Rule {
@@ -268,6 +328,15 @@ function Get-IpState {
     $dns = @(Get-DnsClientServerAddress -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         ForEach-Object { $_.ServerAddresses } | Where-Object { $_ -ne '' })
 
+    # Network profile category. -Undo puts this back: the apply path forces the
+    # profile to Private, and "Private" is NOT what every machine had before
+    # (a freshly seen LAN is usually Public). Not restoring it would make -Undo a
+    # half-undo, which is exactly what the "one button to prepare / one button to
+    # undo" story must not be. (ADR-026: undo must be exact.)
+    $profile = @(Get-NetConnectionProfile -InterfaceIndex $Adapter.ifIndex -ErrorAction SilentlyContinue |
+        Select-Object -First 1)
+    $category = $(if ($profile.Count -gt 0) { [string]$profile[0].NetworkCategory } else { '' })
+
     return @{
         InterfaceAlias = $Adapter.InterfaceAlias
         InterfaceIndex = $Adapter.ifIndex
@@ -275,6 +344,7 @@ function Get-IpState {
         PrefixLength   = $(if ($primary) { [int]$primary.PrefixLength } else { 24 })
         Gateway        = $gw
         Dns            = @($dns)
+        Category       = $category
         WasDhcp        = $(if ($iface) { ($iface.Dhcp -eq 'Enabled') } else { $true })
     }
 }
@@ -306,8 +376,17 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 Say-Rule
-Say (' LanRemote lab IPv4 setup  (v2)   ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) 'Cyan'
+Say (' LanRemote lab IPv4 setup  (v4)   ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) 'Cyan'
 Say-Rule
+
+if ($pipeOut) {
+    if ($pipeUtf8) {
+        Say '  stdout  : pipe -> speaking UTF-8 (a real console would get CP936)' 'DarkGray'
+    } else {
+        Say '  stdout  : pipe -> could NOT switch to UTF-8; Chinese may be garbled HERE,' 'DarkGray'
+        Say '            but the UTF-8 copy in %TEMP%\lanremote-lab-ip.log is intact.' 'DarkGray'
+    }
+}
 
 $adapter = Resolve-Adapter -Requested $InterfaceAlias
 $alias   = $adapter.InterfaceAlias
@@ -337,6 +416,22 @@ if ($Undo) {
         try { $prior = Get-Content -LiteralPath $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $prior = $null }
     }
 
+    # A state file whose recorded address is a LAB address is POISONED: it was
+    # written by an older revision *after* the machine had already been
+    # configured (it snapshotted before checking idempotency). Trusting it would
+    # re-add the exact address we are about to remove, and the self-check below
+    # would then fail with "lab address still present". Treat it as no state.
+    if ($prior -and ($labAddresses -contains [string]$prior.Address)) {
+        Say ('  WARNING: saved state points at a lab address (' + $prior.Address + ').') 'Yellow'
+        Say '           It was overwritten by an older revision of this script; ignoring it.' 'Yellow'
+        $prior = $null
+    }
+
+    if (-not $prior) {
+        Say '  no usable saved pre-lab state: the interface goes back to DHCP.' 'Yellow'
+        Say '  if it used to be static, set address/mask/gateway/DNS by hand afterwards.' 'Yellow'
+    }
+
     # 1. drop every lab address that exists
     foreach ($address in $labAddresses) {
         $hit = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $address -ErrorAction SilentlyContinue)
@@ -349,9 +444,9 @@ if ($Undo) {
     }
 
     # 1b. drop the inbound rules this script creates, so -Undo really undoes
-    #     everything it did (address + profile-side effects are listed above;
-    #     the profile itself is left as-is because "Private" is also what the
-    #     user's own LAN wants).
+    #     everything it did. (The network profile category is restored further
+    #     down, after the address is back - the active profile only becomes the
+    #     original network's profile once the lab address is gone.)
     foreach ($ruleName in @('LanRemote Discovery UDP 45872', 'LanRemote Control TCP 45873')) {
         if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) {
             Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
@@ -402,6 +497,35 @@ if ($Undo) {
     if (Test-Path -LiteralPath $stateFile) { Remove-Item -LiteralPath $stateFile -Force }
 
     Start-Sleep -Seconds 2
+
+    # 2b. put the network profile category back the way it was.
+    #     The apply path forces Private; a machine that was Public before must end
+    #     up Public again, otherwise "-Undo" is a half-undo and the one-button
+    #     story on the window ("撤销准备（还原网络设置）") would be a lie.
+    if ($prior -and $prior.Category) {
+        $nowProfile = @(Get-NetConnectionProfile -InterfaceIndex $restoreIdx -ErrorAction SilentlyContinue |
+            Select-Object -First 1)
+        $nowCategory = $(if ($nowProfile.Count -gt 0) { [string]$nowProfile[0].NetworkCategory } else { '' })
+
+        if ($nowCategory -eq 'DomainAuthenticated') {
+            Say '  network profile left at DomainAuthenticated (a domain policy owns it).' 'Yellow'
+        } elseif ($nowCategory -and $nowCategory -ne [string]$prior.Category) {
+            try {
+                Set-NetConnectionProfile -InterfaceIndex $restoreIdx `
+                    -NetworkCategory ([string]$prior.Category) -ErrorAction Stop
+                Say ('  network profile restored: ' + $nowCategory + ' -> ' + $prior.Category) 'Green'
+            } catch {
+                Say ('  could not restore network profile (' + $nowCategory + ' -> ' +
+                     $prior.Category + '): ' + $_.Exception.Message) 'Yellow'
+                Say '  set it by hand: Settings > Network & Internet > Ethernet > Public/Private.' 'Yellow'
+            }
+        } else {
+            Say ('  network profile already ' + $nowCategory) 'Green'
+        }
+    } else {
+        Say '  network profile left as-is (no saved category to restore).' 'DarkGray'
+    }
+
     Show-IpState -Title '--- after undo -------------------------------------------'
 
     # 3. self-verification: a machine left on APIPA only is NOT recovered
@@ -452,10 +576,40 @@ $target = $labBindings[$Role]
 Say ('  role    : ' + $Role + '   ->   ' + $target.Address + '/' + $target.Prefix)
 Say ''
 
-# 1. snapshot BEFORE touching anything
+# 1. IDEMPOTENCY FIRST - before anything is written to disk.
+#
+#    This order matters more than it looks. An earlier revision took the snapshot
+#    first and wrote the state file unconditionally, so running the script a
+#    SECOND time (which is expected: it is the documented way to re-check the
+#    firewall rules) recorded the ALREADY CONFIGURED lab state as "the original".
+#    -Undo then "restored" 192.168.1.10, i.e. it re-added the very address it was
+#    supposed to remove and failed its own self-check.
+#    Measured on machine A: %TEMP%\lanremote-lab-ip-state.json said
+#    Address=192.168.1.10 / WasDhcp=false after a repeat run.
+$already = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $target.Address -ErrorAction SilentlyContinue)
+if ($already.Count -gt 0) {
+    Say ('  ' + $target.Address + ' already present - address left untouched.') 'Yellow'
+    if (Test-Path -LiteralPath $stateFile) {
+        Say '  keeping the saved pre-lab state (NOT overwriting it with the lab config).' 'Green'
+    } else {
+        Say '  WARNING: no saved pre-lab state file. -Undo will fall back to DHCP;' 'Yellow'
+        Say '           if this adapter used to be static, set it by hand afterwards.' 'Yellow'
+    }
+    Set-LabNetworkProfileAndFirewall -Alias $alias
+    Show-IpState -Title '--- current IPv4 -----------------------------------------'
+    Say-Rule
+    exit 0
+}
+
+# 2. snapshot the REAL original config (the interface is still untouched here)
 $state = Get-IpState -Adapter $adapter
 if (-not $state.Address) {
     Say '  ERROR: this adapter has no IPv4 address to preserve.' 'Red'
+    exit 1
+}
+if ($labAddresses -contains [string]$state.Address) {
+    Say ('  ERROR: refusing to snapshot ' + $state.Address + ' as "the original" - that is a lab address.') 'Red'
+    Say '         Run -Undo first, or check Get-NetIPAddress.' 'Yellow'
     exit 1
 }
 Write-IpState -State $state
@@ -463,20 +617,8 @@ Say ('  saved   : ' + $stateFile)
 Say ('  current : ' + $state.Address + '/' + $state.PrefixLength +
      '  gw=' + $(if ($state.Gateway) { $state.Gateway } else { '(none)' }) +
      '  dhcp=' + $state.WasDhcp +
+     '  category=' + $(if ($state.Category) { $state.Category } else { '(unknown)' }) +
      '  dns=' + $(if (@($state.Dns).Count) { (@($state.Dns) -join ',') } else { '(none)' }))
-
-# 2. idempotent: if the lab address is already there, leave the address alone -
-#    but STILL verify the profile and BOTH firewall rules. An earlier revision
-#    only opened UDP 45872, so exiting here without re-checking would leave
-#    TCP 45873 blocked and the M3 control connection would fail silently.
-$already = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $target.Address -ErrorAction SilentlyContinue)
-if ($already.Count -gt 0) {
-    Say ('  ' + $target.Address + ' already present - address left untouched.') 'Yellow'
-    Set-LabNetworkProfileAndFirewall -Alias $alias
-    Show-IpState -Title '--- current IPv4 -----------------------------------------'
-    Say-Rule
-    exit 0
-}
 
 # 3. switch the interface to static with the SAME config (keeps you online)
 $mask = Convert-PrefixToMask -Prefix ([int]$state.PrefixLength)

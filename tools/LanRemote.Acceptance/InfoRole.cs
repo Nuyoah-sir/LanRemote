@@ -52,9 +52,14 @@ internal static class InfoRole
 
         bool ready = listen.Count > 0;
 
+        // outcome 用的是和退出码同一套词（见 AcceptanceOutcome.Code()）：
+        // 这里是 UNMET（前置条件不满足）而不是 FAIL —— 网卡不合格不是产品缺陷，
+        // 而且 headless 跑这个角色本来就退 2。文本与退出码说同一件事，
+        // 才不会出现「日志说 FAIL、脚本看到 2」这种要人命的不一致。
         log.WriteLine(ready
             ? "[INFO][RESULT] outcome=PASS // 本机可以参与两机验收"
-            : "[INFO][RESULT] outcome=FAIL reason=no-qualified-rfc1918-nic // 先用 set-lab-ip.ps1 配置 lab 网段");
+            : "[INFO][RESULT] outcome=UNMET reason=no-qualified-rfc1918-nic // " +
+              "在窗口里点「准备为 A 机 / B 机」即可（会弹一次 UAC）；也可以手动跑 set-lab-ip.ps1");
 
         return new InfoResult(
             ready,

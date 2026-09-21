@@ -22,7 +22,9 @@ internal static class HeadlessRunner
 
         ConfigureConsoleEncoding();
 
-        AcceptanceRun run = AcceptanceRun.Create(command.LogDirectory, command.Role);
+        AcceptanceRun run = command.LogFile is null
+            ? AcceptanceRun.Create(command.LogDirectory, command.Role)
+            : AcceptanceRun.CreateAtFile(command.LogFile, command.Role);
 
         run.Log.LineWritten += WriteToConsole;
 
@@ -36,6 +38,14 @@ internal static class HeadlessRunner
                     run, command.Seconds, CancellationToken.None),
 
                 HeadlessCommand.RoleClient => await RunClientAsync(run, command),
+
+                // 提升动词：只做写 lab 地址 / 撤销，自己写运行尾。
+                HeadlessCommand.RoleLabApply or HeadlessCommand.RoleLabUndo => await LabWorkerRole.RunAsync(
+                    run, command.LabOperation!.Value, CancellationToken.None),
+
+                // 编排者：请权限 → 等结束 → 核验状态。窗口按钮走的是同一个方法。
+                HeadlessCommand.RolePrepareLab => await LabSetupRole.PrepareAsync(
+                    run, command.LabOperation!.Value, CancellationToken.None),
 
                 _ => throw new InvalidOperationException($"角色 {command.Role} 未实现。"),
             };
