@@ -111,7 +111,7 @@
 
 ## 7. M3 开工前的最小清单（照此收口）
 
-1. ~~跑实测 19（EphemeralKeySet + ECDSA P-256 服务端）~~ → **已完成，结论 ADR-029：改用 `Default(0)`**
+1. ~~跑实测 19（EphemeralKeySet + ECDSA P-256 服务端）~~ → **已完成，结论 ADR-029：改用 `DefaultKeySet`(0)**
 2. ~~跑实测 20（TLS1.2 / TLS1.3）~~ → **已完成**：两者均可协商，本机 Win11 25H2 / 26200；
    **Win10 22H2 仍未测**，标注未覆盖
 3. 连接上下文类型落地：`{deviceId, endpoint, expectedPin(32B), presentedPin(32B)}` 不可变

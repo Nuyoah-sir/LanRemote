@@ -677,7 +677,8 @@ dotnet test LanRemote.sln -c Debug --no-build
     客户端只看到 `IOException: unexpected EOF`。
   - `PersistKeySet`：9/9 OK，但**磁盘留下持久密钥副本**（`%APPDATA%\Microsoft\Crypto\Keys` 文件数
     dispose+GC 后仍 +1）。
-  - `Default(0)`：9/9 OK，且密钥文件在 dispose/GC 后**删除**。
+  - `DefaultKeySet`(0)：9/9 OK，且密钥文件在 dispose/GC 后**删除**。
+    （`X509KeyStorageFlags` 没有 `Default` 成员，正确名字是 `DefaultKeySet`，值同为 0。）
 - **⚠️ 污染陷阱**：同一进程先 `PersistKeySet` 导入过同一私钥后，再 `EphemeralKeySet` 导入 → **握手成功**。
   所以「测试里没报错」不等于 flag 可用；结论必须在新进程、顺序受控下测。
 - **M3 第一步**：改 `ImportFlags` → `Default`，**并改掉锁住旧选择的测试**
@@ -721,14 +722,19 @@ dotnet test LanRemote.sln -c Debug --no-build
 
 ### 阶段 0 —— 先修正证书载入（ADR-029，阻塞后面所有步骤）
 
-1. 把 `DeviceCertificateService.ImportFlags` 改成 `X509KeyStorageFlags.Default`（0）。
-2. 改掉把旧选择锁成断言的 `DeviceCertificateTests.ImportFlags_UsesEphemeralKeySetOnly`
-   ——它锁的是已被证伪的 `EphemeralKeySet`，必须改成断言新 flag 并按新语义改名 / 改注释。
-3. 新增**真实 SslStream 握手集成测试**（ADR-018 遗留的强制要求）：
-   断言握手成功 ∧ 协议 ∈ {Tls12, Tls13} ∧ pin 匹配 ∧ 真实帧收发往返成功。
+1. ✅ **已完成** 把 `DeviceCertificateService.ImportFlags` 改成 `X509KeyStorageFlags.DefaultKeySet`（值 0）。
+2. ✅ **已完成** 改掉把旧选择锁成断言的测试：
+   `ImportFlags_UsesEphemeralKeySetOnly` → **`ImportFlags_UsesDefaultWithoutPersistOrExport`**，
+   断言改为 `DefaultKeySet` 并显式禁止 `EphemeralKeySet` / `PersistKeySet` / `Exportable` / `MachineKeySet`。
+3. ✅ **已完成** 新增 `tests/LanRemote.Security.Tests/DeviceCertificateTlsHandshakeTests.cs`
+   （真实 SslStream 握手，ADR-018 遗留的强制要求）：断言回调被执行 ∧ pin 字节匹配 ∧
+   服务端无异常 ∧ 协商协议 ∈ {Tls12, Tls13} ∧ 真实帧收发往返（`pong:hello-lanremote`）。
+   **已做变异验证**：把 flag 改回 `EphemeralKeySet` 后，本测试与步骤 2 的测试**同时失败**
+   （本测试报 `IOException: Received an unexpected EOF...`），证明守卫不是空断言；随后已还原。
    ⚠️ 注意污染陷阱：同一进程先 `PersistKeySet` 导入过同一私钥后 `EphemeralKeySet` 会碰巧成功，
-   所以测试要用新进程 / 顺序受控，不要依赖"没报错"。
-4. `dotnet build` + `dotnet test` 通过，更新 HANDOFF。**阶段 0 不通过不得进入阶段 1。**
+   所以结论必须在新进程 / 顺序受控下测，不要依赖"没报错"。
+4. ✅ **已完成** `dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **409 PASS / 0 FAIL**
+   （原 408 + 新增 1）。**阶段 0 通过，已进入阶段 1。**
 
 ### 阶段 1 —— 连接目标与身份契约（TOCTOU / ADR-028）
 

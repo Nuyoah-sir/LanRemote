@@ -293,7 +293,9 @@ M4 的 transcript 结构因此被提前固定。
 
 ### ADR-029 — 证书加载使用 `X509KeyStorageFlags.Default`（不带任何 flag），取代 ADR-016 与 ADR-018
 **日期**：2026-09-21（M3 开工前实测，ADR-018 风险收口）  
-**Decision**：`DeviceCertificateService.ImportFlags` 改为 **`X509KeyStorageFlags.Default`（即 0）**：
+**Decision**：`DeviceCertificateService.ImportFlags` 改为 **`X509KeyStorageFlags.DefaultKeySet`（值为 0）**：
+（`X509KeyStorageFlags` **没有名为 `Default` 的成员**——正确名字是 `DefaultKeySet`；实测用的 `(X509KeyStorageFlags)0`
+与它等价。这条由编译器直接指出，写文档时别再写成 `Default`。）
 **不使用** `EphemeralKeySet`、**不使用** `PersistKeySet`、**不使用** `Exportable`。
 证书对象必须在使用结束后 `Dispose()`（临时密钥容器在 dispose / GC 时删除）。
 
@@ -307,7 +309,7 @@ EKU serverAuth / 5 年 / PFX 随机口令），矩阵 = 3 种 flag × 3 种协�
 |---|---|---|---|---|
 | `EphemeralKeySet` | **FAIL ×3** | **FAIL ×3** | **FAIL ×3** | 145 → 145 → 145（不落盘，但**根本不能用**） |
 | `PersistKeySet` | OK ×3 | OK ×3 | OK ×3 | 145 → 146 → **146**（**磁盘留下持久副本**） |
-| `Default(0)` | OK ×3 | OK ×3 | OK ×3 | 148 → 149 → **148**（运行时有，dispose 后删除） |
+| `DefaultKeySet`(0) | OK ×3 | OK ×3 | OK ×3 | 148 → 149 → **148**（运行时有，dispose 后删除） |
 
 - 服务端真实异常：`AuthenticationException: Authentication failed because the platform does not
   support ephemeral keys.` ← `Win32Exception: 安全包中没有可用的凭证（0x8009030E = SEC_E_NO_CREDENTIALS）`。

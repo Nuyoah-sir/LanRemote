@@ -26,9 +26,14 @@ public sealed record DeviceCertificate(X509Certificate2 Certificate, string Sha2
 /// </list>
 /// <para>导出 PFX 时使用随机口令；口令与 PFX 一起被封在同一个 DPAPI 信封中，
 /// 它不提供额外机密性，只是 PFX 导出 API 的强制要求。</para>
-/// <para><b>私钥导入策略（M1.1，ADR-018）</b>：使用 <see cref="X509KeyStorageFlags.EphemeralKeySet"/>。
-/// 磁盘上唯一的持久化副本是 DPAPI 保护的 <c>secrets.bin</c>；进程运行期间私钥只存在于内存，
-/// 不额外写入 Windows CNG 密钥容器，也不标记为可导出。</para>
+/// <para><b>私钥导入策略（ADR-029，取代 ADR-016 与 ADR-018）</b>：
+/// 使用 <see cref="X509KeyStorageFlags.DefaultKeySet"/>（即 0），刻意<b>不</b>使用
+/// <c>EphemeralKeySet</c>、<b>不</b>使用 <c>PersistKeySet</c>、<b>不</b>使用 <c>Exportable</c>。
+/// 依据是 2026-09-21 的真实 SslStream 握手实测（3 种 flag × 3 种协议 × 重复 3 次）：
+/// <c>EphemeralKeySet</c> 用作 TLS <b>服务端</b>时 9/9 失败（平台不支持 ephemeral keys）；
+/// <c>PersistKeySet</c> 可用但会在 CNG 密钥容器里留下持久副本；
+/// <c>DefaultKeySet</c> 可用，且临时容器在 <c>Dispose</c>/GC 后被删除。
+/// 因此证书对象必须 <c>Dispose()</c>——这个策略依赖它来清理临时密钥容器。</para>
 /// </remarks>
 public sealed class DeviceCertificateService : IDisposable
 {
@@ -36,15 +41,24 @@ public sealed class DeviceCertificateService : IDisposable
     public const int ValidityYears = 5;
 
     /// <summary>
-    /// 私钥只在内存中存活。
+    /// 私钥导入策略：<c>DefaultKeySet</c>（值为 0），即不带任何其它 flag。
     /// </summary>
     /// <remarks>
-    /// 刻意<b>不</b>使用 <c>PersistKeySet</c>（会把私钥写进用户的 CNG 密钥容器，
-    /// 等于在 DPAPI 文件之外多留一份持久化副本），也<b>不</b>使用 <c>Exportable</c>。
-    /// M3 必须补一条真实 SslStream 握手集成测试来验证这个策略满足 TLS 服务端要求；
-    /// 在拿到那个结果之前，不得凭猜测改回 PersistKeySet（ADR-016 已被标记 superseded）。
+    /// <b>ADR-029</b>（2026-09-21 实测，取代 ADR-016 与 ADR-018）。
+    /// 刻意<b>不</b>使用 <c>EphemeralKeySet</c>：实测它在 Windows 上用作 TLS 服务端时 9/9 失败
+    /// （<c>AuthenticationException: ... platform does not support ephemeral keys.</c>，
+    /// inner <c>Win32Exception 0x8009030E</c>）。
+    /// 刻意<b>不</b>使用 <c>PersistKeySet</c>：实测它会在
+    /// <c>%APPDATA%\Microsoft\Crypto\Keys</c> 留下持久副本，等于在 DPAPI 保护的
+    /// <c>secrets.bin</c> 之外多一份长期副本。
+    /// 刻意<b>不</b>使用 <c>Exportable</c>：不需要导出，且导出标记会放宽保护。
+    /// <para><c>Default</c> 的代价（如实记录）：进程运行期间仍会生成一个<b>临时</b>CNG 密钥文件，
+    /// <c>Dispose()</c>/GC 后删除；进程崩溃时可能残留。所以调用方必须释放证书对象。</para>
+    /// <para>守护测试：<c>DeviceCertificateTests.ImportFlags_UsesDefaultWithoutPersistOrExport</c>
+    /// （防止把上面三种 flag 加回来）与 <c>DeviceCertificateTlsHandshakeTests</c>
+    /// （真实 SslStream 握手，防止改回一个「看起来安全但服务端用不了」的 flag）。</para>
     /// </remarks>
-    public const X509KeyStorageFlags ImportFlags = X509KeyStorageFlags.EphemeralKeySet;
+    public const X509KeyStorageFlags ImportFlags = X509KeyStorageFlags.DefaultKeySet;
 
     private readonly DpapiSecretVault _vault;
     private readonly ILogger<DeviceCertificateService>? _logger;

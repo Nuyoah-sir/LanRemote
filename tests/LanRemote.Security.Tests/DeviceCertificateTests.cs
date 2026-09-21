@@ -51,7 +51,7 @@ public sealed class DeviceCertificateTests : IDisposable
 
         DeviceCertificate certificate = await certificates.GetOrCreateAsync();
 
-        // M1.1 / ADR-018：私钥以 EphemeralKeySet 载入，测试不再依赖私钥导出。
+        // ADR-029：私钥以 Default(0) 载入。测试不依赖私钥导出（也刻意不设 Exportable），
         // 曲线信息本身是公开的，用公钥即可确认。
         using ECDsa? publicKey = certificate.Certificate.GetECDsaPublicKey();
         Assert.NotNull(publicKey);
@@ -62,10 +62,19 @@ public sealed class DeviceCertificateTests : IDisposable
     }
 
     [Fact]
-    public void ImportFlags_UsesEphemeralKeySetOnly()
+    public void ImportFlags_UsesDefaultWithoutPersistOrExport()
     {
-        // 防止以后「为了让测试好过」把 PersistKeySet / Exportable 加回来（ADR-018）。
-        Assert.Equal(X509KeyStorageFlags.EphemeralKeySet, DeviceCertificateService.ImportFlags);
+        // ADR-029（2026-09-21 实测，取代 ADR-016 / ADR-018）。
+        //
+        // 本测试原名 ImportFlags_UsesEphemeralKeySetOnly，锁的是 EphemeralKeySet——
+        // 那个选择已被真实 SslStream 握手实测证伪（TLS 服务端 9/9 失败），所以断言改成了 Default(0)。
+        //
+        // 三条「不得加回来」的理由都是实测得来的，不是偏好：
+        //   EphemeralKeySet -> 服务端握手直接失败（平台不支持 ephemeral keys）
+        //   PersistKeySet   -> 磁盘留下持久密钥副本
+        //   Exportable      -> 私钥被标记为可导出
+        Assert.Equal(X509KeyStorageFlags.DefaultKeySet, DeviceCertificateService.ImportFlags);
+        Assert.False(DeviceCertificateService.ImportFlags.HasFlag(X509KeyStorageFlags.EphemeralKeySet));
         Assert.False(DeviceCertificateService.ImportFlags.HasFlag(X509KeyStorageFlags.PersistKeySet));
         Assert.False(DeviceCertificateService.ImportFlags.HasFlag(X509KeyStorageFlags.Exportable));
         Assert.False(DeviceCertificateService.ImportFlags.HasFlag(X509KeyStorageFlags.MachineKeySet));
@@ -237,7 +246,7 @@ public sealed class DeviceCertificateTests : IDisposable
         DeviceCertificate certificate = await certificates.GetOrCreateAsync();
         X509Certificate2 x509 = certificate.Certificate;
 
-        // 1) ECDSA P-256（只看公钥，私钥以 EphemeralKeySet 载入不宜导出）
+        // 1) ECDSA P-256（只看公钥，私钥不导出——ADR-029 刻意不使用 Exportable）
         using ECDsa? publicKey = x509.GetECDsaPublicKey();
         Assert.NotNull(publicKey);
         Assert.Equal(
