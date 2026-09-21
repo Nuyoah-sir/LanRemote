@@ -382,3 +382,60 @@ System.Security.Authentication.AuthenticationException:
   真实原因在对端。测试基建（含 `TestTlsServer`）必须收集服务端异常。
 
 **可逆性**：不可回退。
+
+---
+
+## ADR-031 — Host 启动按网卡降级，不整体失败
+
+**日期**：2026-09-21（M3 阶段 2）
+**状态**：已定
+
+**Context**：每张合格网卡要起一个 45873 listener。多张网卡里只要有一张 bind 失败
+（端口被占、地址消失、权限问题），Host 该怎么反应？
+
+**Decision**：**按网卡降级**。失败的那张记进 `TransportHostStartResult.Failures`
+（地址 + `SocketError` + 消息），其余照常监听；一个都没听上时 `IsListening == false`
+且**不抛异常**，由调用方决定如何呈现。
+
+**Rationale**：
+- 一张网卡有问题不该放大成「整台机器不能被连接」。
+- 安全性不受影响：每个 accept 都用**接受它的那个 listener 的本地地址**做同子网校验，
+  少监听一张网卡只是那个子网连不进来。
+- 「一个都没听上」在本机是**预期状态**（唯一活跃地址 `172.100.166.220` 不是 RFC1918），
+  与 M2 discovery 的行为一致；抛异常会把正常状态变成崩溃。
+
+**Consequence**：调用方（M9 的 UI 诊断，ADR-024）必须读 `Failures` 并呈现原因，
+不能只看 `IsListening` 就报告"启动成功"。
+
+---
+
+## ADR-032 — 不要过度声称 `ExclusiveAddressUse` 的作用
+
+**日期**：2026-09-21（M3 阶段 2 实测）
+**状态**：已定（**修正我自己先前写错的断言**）
+
+**Context**：我一度在代码注释与测试里写道「所有 listener 开 `ExclusiveAddressUse`，
+这样若别的进程先占了更宽的地址就会失败」。**实测证明这句话是错的。**
+
+**实测矩阵**（本机 Win11 25H2 / 26200，.NET 10.0.12，见 `MultiAddressListenTests`）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 同端口 + 两个不同具体地址 | 开不开都**可以** bind |
+| 同地址同端口第二次 | 开不开都**被拒**（`AddressAlreadyInUse` 10048） |
+| 别人先 bind `0.0.0.0`（未开 exclusive），我们再 bind 具体地址 | **仍会成功**——开 exclusive 也发现不了 |
+| 我们先 bind 具体地址（exclusive），别人再 bind `0.0.0.0` | **也成功** |
+| 带 `SO_REUSEADDR` 的后来者抢同地址同端口 | 开不开都**被拒**（`AccessDenied` 10013） |
+| 连到具体地址的连接归谁 | 归**更具体**的那个 listener，不会被更宽的 socket 截走 |
+
+**Decision**：
+1. 仍然保留 `ExclusiveAddressUse = true`，但理由只能写成：
+   防御「`SO_REUSEADDR` 语义更宽松的旧版 Windows」。
+2. **不得**声称它能发现端口已被占用/已被更宽地址覆盖。真正的冲突信号是
+   `AddressAlreadyInUse`，且已经记进 `Failures`。
+3. 「我们的 bind 与更宽的 bind 共存」不是端口被抢：实测流量交给更具体的 listener。
+
+**教训（比结论更重要）**：我第一次写的守护测试把 `ExclusiveAddressUse` 也开在了
+**对照组**的 socket 上，导致「把被测属性改成 false」的变异**没有让测试失败**——
+测试隔离错了，看起来通过其实是空断言。发现方式是：变异后测试仍然绿。
+**变异验证必须做完并确认真的变红，否则等于没做。**

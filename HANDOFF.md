@@ -795,18 +795,45 @@ dotnet test LanRemote.sln -c Debug --no-build
 | `TargetHost = string.Empty` | **成功**：不发 SNI、不做主机名校验，握手正常完成 |
 | 对端 accept 后一直不握手，握手时限 400 ms | 客户端在 **~400 ms** 被切断，异常类型是 **`System.OperationCanceledException`**（实测 `GetType().FullName`，非推断） |
 | 证书按真实时间有效、按注入时钟已过期 | 客户端抛 `AuthenticationException`，消息含 `expired`（说明是**我们的**校验器拦下的） |
+| 同端口 + 两个不同具体地址 bind | **可以**（开不开 `ExclusiveAddressUse` 都行）→ 步骤 8 成立 |
+| 同地址同端口第二次 bind | **被拒**，`AddressAlreadyInUse`(10048) |
+| 别人先 bind `0.0.0.0`（未开 exclusive），我们再 bind 具体地址 | **仍成功** —— 开 exclusive 也**发现不了**这种情况 |
+| 我们先 bind 具体地址（exclusive），别人再 bind `0.0.0.0` | **也成功** |
+| 带 `SO_REUSEADDR` 的后来者抢同地址同端口 | 开不开 exclusive **都被拒**（`AccessDenied` 10013） |
+| 连到具体地址的连接归谁 | 归**更具体**的 listener，不会被更宽的 socket 截走 |
+
+**⚠️ ADR-032：别过度声称 `ExclusiveAddressUse`**。我最初据此写的注释与测试断言是错的
+（以为开了它就能发现"别人先占了更宽地址"）。实测矩阵如上：
+**在本机可观测范围内，开与不开没有任何差别**。仍保留 `true`，但理由只能是
+「防御 `SO_REUSEADDR` 语义更宽松的旧版 Windows」。
+
+**⚠️ 教训：变异验证必须真的做红**。我第一版守护测试把 `ExclusiveAddressUse` 也开在了
+**对照组**的 socket 上，于是「把被测属性改成 false」的变异**没有让测试失败**——
+隔离错了，绿着也是空断言。是"变异后仍然绿"这件事暴露了它。
 
 ### 阶段 2 —— Listener / 准入 / 同子网校验
 
-8. 每张合格网卡起一个 TCP 45873 listener，并把 listener 与它的 `NetworkBinding` 关联起来
-   （多网卡同端口 bind 行为需实测，见 triage B-23；先决定 Host 启动是原子的还是按网卡降级）。
-9. accept 之后**先做同子网校验**：`socket.LocalEndPoint.Address` 必须等于该 binding 的地址，
-   用该 binding 的 mask 比 `RemoteEndPoint.Address`（复用 `SubnetPolicy`），不过立即关闭。
-   顺序：accept → 同子网 → **准入** → TLS，不可调换。
-10. 准入限额在 accept 之后、**TLS 握手之前**占用：全局上限 + 更小的每源 IP 上限，`finally` 里确定释放。
-    （`TcpListener.Start(backlog)` 的 backlog 只是待 accept 队列，**不是**应用层 DoS 防线。）
-11. 有界连接登记表：Host stop 时取消、dispose socket/stream、在有限停机 deadline 内 join 全部 handler。
-    验收：多个客户端卡在握手 / 帧头 / hello 各阶段时触发 stop，全部 handler 结束且限额归零。
+8. ✅ **已完成** 每张合格网卡起一个 TCP 45873 listener（`TransportHost.Start()`）。
+   - **启动语义定为按网卡降级（ADR-031）**：某张网卡 bind 失败只记进
+     `TransportHostStartResult.Failures`（地址 + `SocketError` + 消息），其余照常监听；
+     一个都没听上时 `IsListening == false` 且**不抛异常**（本机没合格 RFC1918 网卡时是预期状态）。
+   - **前置实测（triage B-23）已完成**，结论见下面「M3 已实测记录」与 **ADR-032**：
+     「同端口 + 不同具体地址」可以 bind（开不开 `ExclusiveAddressUse` 都行）——这是本步骤成立的前提。
+9. ✅ **已完成** accept 之后**先做同子网校验**：用 `client.Client.LocalEndPoint.Address`
+   （即接受它的那个 listener 的地址）调 `ISubnetPolicy.IsAllowedPeer(local, remote)`，不过立即关闭。
+   顺序写死在 `TransportHost.HandleAsync`：accept → 同子网 → **准入** → TLS，不可调换。
+   验收：`Rejects_Peer_That_Fails_Subnet_Check_Before_Any_Tls`（处理器根本不会被调用、
+   `AdmittedConnections == 0`）；另有 `Real_SubnetPolicy_Rejects_Loopback_Peer` 证明
+   127/8 不是 RFC1918 时真策略也会拒。**已做变异验证**：把子网校验短路后 4 个用例失败。
+10. ✅ **已完成** 准入限额在 accept 之后、**TLS 握手之前**占用（`ConnectionAdmissionLimiter`）：
+    全局上限 + 更小的每源 IP 上限，`finally` 里释放，租约释放**幂等**。
+    验收：`Admission_Limit_Refuses_The_Extra_Connection`（第二条连接拿不到名额、拿不到 TLS）。
+    （`TcpListener.Start(backlog)` 的 backlog 只是待 accept 队列，**不是**应用层 DoS 防线——已写进注释。）
+11. ✅ **已完成** 有界连接登记表 `ConnectionRegistry`：停机先取消、再强制释放 socket、再 join，
+    两阶段都在停机预算内。验收：`Stop_Cancels_Connections_Stuck_In_Handshake_And_Releases_Admission`
+    ——3 个客户端卡在握手里触发 stop，全部 handler 结束、限额归零、`StopAsync` 返回 true。
+    **阶段 2 结果**：`dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **495 PASS / 0 FAIL**
+    （阶段 1 的 464 + 新增 31）。
 
 ### 阶段 3 —— TLS
 
@@ -905,6 +932,11 @@ dotnet test LanRemote.sln -c Debug --no-build
   `LanRemote-<设备码>`，SNI 是明文，等于向整个局域网广播设备标识。pinning 下主机名校验不参与
   安全判定，`TargetHost = string.Empty` 实测可用（不发 SNI、不做名字校验）
 - **不要把 `TransportTimeouts` 里的数值当成实测结论**：它们是初始值，步骤 15 实测取消延迟后要回来调
+- **不要声称 `ExclusiveAddressUse` 能发现端口已被占用**（ADR-032，实测证伪）。
+  它能挡的只有「带 `SO_REUSEADDR` 的后来者」，而且在本机开不开结果一样。
+  真正的冲突信号是 `AddressAlreadyInUse`，已在 `TransportHostStartResult.Failures` 里
+- **变异验证不能只做一半**：改完代码必须确认测试**真的变红**再还原。
+  绿着不动手很可能是测试隔离错了（阶段 2 就踩过一次，见 ADR-032 末尾）
 - **不要用改系统时钟来测证书有效期**：一律用 `TimeProvider` 注入（测试里 `FakeClock`）。
   另外造过期证书时要注意——证书按真实时间也得有效，否则服务端 Schannel 会先因过期自行拒绝，
   测出来的就不是"我们的校验器拒绝了它"
