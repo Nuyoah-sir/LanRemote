@@ -1,7 +1,7 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 19:44 (+08:00)**
+> 更新时间：**2026-09-21 19:55 (+08:00)**
 >
 > 本轮（M3 第 24 步 · 续「一键准备本机」）**动了代码**：全部在
 > `tools/LanRemote.Acceptance/`（验收器）与 `scripts/acceptance/set-lab-ip.ps1` 里，
@@ -19,6 +19,7 @@
 ## 1. 当前状态
 
 - **当前里程碑：M3 — TLS Host/Client + 同子网连接校验 —— 已完成（两机验收 PASS，见第 15 节）**
+- **下一里程碑：M4 — Access Key Challenge Auth —— 计划草案已立（见第 18 节），等开工**
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3**
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
 - **Last code commit：`1d5ffc8`**（M3 第 24 步 · 续「一键准备本机」：窗口按钮 + 提升 helper
@@ -1701,3 +1702,98 @@ Private（B 机为 `already Private`）。类别还原逻辑自 v3 起存在（�
 23. **不要在验收器里用 UI 线程做测量**：`MainWindow` 的点击处理器是 `async void`，
     而 `ClientRole` 没有 `ConfigureAwait(false)`——续体会被投回 UI 线程，
     日志区滚动/排版时会延迟执行，正好打在靠时间判定的场景上。headless 一律走 `Task.Run`。
+
+## 18. 下一步 —— M4（Access Key Challenge Auth）· 计划草案
+
+**状态：等开工。**（M3 已全链闭环：24 步 + 两机验收 PASS + 两机 lab 还原；仓库已推 GitHub。）
+本计划按 `LanRemote_Implementation_Package/04_PROTOCOL_AND_SECURITY.md` §9/§14/§15 +
+`07_MILESTONES_AND_TASKS.md` M4 编制；**开工第一件事是阶段 0 的源码盘点**，届时本文档按盘点结论修订。
+
+**规格任务（9 项）**：AuthChallenge；canonical transcript builder；HMAC proof；server proof；
+timeout；failed auth limiter；local approval dialog；sessionToken；session registry。
+
+**规格测试（8 项）**：deterministic transcript；correct key success；wrong key fail；
+modified cert fingerprint fail；modified permission fail；expired challenge fail；
+5 failures limiter；serverProof client validation。
+
+**DoD（2 条）**：绝不发送 raw access key；auth success 后才能有 session。
+
+### 18.1 从 M3 继承的硬约束（开工前必修）
+
+- **ADR-028**：transcript 必须绑定 M3 实际出示的 `presentedPin`
+  （`ConnectionIdentity.PresentedCertSha256`，不可变）——否则留下「一条连接收 nonce、
+  另一条连接中继」的凭据中继缺口（§16 有专条）。
+- **`PreAuthenticated_Allows_Nothing_Before_M4` 门禁**：M4 落地时往
+  `AllowedOperationsWhilePreAuthenticated` 里加的应当是「开始访问密钥认证」**这一项**，
+  而不是「顺手先支持的」能力（§16）。
+- **ADR-027**：同 deviceId 不同指纹不得静默覆盖 → `IdentityConflict`，最晚 M4 落地
+  （M3 有意推迟，A-4 在 M3 故意没有测试）。
+- **auth 帧解析照 `HelloFrame` 模式**：`AllowDuplicateProperties=false`、
+  `UnmappedMemberHandling=Disallow`、显式 `MaxDepth`、拒绝尾随数据、非法 UTF-8 不兜底。
+- **pre-auth 单帧 4 KiB 上限（ADR-033）**：challenge / response 都在认证前，受此上限约束。
+- **禁用**：raw key 绝不上网；key / proof 绝不进日志；不自研密码学（白名单外的一律不做）。
+
+### 18.2 阶段划分（草案，21 步）
+
+**阶段 0 —— 衔接盘点与定案（开工第一件事）**
+
+1. 读 `ControlPreAuthSession` / `ControlSessionState` / `TransportHost` 现状，定
+   「PreAuthenticated 之后」的衔接：在 `ControlPreAuthSession` 内续跑认证 vs 新层
+   （M3 步骤 21 选了干净关闭，**没有**预留 `AwaitingAuthentication` 占位）。
+2. 定 `AllowedOperationsWhilePreAuthenticated` 的 M4 改造形式与门禁测试的改写。
+3. ADR-027 `IdentityConflict` 定案（`DiscoveryDeviceCache` 冲突字段与丢弃策略）。
+4. 第二轮外部评审输入准备（M3 实现红队 + 错误消息分类 + 五个 deadline 数值；
+   prompt 参照 `docs/M3_EXTERNAL_REVIEW_PROMPT.md` 模式）。**发布 / 回收需用户通道。**
+
+**阶段 1 —— transcript + HMAC proof（纯函数核心）**
+
+5. `AuthProtocol` 常量：版本串 `LANREMOTE-AUTH-V1`、字段名、各时限。
+6. `AuthTranscriptBuilder`：固定字段顺序、`\0` 分隔、base64 canonical、uppercase hex；
+   输入全部字节级确定（uuid 串 / base64 / hex / 枚举）。
+7. `clientProof = HMAC-SHA256(accessKeyBytes, transcript)`；
+   `serverProof = HMAC-SHA256(accessKeyBytes, UTF8("server\0") || transcript)`。
+8. 测试：deterministic transcript（同输入字节级相同）；correct / wrong key；
+   modified cert fingerprint / modified permission（改任一字段必改 proof）。
+
+**阶段 2 —— 认证消息帧（JSON 严格解析）**
+
+9. `AuthChallengeFrame`（→client）：`sessionId` / `serverDeviceId` / `serverNonce`(b64 32B) /
+   `certSha256`(HEX) / `expiresInMs`。
+10. `AuthResponseFrame`（→server）：`clientDeviceId` / `clientName` / `clientNonce` /
+    `requestedPermission` / `clientProof`(b64)。
+11. `AuthSuccessFrame` + `ApprovalPendingFrame`（→client）：`grantedPermission` /
+    `serverProof` / `sessionToken` / `videoAttachExpiresInMs`。
+12. `base64 canonical` 定义与测试（填充 / 字母表 / 长度校验——两端必须字节一致）。
+
+**阶段 3 —— 服务端认证状态机**
+
+13. challenge 生成（`sessionId` / nonce32 / `certSha256`←本机证书 / `expiresInMs=15000`）
+    与超时（**绝对** deadline，勿做成可重置，见 §16 `CancelAfter` 条）。
+14. 服务端验证链：未过期 / session+device 对齐 / proof 长度 / 重算 +
+    `FixedTimeEquals` / 失败一律 generic `authentication_failed`（不泄露细节）。
+15. failed auth limiter（按 remote IP）：10 分钟窗口 / 5 失败 → 拒 60s /
+    每次失败 300–800ms 随机延时 / 成功清计数 / 不打日志。
+16. local approval（默认 `RequireLocalApprovalForUnknownController=true`；
+    v1 语义 = 每次 unknown 都审批或运行期记住，**阶段 0 定案**）+ `approval_pending` 流程。
+17. `sessionToken`（32 随机字节）+ `SessionRegistry`（auth success 才注册——DoD 的可执行形式）。
+
+**阶段 4 —— 客户端侧**
+
+18. 客户端认证流程：hello → challenge → clientNonce → transcript（**绑 presentedPin**）→
+    response → success → 验证 serverProof。
+19. 失败处理：serverProof 验证失败 → 立即断开 + UI 文案「远端身份验证失败，可能是错误密码或
+    伪造设备广播」+ 不发送输入。
+20. 客户端 e2e（真 TLS 双端）：correct key success；wrong key `authentication_failed`；
+    serverProof 篡改必拒。
+
+**阶段 5 —— 收口**
+
+21. 全量 `build` + `test` + 端到端演练 + HANDOFF 记账；视情复用 M3 验收器模式组织两机演练
+    （**不新增脚本形态**——验收器必须保持「双击即 GUI」）。
+
+### 18.3 未决点（阶段 0 / 用户对齐）
+
+- 衔接层位置：改 `ControlPreAuthSession` vs 新 `ControlAuthSession`。
+- `local approval dialog` 的 M4 边界：App 目前与 Transport **零接线**（§1 已注），
+  最小可测形态可能是「抽象 + 测试替身」，真 UI 挂接待定——**若涉及产品形态，先与用户对齐**。
+- 第二轮外部评审的时机：与 M4 实施并行 vs 先行。
