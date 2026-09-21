@@ -240,3 +240,48 @@
 
 **范围外**：discovery 的绑定是否也采用同一套虚拟网卡过滤，不在本 ADR 内。M2 的 `NetworkInterfaceSelector` 已有自己的启发式（HANDOFF §3）且被 408 个测试与两机验收基线锁住；将来若要复用本规则，必须**单独立 ADR 并重跑两机验收**，不得顺手改。
 
+### ADR-027 — 发现层身份冲突（同 deviceId + 不同指纹）不得静默 last-write-wins
+**日期**：2026-09-21（M3 红队评审产出）  
+**Decision**：
+1. **M3 不得改动 M2 已验收的缓存语义**：`DiscoveryDeviceCache` 目前是 `Dictionary<Guid, DiscoveredDevice>`
+   且 `Upsert` 为 last-write-wins（读代码确认，非推测），即同 deviceId 换 IP / 换指纹会静默覆盖。
+   这条行为在 M3 **保持不变**。
+2. **最晚在 M4 交付前**必须引入冲突语义：在 discovery TTL 内同时观察到
+   **同 deviceId 但不同 `certSha256`** → 该 deviceId 标记 `IdentityConflict`，**禁用**其连接入口，
+   而不是二选一地挑一个指纹。
+3. 良性场景必须保留：**同 deviceId + 同指纹 + 不同 IP** 是同一台机器的多网卡正常广播，不得判为冲突、不得误杀。
+4. 解决手段**不包括** CA、持久信任库、「记住此设备」。**禁止把 discovery 来源的指纹持久化成信任**
+   （那等于把未认证信道当成 TOFU 根）。
+5. M3 期间的止血手段是「连接目标不可变快照」（见 `M3_REVIEW_TRIAGE.md` A 桶第 2 条）：
+   `{deviceId, remoteIPv4, tcpPort, expectedCertSha256}` 在点击连接时冻结，握手期间不许回读缓存。
+
+**Context**：外部红队评审与我复核代码后一致确认静默覆盖是真实缺口；但修它会改动 M2 已通过两机验收的行为，
+必须由独立 ADR 授权后再动。M3 阶段的危害边界是清楚的：攻击者可诱导客户端连到攻击者的证书，
+但**过不了 M4 的 access key proof**——所以是「连错对象」，不是「拿到授权」。
+**Consequence**：M4 之前该冲突可被利用（仅限链路内攻击者）；UI 需要新增「身份冲突」状态与禁用连接的呈现；
+改动后需重跑两机验收。
+**可逆性**：可逆，但属于安全收紧，不建议回退。
+**验证**：三条用例——① `A/X@IP1` 后 `A/X@IP2` → **无**冲突；② `A/X` 后 `A/Y` → 冲突且连接被禁用；
+③ 所有 `Y` 观察过期后 → 冲突可清除。
+**实施时机**：**M4**（最晚），**不在 M3**。
+
+### ADR-028 — M3→M4 身份绑定契约：transcript 必须绑定「M3 实际出示的」证书指纹
+**日期**：2026-09-21（M3 红队评审产出）  
+**Decision**：
+1. M3 的连接上下文必须**不可变**且携带四元组：`{ deviceId, endpoint, expectedPin(32B), presentedPin(32B) }`。
+2. `presentedPin = SHA256(实际出示证书的 RawData)`，在 TLS 证书校验回调里捕获，此后不可修改。
+3. M4 的 canonical transcript **必须包含 `presentedPin`**，并且客户端必须校验
+   `presentedPin == expectedPin`（连接时冻结的那一份）。三条缺一不可。
+4. 只绑定 `expectedPin` **不算**满足本 ADR——那正是可被中继的形态。
+
+**Context**：评审指出的缺口：若 M4 的 HMAC transcript 不绑定 M3 实际出示的证书指纹，活跃攻击者可以在
+一条 TLS 连接上收下 nonce、在另一条连接上把 challenge/proof 中继给真正的服务器（凭据中继）。
+我原本以为规格里 M4 的「modified cert fingerprint fail」已覆盖，但那条测的是**篡改**场景，
+不等于 transcript **包含并校验** presented fingerprint——这是两个不同的要求。
+**Consequence**：`presentedPin` 是 **M3 的交付物之一**（不是 M4 的内部细节），M3 必须把它暴露在连接上下文里；
+M4 的 transcript 结构因此被提前固定。
+**可逆性**：不可倒退——去掉这条就重新引入中继缺口。
+**验证**：客户端连到证书 `X` 的 TLS，而真实服务器持有证书 `Y`，中继 nonce 与 proof；
+认证必须失败，且失败原因**仅**来自 `X ≠ Y`。
+**实施时机**：M3 出接口与不可变上下文，**M4** 完成 transcript 绑定与校验。
+

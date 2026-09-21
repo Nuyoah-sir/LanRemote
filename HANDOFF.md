@@ -653,6 +653,20 @@ dotnet test LanRemote.sln -c Debug --no-build
 真正的 Key Usage 决策仍是 ADR-021，两者不要合并。
 
 **M2.1 本轮未新增 ADR**：修的都是既有决策下的实现缺陷，没有推翻或新增架构决策。
+
+### 2026-09-21 追加：M3 红队评审产出两条 ADR
+
+外部模型对 M3 设计做了红队评审，分流结果见 **`docs/M3_REVIEW_TRIAGE.md`**。据此新增：
+
+- **ADR-027 — 发现层身份冲突不得静默 last-write-wins**：`DiscoveryDeviceCache` 是
+  `Dictionary<Guid,...>` + `Upsert` 覆盖式更新（读代码确认），同 deviceId 换指纹会静默覆盖。
+  **M3 不动 M2 已验收行为**（只用连接目标不可变快照止血）；冲突语义最晚 **M4** 落地：
+  同 deviceId + **不同指纹** → `IdentityConflict` 并禁用连接；同 deviceId + **同指纹** + 不同 IP
+  是多网卡良性广播，**不得误杀**。
+- **ADR-028 — M3→M4 身份绑定契约**：连接上下文必须不可变携带
+  `{deviceId, endpoint, expectedPin, presentedPin}`；**M4 的 transcript 必须绑定 `presentedPin`**
+  （M3 实际出示证书的指纹），只绑 `expectedPin` 不够——否则存在凭据中继缺口。
+  `presentedPin` 是 **M3 的交付物**。
 两条不变量已就近写进代码注释与类型 XML doc（`DiscoveryReplyTarget`、`MulticastInterfaceOption`），
 并由单元测试锁住。
 
@@ -695,6 +709,16 @@ dotnet test LanRemote.sln -c Debug --no-build
 4. Control channel 的 length-prefixed JSON framing（上限 1 MiB）与 `channel_hello`。
 5. M3 **不要**实现 AuthChallenge / HMAC / 访问密钥认证（那是 M4）。
 6. M3 **不要**实现 UI 网络诊断 / 防火墙一键 / 临时私有地址一键——ADR-024 属 M9、ADR-025 与 ADR-026 属 M10。
+7. **开工前必读 `docs/M3_REVIEW_TRIAGE.md`**（外部红队评审 + 本机实测校正）。其中四条是
+   **本机实测**（.NET 10.0.12 / Win11 25H2 26200），不是评审的回忆：
+   - `JsonSerializerOptions.AllowDuplicateProperties` **默认 `True`**，且实测
+     `{"type":"channel_hello","type":"video"}` 默认解析成功、`type` 取**后者** → hello 解析器必须显式设 `false`
+   - `SslClientAuthenticationOptions.AllowTlsResume` **默认 `True`**，`SslServerAuthenticationOptions.AllowTlsResume`
+     **也是 `True`** → 两端都要显式关
+   - `AllowRenegotiation`：客户端默认 **`True`**、服务端默认 **`False`** → 两端都要显式设 `false`
+   - `EnabledSslProtocols` 默认 **`None`**（= 交给系统默认）→ 必须显式传 `Tls12 | Tls13`
+8. M3 必须先跑完 triage §7 的第 1、2 条实测（EphemeralKeySet 服务端握手、TLS1.2/1.3 分别验证）收口 ADR-018。
+   **Win10 22H2 本机无法验证**（本机是 Win11 25H2 / 26200），要另找机器或明确标注未测。
 
 ## 16. 下一位 AI 不要重复做
 
@@ -717,6 +741,14 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **绝不在后台静默改防火墙或改 IP**：两者都必须经过「用户显式点击」+「UAC 确认」两道确认（ADR-025/026）。
   「改 IP 要无感」这句话被拆解为：**入口无感（在 App 内、不用开 PowerShell）+ 触发显式（用户自己点）**，
   不要把「无感」理解成「自动执行」
+- **不要靠 `System.Text.Json` 的默认设置解析 `channel_hello`**：实测 `AllowDuplicateProperties` 默认
+  **`True`** 且**后者覆盖前者**——`{"type":"channel_hello","type":"video"}` 默认会解析成 `video`。
+  hello 解析器必须显式：`AllowDuplicateProperties=false`、`UnmappedMemberHandling=Disallow`、显式 `MaxDepth`
+  （注意该属性默认值是 `0`，表示采用内置上限 64，文档里别写成「默认 64」）
+- **不要依赖 TLS 相关默认值**：`AllowTlsResume` **两端默认都是 `True`**、`AllowRenegotiation` 客户端默认 `True`、
+  `EnabledSslProtocols` 默认 `None`——三个都必须显式设置
+- **不要把 `expectedPin` 当作 M4 transcript 的唯一绑定对象**：必须绑定 M3 实际出示的 `presentedPin`（ADR-028），
+  否则留下「一条连接收 nonce、另一条连接中继」的凭据中继缺口
 - **不要照抄直觉去改 IP**：Windows IPv4 是「DHCP 或静态」二选一；追加第二地址前必须先把整张接口
   切成静态并回填原配置，否则会丢 DHCP 租约只剩 169.254（本机已两次踩断）。撤销必须幂等，
   且**不能靠 `netsh` 退出码判成败**。完整约束见 ADR-026

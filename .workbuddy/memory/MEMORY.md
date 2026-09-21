@@ -155,3 +155,14 @@ M3~M11 —— 未开始
 - ADR 工作副本 = `docs/DECISIONS.md`（010~026）；`LanRemote_Implementation_Package/10_DECISIONS.md`
   保持原始 9 条规格快照，不回写
 - 已修编号缺陷：ADR-018（证书加载 EphemeralKeySet）曾被错标成 ADR-021（KeyUsage），勿再混淆
+
+## 本机实测：.NET 10.0.12 的默认值（M3 直接依赖，别再猜）
+
+- `JsonSerializerOptions.AllowDuplicateProperties` 默认 **True**，且**后者覆盖前者**——
+  `{"type":"channel_hello","type":"video"}` 默认解析为 `video`。设 `false` 才抛 `JsonException`
+- `MaxDepth` 属性值默认 **0**（= 采用内置上限 64），不是「默认 64」
+- `UnmappedMemberHandling` 默认 `Skip`；尾逗号与注释默认已拒绝（抛 `JsonException`）
+- `SslClientAuthenticationOptions`：`AllowTlsResume=**True**`、`AllowRenegotiation=**True**`
+- `SslServerAuthenticationOptions`：`AllowTlsResume=**True**`、`AllowRenegotiation=False`
+- `EnabledSslProtocols` 两端默认 `None`（= 交给系统默认），必须显式 `Tls12 | Tls13`
+- 取证方法：临时 console 项目 + 反射打印 `SslXxxAuthenticationOptions` 全部属性默认值（放在 %TEMP%，不进仓库）
