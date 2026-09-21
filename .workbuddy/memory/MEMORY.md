@@ -42,7 +42,8 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M0~M1.3 | 完成（`104f296` / `9e75fce`） |
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
-| M4~M11 | 未开始 |
+| **M4** | **计划草案已立（HANDOFF §18；6 阶段 21 步）；等开工**——阶段 0 = 衔接盘点（改 `ControlPreAuthSession` vs 新层）；UI 边界（local approval dialog）或需用户对齐 |
+| M5~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）。
 远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）；2026-09-21 起首推 + 后续记账提交均推送成功（远端 `main` = 本地，54 提交）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**链路间歇性抖动**：push 会挂到超时 `exit 124`/schannel 握手失败，与代理/配置无关 → **解法=重试**（实测 2 次内过）；`GIT_TERMINAL_PROMPT=0` + 关 GCM 交互仅防凭据挂起。此后每轮收尾 `git push origin main`。
