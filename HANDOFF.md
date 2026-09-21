@@ -1,7 +1,7 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 19:55 (+08:00)**
+> 更新时间：**2026-09-21 20:28 (+08:00)**
 >
 > 本轮（M3 第 24 步 · 续「一键准备本机」）**动了代码**：全部在
 > `tools/LanRemote.Acceptance/`（验收器）与 `scripts/acceptance/set-lab-ip.ps1` 里，
@@ -62,9 +62,12 @@ HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 允许 HEAD 比 Last code commit 新（之后会有单独的文档提交）。
 远端 `origin` 已配（GitHub，public）：每轮记账提交后 `git push origin main` 同步。
 **两个已实测的坑**：① 链路间歇性抖动（push 挂到超时 / 偶见 schannel 握手失败）→ **重试即过**；
-② **全局 helper 链不可信**：`git-credential-helper-selector` 会重写 `~/.gitconfig`
-（实测把它写成 `<no helper>`；连 `--help` 都会写），且它被当 helper 调用会**挂起等交互**（20 s 超时）。
-→ 本仓库已用 repo 级「空值 + `manager`」屏蔽继承链（链上只剩 GCM），**不要改回**、不要运行那个 selector。
+② **helper-selector 陷阱**：`git-credential-helper-selector` 每次被 git 当 helper 调用都会**弹 GUI**
+（源码级：无「已选过即静默委托」分支；无桌面会话挂起；连 `--help` 都弹并写配置），选「`<no helper>` + Always」
+会把它写成 `credential.helper = <空>`（清链）——2026-09-21 19:57 本机全局就是这样被写坏的（推送 `exit 128`）。
+**修复（2026-09-21，全局 + repo 双层）**：`credential.helperselector.selected = manager` + 链「空值 + `manager`」
+（空值重置 system 级 `helper-selector`）。机器级验证：从 `/tmp`（无 repo 配置参与）`git credential fill` rc=0、
+`GIT_TRACE` 只见 `git-credential-manager`。**不要改回、不要裸跑那个 selector。**
 push 仍带 `GIT_TERMINAL_PROMPT=0` + 关 GCM 交互（`credential.interactive=false`/`guiPrompt=false`）。
 
 ## 1.5 M2.1 — Discovery Final Fix（本轮修复明细）
@@ -1746,6 +1749,8 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 3. ADR-027 `IdentityConflict` 定案（`DiscoveryDeviceCache` 冲突字段与丢弃策略）。
 4. 第二轮外部评审输入准备（M3 实现红队 + 错误消息分类 + 五个 deadline 数值；
    prompt 参照 `docs/M3_EXTERNAL_REVIEW_PROMPT.md` 模式）。**发布 / 回收需用户通道。**
+   - **2026-09-21 已备好**：`docs/M3_IMPLEMENTATION_REVIEW_PROMPT.md`（待转发）。Prompt A = M3 实现红队
+     （五段 deadline 数值 / 失败消息分类学 / 实现层遗漏）；Prompt B = M4 阶段 0 决策输入（衔接层 + 本地审批边界）。
 
 **阶段 1 —— transcript + HMAC proof（纯函数核心）**
 

@@ -46,7 +46,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M5~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）。
-远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **全局 helper 链不可信**——`git-credential-helper-selector` 会重写 `~/.gitconfig`（实测被写成 `<no helper>`；连 `--help` 都写），且被调用会挂起 → 本仓库已用 repo 级「空值 + `manager`」屏蔽继承链（只剩 GCM），**勿改回**。此后每轮收尾 `git push origin main`。
+远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **helper-selector 陷阱**（源码级定论）：`git-credential-helper-selector` 每次被调必弹 GUI（无静默委托、无桌面即挂起、`--help` 也弹并写配置），「`<no helper>`+Always」= 把 `credential.helper` 写成空串（清链）。**已全局修复（2026-09-21）**：`selected = manager` + 链「空值+`manager`」（repo 级同配双保险）；机器级 fill rc=0、trace 只见 GCM；**勿裸跑 selector**。此后每轮收尾 `git push origin main`。
 
 ## 实测事实（别再猜）
 
