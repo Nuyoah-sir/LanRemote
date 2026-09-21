@@ -22,16 +22,17 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M3 — TLS Host/Client + 同子网连接校验 —— 已完成（两机验收 PASS，见第 15 节）**
+- **当前里程碑：M3.1 加固 —— 已完成（2026-09-21，单机全量验证 601 PASS；执行记录见 §18.4 A 节）**
 - **下一里程碑：M4 — Access Key Challenge Auth —— 计划草案已立（见第 18 节），等开工**
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3**
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1**
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`1d5ffc8`**（M3 第 24 步 · 续「一键准备本机」：窗口按钮 + 提升 helper
-  + headless `prepare-lab`，含 3 个真缺陷；上一提交 `ffd73e9` = lab 脚本补 TCP 45873 放行）
-  ——其后第 24 步真机验收（2026-09-21）**未再动任何代码**。
-- **Working tree at validation: 无未提交代码**——两机验收跑的就是由 `1d5ffc8` 后工作树打出的
-  物料（zip `f81d194c…`；harness / transport 哈希两端逐字符一致）；验收后仓库只新增文档性
-  修订（本记录 + 手册澄清），无代码 / 测试改动。
+- **Last code commit：`2dee00c`**（M3.1 加固：pre-auth 外层信封 + 停机报告 + 测试补强
+  B15/B16/B18/B19/B20 + 验收器同步；上一条代码提交 `1d5ffc8` = M3 第 24 步「一键准备本机」）。
+- **Working tree at validation（M3.1）：无未提交代码**——601 PASS 跑的就是被如实提交为
+  `2dee00c` 的工作树；验证后未再动代码（其后记账提交只动文档）。
+- **注意：M3.1 已改动 src / tests / 验收器**——M3 两机验收的旧物料（zip `f81d194c…`，由
+  `1d5ffc8` 后工作树打出，harness / transport 哈希两端逐字符一致）**已成为历史版本**；
+  如需重跑两机验收，物料必须重打（§18.4 A 节）。
 - **两机 lab 环境均已就绪，且第 24 步两机验收已跑完（PASS，2026-09-21）**：
   A（本机）= `192.168.1.10`、B = `192.168.1.20`，UDP 45872 + TCP 45873 入站放行；
   A 侧四场景 4/4 PASS（runId `8a7e3d03`）、B 侧四条连接行与五条汇总约束全部对上
@@ -1815,8 +1816,9 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 
 - 衔接层位置：**已定 (b)**——显式交接（`ControlPreAuthSession → ControlAuthSession`），
   评审与本机基线一致；增强件（线性所有权对象、exactly-once、测试改写）见 §18.4。
-- `local approval dialog` 的 M4 边界：**评审建议 (b)「抽象 + 验收器最小审批面」推翻了本机此前 (a) 倾向**；
-  本机采纳评审论证；**最终拍板留给用户（M4 开工前确认）**。产品 WPF UI 仍不动。
+- `local approval dialog` 的 M4 边界：**已拍板 (b)（2026-09-21）**——`ILocalApprovalGate` 库真接口
+  + 单测替身 + 验收器最小审批面（评审论证推翻了本机此前 (a) 倾向；本机采纳评审论证）。
+  产品 WPF UI 仍不动。
 - 第二轮外部评审的时机：**已回收**（2026-09-21，先行完成，见 §18.4）。
 
 ### 18.4 第二轮外部评审结论 → 计划修订（2026-09-21 回收）
@@ -1824,7 +1826,7 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 分流全文：`docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`（含 3+2 处「评审前提 ≠ 代码事实」的逐条核对）。
 计划层面的净修订如下。
 
-**A. 先做：M3.1 加固（M4 之前；少量代码 + 测试补强）**
+**A. 先做：M3.1 加固（M4 之前；少量代码 + 测试补强）—— ✅ 已完成（2026-09-21）**
 
 - `PreAuthEnvelopeTimeout`（初值 **8s**，provisional）：pre-auth **外层信封**——自会话进入起算、
   永不重置，覆盖前缀 + payload + 解析 + 收尾；修复「分段绝对 ≠ 总量有界（5+10=15 s 可加和）」。
@@ -1834,6 +1836,24 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 - 测试补强：跨 listener 共享限额（B15）；真实 TLS 粘包（B16）；字节边界取消矩阵（B19）；
   准入释放矩阵补路径（B20）；`StopAllAsync` 未完成计数 + false 路径测试（B18）。
 - **不重开** M3 两机验收（信封用本机真实 TLS 集成测试证明）；如再跑验收：物料需重打（src 有改动）。
+
+**A. 执行记录（2026-09-21 收尾，单机全量验证）**
+
+- 全部按上述范围落地（9 步批次），实现 == 计划，无范围外改动。
+- 变异验证（贯穿纪律；恢复后均以 `git diff` 确认为空）：真实 TLS 帧边界 ×2、跨 listener 限额
+  与名额归还 ×2、停机未完成计数 ×1、字节边界矩阵 ×2——全部「禁用实现 → 精确变红 → 恢复 → 全绿」。
+  例：字节边界矩阵的单读变异 13 红 / 14 绿；停机计数变异精确点红「未完成计数」与「停机预算」
+  两条用例（其余 17 条不受影响）。
+- B19 一处设计纠错（值得记住）：**读取器消费掉的字节无法退回**——「半前缀超时后再读」必然错位
+  （读侧把后 2 个前缀字节当成新前缀头 → 前缀值巨大 → 超限拒绝，`FrameProtocolException`）。
+  恢复性场景必须用 **0 字节失败**；对应用例定为「0 字节超时 → 后续读完整帧成功」。
+- 验收器同步：`AcceptanceProfile`（信封 8 s + 既有判据核对：所有场景的期望收尾时刻早于信封；
+  slow-dribble 判据 `sent<4` 不受影响）；`HostRole`（停机改用 `TransportHostStopReport`，SUMMARY
+  增 `unfinishedConnections` / `acceptLoopsFinished`）；`AcceptanceRun`（`deadline.hello` 行语义
+  修正——标注「客户端写预算；服务端不消费」；新增 `deadline.preAuthEnvelope` 行）。
+- 全量验证：Debug + Release `dotnet build` **0 警告 0 错误**；`dotnet test` **601 PASS / 0 FAIL**
+  （Protocol 215 + Transport 192 + Core 125 + Security 66 + Integration 3）。
+- 未重开 M3 两机验收（同计划）；如之后重跑两机：验收物料必须重打。
 
 **B. M4 计划修订（阶段 0 落实为 ADR-027 修订）**
 
@@ -1856,7 +1876,8 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
   ④ 8 并发握手资源（顺带核 global=8）。完成后一次定案（五段 + 信封）并进 ADR。
 - **丢包实验涉及环境改动——走用户通道，不静默动网。**
 
-**D. 待用户拍板（M4 开工前）**
+**D. 待用户拍板（M4 开工前）—— ✅ 已拍板（2026-09-21）：(b)**
 
 - 审批机制边界：评审建议 (b)（验收器加最小审批面）vs 本机此前 (a)（纯抽象 + 替身）——
-  本机已采纳 (b) 论证，最终由用户确认（见 §18.3）。
+  用户已确认 **(b)**：`ILocalApprovalGate` 库真接口 + 单测替身 + 验收器最小审批面。
+  M4 阶段 0 的审批设计按 (b) 落地。
