@@ -26,7 +26,12 @@
   **阶段 0～5 的代码部分已全部完成**（24 步里的第 1～23 步），
   当前停在**第 24 步：两机验收——需要用户参与**，本机没有 RFC1918 网卡，无法自证。
   逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节的 M3 描述可能滞后。
-  最后提交 `5bf3cb6`，`dotnet build` 0 警告 0 错误，`dotnet test` **573 PASS / 0 FAIL**
+  最后代码提交 `5bf3cb6`，`dotnet build` 0 警告 0 错误，`dotnet test` **573 PASS / 0 FAIL**
+- **第 24 步物料已就绪**（验收器 `tools/LanRemote.Acceptance` + 手册 `docs/M3_TWO_MACHINE_ACCEPTANCE.md`
+  + 打包 `LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`）。
+  **注意：不要拿 `LanRemote.App` 验收 M3**——它引用了 `LanRemote.Transport` 但一行都没调用，
+  打它的包只能重证 discovery。本机所有**前置条件失败路径已实测**，happy path 必须两台
+  `192.168.1.0/24` 实机才能跑 → **等用户执行**。详见第 15 节步骤 24。
 
 ### 关于 git 记账方式
 
@@ -728,6 +733,18 @@ dotnet test LanRemote.sln -c Debug --no-build
 11. **本机开发残留**（非阻断）：`%LOCALAPPDATA%\LanRemote\backups\secrets.bin.pre-m1.3-reset.bak`
     是 M1.3 手工重置身份时留的旧开发备份，确认不再需要后由施工环境手工删除。
     **硬约束：绝不把「自动删除身份备份」写进产品逻辑。**
+12. **`TransportHost` 完全没有 logger（可观测性缺口，2026-09-21 建 M3 验收器时发现）**：
+    构造函数不收 `ILogger`，三条拒绝路径全是静默 `return`——
+    ① 同子网校验失败（`HandleAsync` 第 260 行）、② 准入限额拒绝（第 266 行）、
+    ③ TLS 握手失败（第 300 行块）。后果：被控端对「谁被拒了、为什么拒」一无所知，
+    两机验收时**只能靠控制端输出**判定。
+    与之相对，`ControlPreAuthSession` 的超时（发生在会话处理器**内部**）是有输出的
+    （`rejection=pre-auth-timeout`）——所以缺口精确落在 `TransportHost` 这一层，不含 pre-auth 会话层。
+    与第 9 条（UI 诊断）同源，建议并入 **ADR-024 / M9** 一起做，M3 不为它改产品代码。
+13. **跨子网拒绝没有真机覆盖**：现有 lab 是两机同挂 `172.100.166.x` + `192.168.1.x`，
+    host 只听 RFC1918 绑定，而 Windows 会自动挑同子网源地址，做不出「源 IP 在另一子网」的样本；
+    `New-NetRoute` / `route add` 都不能指定源地址，除非给 `TlsClientConnector` 加本地绑定参数。
+    当前覆盖全在自动化测试（见第 15 节步骤 24 的表）。**要真机补这一条，需要用户提供第三子网或批准改产品代码。**
 
 ## 15. 下一步 —— M3（TLS Host/Client + 同子网连接校验）
 
@@ -973,9 +990,66 @@ dotnet test LanRemote.sln -c Debug --no-build
 23. ✅ **已完成** `dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **573 PASS / 0 FAIL**
     （阶段 4 的 568 + 新增 5）。HANDOFF 与 `docs/DECISIONS.md`（ADR-033）已更新、变更已提交。
     **Last code commit：`5bf3cb6`** · **Working tree at validation: clean**
-24. ⛔ **未开始 —— 需要用户参与**：两机验收（跨机真实 TLS + pinning）。
-    M2 的 `scripts/acceptance/` 可复用，但要新增「跨机握手成功 / 指纹不符被拒 / 跨子网被拒」三类用例。
-    **M3 在步骤 24 回填之前不算做完**，本机没有 RFC1918 网卡，这一步无法自证。
+24. 🟡 **验收物料已就绪，等用户执行**：两机验收（跨机真实 TLS + pinning）。
+    **M3 在用户回填之前不算做完**，本机没有 RFC1918 网卡无法自证。
+
+    **关键结论：`LanRemote.App` 不能用来验 M3。** 它只是 `ProjectReference` 了
+    `LanRemote.Transport`，`src/LanRemote.App/` 里 grep
+    `TransportHost|TlsClientConnector|ControlPreAuthSession` **零命中**——
+    打 App 的包去两机跑，只能重新证明 M2 的 discovery 还能用。
+
+    因此新建 `tools/LanRemote.Acceptance`（`net10.0-windows` 控制台，已加进 sln）：
+
+    | 文件 | 作用 |
+    | --- | --- |
+    | `AcceptanceContext.cs` | 刻意照抄 `App.xaml.cs` 的 DI 接线（vault→证书→身份→binding→SubnetPolicy→discovery） |
+    | `InfoRole.cs` | `info`：环境自检，打印身份/指纹/端口/合格网卡 |
+    | `HostRole.cs` | `host [--seconds N]`：起 discovery + `TransportHost`，每条连接跑完整 pre-auth 会话 |
+    | `ClientRole.cs` | `client --scenario …`：发现→冻结快照→TLS→hello→等对端收尾 |
+    | `Program.cs` | 退出码 **0 = 符合预期 / 1 = 真失败 / 2 = 前置条件不满足** |
+
+    **四个场景，前三个必做、第四个本次不跑：**
+
+    | 场景 | 命令关键参数 | 通过标准 | 状态 |
+    | --- | --- | --- | --- |
+    | `success` | `--device-code <B>` | 控制端 `presentedPin` 与 discovery 的 `pin` 逐字符一致 + `outcome=PASS peerClosed=eof`；被控端 `outcome=PreAuthenticated rejection=-` | 待真机 |
+    | `pin-mismatch` | `--device-code <B>` | 握手被拒；且 `tcpProbe=open` 必须出现 | 待真机 |
+    | `timeout` | `--device-code <B>` | 不发 hello，约 5s（= `lengthPrefixTimeout`）被切；被控端 `rejection=pre-auth-timeout` | 待真机 |
+    | `cross-subnet` | `--address <ip> --pin <64hex>` | —— | **本次不跑，见 §14 第 13 条** |
+
+    被控端退出前的汇总行应为 `accepted=2 preAuthenticated=1 rejected=1 cleanStop=True`
+    （`pin-mismatch` 死在 TLS 阶段，进不了会话处理器，故不计入 `accepted`）。
+
+    **本机已实测（真实执行，不是推演）：**
+
+    - `dotnet build` 0 警告 0 错误、`dotnet test` **573 PASS / 0 FAIL**（加入该工具项目后不变）
+    - `info` 真跑通 DPAPI→身份→证书整条链（deviceCode `M5WC-14GX`，
+      certSha256 `89A5C10E…5445`），正确判 `outcome=FAIL reason=no-qualified-rfc1918-nic` → exit 2
+    - `host --seconds 3` → `[HOST][RESULT] outcome=FAIL reason=no-qualified-nic` → exit 2
+    - `client --scenario success --device-code AAAA-AAAA` → discovery 真实告警 +
+      `reason=peer-not-found` → exit 2
+    - `client --scenario cross-subnet --address 192.168.1.20 …` → `tcpProbe=unreachable`
+      → `reason=peer-port-unreachable` → exit 2
+    - 发布版 `artifacts/m3-acceptance/LanRemote.Acceptance.exe info` 在 **`env -u DOTNET_ROOT`**
+      （不加载 SDK 环境）下正常运行，自包含成立
+    - `run-acceptance.ps1 -PeerDeviceCode AAAA-AAAA` 在 step 0 正确中断，exit 2，中文渲染正常
+
+    **修复的一个真实缺陷（空洞断言）**：`pin-mismatch` / `cross-subnet` 原先是
+    「握手失败即 PASS」。对端端口没开 / 防火墙拦掉 / host 没启动，同样会让握手失败，
+    于是照样报 PASS——而同子网闸门和 pinning 一行都没被执行到。
+    已加 ① 纯 TCP 探针（不通 → exit `2`，不判 PASS）② `LooksLikeNothingListening`
+    按 `SocketError` 区分「没连上」与「被拒绝」（刻意**不**把 `ConnectionReset` 算进前者，
+    因为 accept 后立刻关闭正是走 RST）。**变异验证**：修复前 `192.168.1.20:45873`
+    （无人监听）报 PASS/exit 0，修复后报 `peer-port-unreachable`/exit 2。
+    同时把 `WaitForPeerCloseAsync` 的 `catch → return true` 拆成
+    `eof` / `reset` / `still-open` / `unexpected-data` 四种可判定结局，不再把超时和切断混为一谈。
+
+    **物料**：`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`
+    （216 条目 / 原始 77.8 MiB / zip 34.6 MiB），由 `scripts/acceptance/make-m3-package.py` 产出
+    （`LANREMOTE_M3_SKIP_PUBLISH=1` 可跳过 publish 只重新打包）。
+    包内含 `START-HERE.md`（=`docs/M3_TWO_MACHINE_ACCEPTANCE.md`）、
+    `run-acceptance.ps1`、`set-lab-ip.ps1`，两个 ps1 均在打包时强制加 BOM。
+    手册：§3 逐场景命令与判定、§4 host 汇总行、§5 两个已知缺口、§6 要贴回来的四段证据、§7 排障表。
 
 ### M3 明确不做
 
@@ -1069,6 +1143,18 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **验收脚本别再犯这 5 个错**（详见第 9.1 节末表）：`netsh` 退出码不可信、
   `-join` 在 PS 5.1 的参数绑定陷阱、自动选网卡必须排除虚拟网卡、
   Windows IPv4 不支持「DHCP + 附加静态」共存、`check-logs` 必须带 `-Since` 才准
+- **别拿 `LanRemote.App` 验收传输层**：它 `ProjectReference` 了 `LanRemote.Transport` 却**零调用**。
+  任何「打 App 的包去两机跑」的方案都只能重证 discovery，碰不到 TLS/pinning/hello
+- **验收器里禁止「失败即 PASS」**：对端端口没开、防火墙拦掉、host 没启动，都会让握手失败。
+  必须先用**纯 TCP 探针**证明端口是开的，再判「被拒绝」；探针不通一律返回退出码 `2`
+  （前置条件不满足），**绝不能**报 `0`。同理按 `SocketError` 区分「没连上」与「被拒绝」时，
+  **不要**把 `ConnectionReset` 归进「没连上」——accept 后立刻关闭正是走 RST
+- **不要把「对端怎么收尾」压成一个布尔**：`catch → return true` 会让「读超时」和「被切断」
+  在输出里长得一模一样。要区分为 `eof` / `reset` / `still-open` / `unexpected-data` 四种，
+  判定标准才写得出来
+- **写验收手册前先确认被控端到底会不会打印**：`TransportHost` 无 logger，同子网拒绝 / 准入拒绝 /
+  TLS 失败**全是静默**；只有发生在会话处理器**内部**的 pre-auth 超时才有输出。
+  手册里不要凭"应该会记日志吧"去写判定标准（见 §14 第 12 条）
 
 ## 17. 关键上下文
 
