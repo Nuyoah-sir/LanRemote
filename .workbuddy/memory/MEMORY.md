@@ -68,7 +68,7 @@ M3 TLS Host/Client + 同子网校验 —— 下一步（验收已 PASS，**等�
   - 开工前先跑 **SslStream server/client 握手 spike**（本机实测）收口 ADR-018 的 EphemeralKeySet 风险
   - 外部模型只做「设计红队评审」（prompt 在 `docs/M3_EXTERNAL_REVIEW_PROMPT.md`）；
     **Windows/.NET 实测行为一律不问模型，本机测**；模型结论不得直接写进 HANDOFF
-  - 本机实际系统：**Windows 10 Pro 25H2 / build 26200**（不是 22H2）
+  - 本机实际系统：**Windows 11 专业版 25H2 / build 26200**（`Win32_OperatingSystem.Caption` 实测）
 M3~M11 —— 未开始
 
 ## M1 关键存储事实（后续里程碑会依赖）
