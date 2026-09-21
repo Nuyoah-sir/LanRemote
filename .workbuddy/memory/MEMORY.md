@@ -6,7 +6,7 @@ Windows 局域网屏幕共享 / 远程控制（自用）。**无账号、无云�
 只允许同 IPv4 子网的 RFC1918 设备发现与连接，且必须通过访问密钥挑战认证。
 
 规格合同 `LanRemote_Implementation_Package/`（ADR 原始快照 9 条，不回写）；
-**当前真实进度一律以仓库根 `HANDOFF.md` 为准**；ADR 工作副本 `docs/DECISIONS.md`（010~033）。
+**当前真实进度一律以仓库根 `HANDOFF.md` 为准**；ADR 工作副本 `docs/DECISIONS.md`（010~034）。
 
 ## 不可动摇的约束
 
@@ -30,16 +30,19 @@ dotnet test  LanRemote.sln -c Debug --no-build
 ```
 
 出包：`scripts/acceptance/make-package.py`（App，M2 用）、
-`make-m3-package.py`（验收器，M3 用；`LANREMOTE_M3_SKIP_PUBLISH=1` 只重打不 publish、
-`LANREMOTE_M3_CLEAN=1` 才先清目录——默认不清，一次性删 200+ 文件会触发批量删除保护）。
+`make-m3-package.py`（验收器，M3 用；`LANREMOTE_M3_SKIP_PUBLISH=1` 只重打不 publish）。
+**别用 `LANREMOTE_M3_CLEAN=1`**：本机 safe-delete hook 连脚本内部的 `shutil.rmtree` 也拦
+（`SAFE_DELETE_BULK_CONFIRM_REQUIRED count=273 threshold=50`）→ 打包当场死于 SystemExit。
+`dotnet publish -o` 本来就会覆盖它自己产出的每个文件，不需要清。目录里若有 13 个**空的**
+语言卫星目录（`cs/` `zh-Hans/` …）是历史残留：`os.walk` 只收文件，**它们不会进 zip**。
 `.ps1` 必须 **UTF-8 with BOM**（PS 5.1 否则中文乱码）→ `add-bom.py`；
 **`.cmd` 必须纯 ASCII 且不加 BOM**（cmd.exe 按控制台代码页解析，中文连注释都会解错报
 「不是内部或外部命令」），所以所有中文文案放 ps1 里。
 
-**控制台程序必须有双击入口**：自包含包里 exe 混在 200+ dll 中，且双击不带参数只会
-打 usage 后退出、窗口一闪而过，用户会认为「没有 exe」。做法是加 `START.cmd`
-（切自身目录 → 调 ps1 → 末尾 `pause`）。M3 验收包入口 = `START.cmd`，
-程序本体是 `LanRemote.Acceptance.exe`。
+**交给用户的程序必须有双击入口**：自包含包里 exe 混在 200+ dll 中，而「双击不带参数只会
+打 usage 然后退出」的控制台 exe = 窗口一闪而过，用户会判断「包里没有 exe」（原话：
+「我们这个做的是软件啊」）。**正解是让入口本身就是 GUI**：M3 验收器 = `WinExe` + WPF，
+双击 `LanRemote.Acceptance.exe` 直接开窗口、零脚本；`START.cmd` 只是控制台程序的退路。
 
 ## 用户协作偏好
 
@@ -55,10 +58,11 @@ HANDOFF 记账用 `Last code commit` + `Working tree at validation`，**不写 H
 | --- | --- |
 | M0 / M1 / M1.1 / M1.2 / M1.3 | 已完成（`104f296` / `9e75fce`） |
 | M2 + M2.1 | 已完成，**两机验收 PASS 20/20**（`313c542`，408 tests） |
-| **M3 TLS Host/Client + 同子网校验** | 阶段 0~5 代码全完成（24 步里 1~23），build 0 警告 / **573 tests PASS**，Last code commit `5bf3cb6`。**卡在第 24 步两机验收，需用户参与** → M3 还不算做完 |
+| **M3 TLS Host/Client + 同子网校验** | 24 步里 1~23 全完成，build 0 警告 / **574 tests PASS**，Last code commit `f080581`。第 24 步（两机验收）物料已按「先修再跑」修到可跑：**变异矩阵 11/11 + headless 4/4 PASS**。**仍卡在等用户在两台实机执行** → M3 还不算做完 |
 | M4~M11 | 未开始 |
 
-M3 提交链：`ee1cbe3`(P1) `601d7a7`(P2) `5ba5822`(P3) `e0484ec`(P4) `5bf3cb6`(P5) `5ae052f`(验收器)。
+M3 提交链：`ee1cbe3`(P1) `601d7a7`(P2) `5ba5822`(P3) `e0484ec`(P4) `5bf3cb6`(P5)
+`5ae052f`(验收器) **`f080581`**(先修再跑：4 个真缺陷 + headless 入口 + 4 元组配对)。
 
 **外部模型的用法**：只做「设计红队评审」（prompt `docs/M3_EXTERNAL_REVIEW_PROMPT.md`）；
 **Windows/.NET 实测行为一律不问模型，本机测**；模型结论不得直接写进 HANDOFF。
@@ -120,15 +124,11 @@ ADR-030：`CreateSelfSigned(...)` 直出的私钥本身就是 ephemeral，报错
 
 ### M3 验收器 `tools/LanRemote.Acceptance`
 
-**形态已定稿为 WPF 窗口程序（`WinExe` + `UseWPF`）：双击 exe = 一个窗口，零脚本。**
-曾短暂做成「控制台 exe + `START.cmd`」，用户连纠三次后废弃 ——
-本项目是桌面软件，M2 验收就是在两台机器 WPF 界面上做的（HANDOFF §9.1），
-§13 原则是「终端用户永远不需要打开 PowerShell」。**别改回控制台 + 脚本。**
-已删除 `Program.cs` / `START.cmd` / `run-acceptance.ps1`。
-
-窗口：身份面板（自动自检，不合格 → 置灰角色按钮）/ 角色按钮组 / 只读日志 /
-底部（复制全部日志、清空、打开日志目录）。日志双写 UI + `%TEMP%\lanremote-m3-acceptance\gui.log`
-（WinExe 无控制台，`Console.WriteLine` 全部不可见）。
+**形态 = WPF 窗口程序（`WinExe` + `UseWPF`）：双击 exe = 一个窗口，零脚本。**
+曾做成「控制台 exe + `START.cmd`」，用户连纠三次后废弃（§13：终端用户永远不打开
+PowerShell）；已删 `Program.cs` / `START.cmd` / `run-acceptance.ps1`。**别改回控制台 + 脚本。**
+窗口：身份面板（自检不合格 → 置灰角色按钮）/ 角色按钮组 / 只读日志 / 底部工具条；
+日志双写 UI + `%TEMP%\lanremote-m3-acceptance\gui.log`（WinExe 无控制台，`Console.WriteLine` 不可见）。
 
 **WPF 硬坑**：`InvariantGlobalization` 必须 `false`，否则窗口首次 Measure 崩在
 `MS.Internal.FontCache.MajorLanguages`（`'en' is an invalid culture identifier`）；
@@ -139,14 +139,27 @@ XML 注释里不能出现 `--`（写 `--->` 直接 MSB4025）；
 **纠正过的猜测**：改 invariant **不会**让包多带 ICU（Windows 用系统 ICU，包里零 `icu*`），
 体积 77.8→132.2 MiB 全是 WPF 自身程序集（约 39 MiB）。
 
-退出码 **0 符合预期 / 1 真失败 / 2 前置条件不满足**（窗口翻成人话）。
+退出码就是结局枚举：**0 预期内 / 1 真失败 / 2 前置条件不满足 / 3 工具自身出错 / 4 无效运行**；
+`Combine()` 优先级 `InvalidRun > HarnessError > Fail > PreconditionUnmet > Pass`。
 **别拿 `LanRemote.App` 验传输层**——它 ProjectReference 了 Transport 却**零调用**。
-三必做场景：`success` / `pin-mismatch` / `timeout`；`cross-subnet` 本次 lab 跑不出
-（Windows 不能指定源地址，除非给 `TlsClientConnector` 加本地绑定参数 → HANDOFF §14.13）。
-被控端汇总行应为 `accepted=2 preAuthenticated=1 rejected=1 cleanStop=True`
-（pin-mismatch 死在 TLS，进不了会话处理器故不计入 accepted）。
-手册 `docs/M3_TWO_MACHINE_ACCEPTANCE.md`（§0.1 双击 exe 启动）。
-打包 `scripts/acceptance/make-m3-package.py` → 265 条目 / 132.2 MiB / zip 57.4 MiB。
+**四必做场景**（顺序）：`success` → `pin-mismatch` → `timeout` → `slow-dribble`。
+`slow-dribble` 是区分**绝对 deadline** 与**可重置 deadline** 的唯一场景，判据 **`sent=3/4`**
+（显示 `4/4` = 时限被逐字节重置 = 真缺陷；变异实测：把时限改成可重置后 `timeout` 仍然绿、
+**只有它变红**）。`cross-subnet` 本次 lab 跑不出（Windows 不能指定源地址，
+除非给 `TlsClientConnector` 加本地绑定参数 → HANDOFF §14.13）。
+被控端汇总行 `connectionsEnteringSessionHandler=N listenersStoppedCleanly=True activeAtStop=0 handlerFaults=0`
+（字段曾叫 `cleanStop`；pin-mismatch 死在 TLS、进不了会话处理器，故不计入 accepted）。
+**headless**：同一个 exe 带 `--headless client|host|info` 即命令行模式；WPF 里必须 `Task.Run`
+起（`OnStartup` 同步等会死锁），`--headless client --all` 四场景 4/4 PASS 退 0、RUN 头只写 1 次。
+**两机日志配对用 4 元组**：控制端 `[CLIENT][CORRELATE] local=<IP>:<port>` ≡
+被控端 `[HOST][RESULT] peer=<同一端点>`；**聚合计数相等不构成配对证明**。
+控制端只给 `hostExpect` + `[VERDICT] M3 = PENDING-HOST-EVIDENCE`，**不给里程碑结论**。
+交叉核对 ④ 是**区间 `3..4`**（TLS 1.3 下服务端可能在收到 alert 前已认为握手完成，
+留一行 `rejection=pre-auth-eof`）：区间只取决于 `ReachedWire` / `TlsStageRejection`，
+与场景是否 PASS 无关。
+手册 `docs/M3_TWO_MACHINE_ACCEPTANCE.md`（§0.1 双击、§0.2 headless、§3 四场景、§5 配对）。
+打包 `scripts/acceptance/make-m3-package.py` → **265 files / raw 132.3 MiB / zip 57.4 MiB**，
+zip 内**全扁平**（13 个残留空卫星目录不进包），唯一脚本 `set-lab-ip.ps1`（带 BOM）。
 
 ## 测试 / 验收写法硬约束（踩过的坑）
 
@@ -157,9 +170,21 @@ XML 注释里不能出现 `--`（写 `--->` 直接 MSB4025）；
 - 阶段超时必须被 `RunAsync` 接住（`when (!ct.IsCancellationRequested)`），
   否则与停机取消不可区分且结局永远产生不出来
 - **变异验证必须确认真变红**；「变异后仍然绿」= 测试隔离错了（ADR-032 踩过）
-- **验收器禁止「失败即 PASS」**：端口没开 / 防火墙拦 / host 没启动都会让握手失败。
-  必须先用纯 TCP 探针证明端口开着，否则退 2 不判 PASS；按 `SocketError` 区分时
-  **不要**把 `ConnectionReset` 归进「没连上」——accept 后立刻关闭正是 RST
+- **禁止「失败即 PASS」**：端口没开 / 防火墙拦 / host 没启动都会让握手失败 —— 但
+  **「没连上」本来就会落到退 2**（TCP 不可达抛 `SocketException`/`IOException`，
+  **永不**是 `AuthenticationException`）→ 那个独立 TCP 探针已删除（判据本来就是空的）。
+  按 `SocketError` 区分时**不要**把 `ConnectionReset` 归进「没连上」——accept 后立刻关闭正是 RST
+- **`ReadAsync == 0` ≠ 收到 `close_notify`**：裸 TCP FIN 也返回 0（RST 抛 `IOException`）
+  → 文案一律写「**有序 EOF（TLS 记录层 EOF）**」
+- **TLS 1.3 幽灵行**：客户端拒绝服务端证书发 alert，而 TLS 1.3 下服务端**在收到 alert 之前**
+  已认为握手完成 → 照样进会话处理器、读到 EOF 给 `rejection=pre-auth-eof`（本机环回实测）；
+  TLS 1.2 下服务端握手直接失败、才真的不留行 → 所以判定必须写成**区间**，不能写死
+- **不许把「没观测到」写成 0**：期望值只能由客观事实（是否连上过线、是否死在 TLS 阶段）
+  派生，不能由「本该没有」派生（ADR-034）
+- **CLI 解析器返回值就是字面意思**：`TryParse` 的 `true` ⟺ 解析出非空 command；错误分支写
+  `return true` → 调用方按成功处理 → NRE → 退 3 且 stdout/stderr **全空**（真踩过，14 处）
+- **裸后台线程未处理异常 = 进程当场死亡**（exit 127、零输出、handler 来不及做事）；
+  **未观察的 faulted Task = 进程存活且完全静默**（.NET Core 起终结器不再杀进程）→ 两个 handler 都要挂
 - 不要把「对端怎么收尾」压成一个布尔，要分 `eof` / `reset` / `still-open` / `unexpected-data`
 - 「删一行不会变红」的开关（TLS 选项）必须 `internal` + `InternalsVisibleTo` 后直接断言
 

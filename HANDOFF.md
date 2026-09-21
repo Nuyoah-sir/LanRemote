@@ -1,7 +1,7 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 16:35 (+08:00)**
+> 更新时间：**2026-09-21 16:38 (+08:00)**
 >
 > 本轮（M3 第 24 步「先修再跑」）**动了代码**：`src/LanRemote.Transport/TlsConnection.cs`
 > 加了一个只读观测量 `LocalEndPoint`（两机日志配对用），其余全在
@@ -9,6 +9,9 @@
 >
 > 本轮的实质内容：**11 例变异矩阵 + 4 个新抓到的真缺陷 + 3 项「待实测」实测收口
 > + 新增 headless 入口**。逐条见 §15 步骤 24。
+>
+> 本轮代码**已提交为 `f080581`**（24 files changed, +3399 −583）。
+> 本文件与 README 的记账性修订在其之后，属文档提交。
 
 ---
 
@@ -17,11 +20,12 @@
 - **当前里程碑：M3 — TLS Host/Client + 同子网连接校验**
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`5bf3cb6`**（M3 阶段 5 收口）
-- **Working tree at validation: 有未提交改动**——`src/LanRemote.Transport/TlsConnection.cs`
-  的 `LocalEndPoint`（只读）+ `tests/.../TlsClientConnectorTests.cs` + `TestTlsServer.cs` 的
-  对侧断言 + `tools/LanRemote.Acceptance/` 整目录 + 文档。
-  **本轮的改动尚未提交**（下一步应先提交，再打包）。
+- **Last code commit：`f080581`**（M3 第 24 步「先修再跑」：4 个真缺陷修复 + headless 入口）
+- **Working tree at validation: 有未提交改动**——本轮全部验证（build / 574 tests /
+  11 例变异矩阵 / headless 端到端）都是在这些改动**尚未提交**时跑的，随后同一批改动
+  提交为 `f080581`。也就是说 `f080581` 的内容与「验证时的工作树内容」一致；
+  本文件与其后的记账性修订不在该提交内。
+  **打包前先确认工作树里没有未提交的源码/验收器改动**（只允许文档差异）。
 - **M2.1 code 状态：Implementation complete；Two-machine manual DoD：PASS**
   （2026-09-20 17:30–18:18 两台实机跑完 20 步，20/20 通过，见第 9 节）
 - **是否满足完整 M2 DoD：是**（两机手工验收已回填）
@@ -1189,6 +1193,35 @@ dotnet test LanRemote.sln -c Debug --no-build
     与 `AcceptanceRun.ReportBackgroundFault` 就是按这两条实测结论加的。
     `MainWindow` 的点击处理器是 `async void`、`ClientRole` 里没有 `ConfigureAwait(false)`——
     所以 headless 走 `Task.Run`，绝不让测量被 UI 线程污染。
+
+    ### 24.6 本轮提交与打包记账
+
+    本轮（4 个真缺陷 + headless 入口 + 4 元组配对 + 变异矩阵）提交为 **`f080581`**
+    （24 files changed, +3399 −583）。内容清单：
+
+    | 区域 | 文件 |
+    | --- | --- |
+    | 产品（唯一改动，只读观测量） | `src/LanRemote.Transport/TlsConnection.cs`（`LocalEndPoint`） |
+    | 测试 | `tests/LanRemote.Transport.Tests/TestTlsServer.cs`（记录 accept 远端端点）、`TlsClientConnectorTests.cs`（对侧一致性 + Dispose 后为 null） |
+    | 验收器 | `tools/LanRemote.Acceptance/`：新增 `HeadlessCommand.cs` / `HeadlessRunner.cs` / `AcceptanceOutcome.cs` / `AcceptanceProfile.cs` / `AcceptanceRun.cs` / `AcceptanceLoggerProvider.cs`，改 `App.xaml(.cs)` / `ClientRole.cs` / `HostRole.cs` / `InfoRole.cs` / `MainWindow.xaml(.cs)` / `AcceptanceContext.cs` / `AcceptanceLog.cs` |
+    | 文档 | `docs/DECISIONS.md`（ADR-034）、`docs/M3_ACCEPTANCE_UI_REVIEW_{PROMPT,TRIAGE}.md`、`docs/M3_TWO_MACHINE_ACCEPTANCE.md`、`README.md`、`HANDOFF.md` |
+
+    **打包从 `f080581` 之后的工作树做**（源码与验收器已全部提交，脚本会重新
+    `dotnet publish`）。zip 与 `artifacts/` 都在 `.gitignore` 里，不入库、不追溯。
+    本文件（`HANDOFF.md`）与其后的记账性修订属文档提交，**不改变代码内容**。
+
+    **本次打包实测**（2026-09-21 16:40，`f080581` 之后的工作树）：
+    `265 files packed / raw 132.3 MiB / zip 57.4 MiB` →
+    `LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`。zip 校验：265 条目**全扁平**（无子目录）、
+    无 `START.cmd`、唯一脚本是 `set-lab-ip.ps1`（UTF-8 with BOM，22304 B）、
+    `START-HERE.md` 与 `docs/M3_TWO_MACHINE_ACCEPTANCE.md` **逐字节相同**
+    （22197 B，sha256 前 16 位 `cda95eb812351b6b`）。
+
+    **`LANREMOTE_M3_CLEAN=1` 在本机不可用**：脚本内部的 `shutil.rmtree` 同样被 safe-delete
+    hook 拦下（`SAFE_DELETE_BULK_CONFIRM_REQUIRED count=273 threshold=50`）→ 脚本死于
+    SystemExit。**不要清目录**：`dotnet publish -o` 本来就会覆盖它自己产出的每个文件；
+    `artifacts/m3-acceptance/` 里那 13 个**空的**语言卫星目录（`cs/` `zh-Hans/` …）是历史残留，
+    `os.walk` 只收文件，**不会进 zip**（上面 265 条扁平条目的实测即为证据）。
 
     **物料**：`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`，由
     `scripts/acceptance/make-m3-package.py` 产出
