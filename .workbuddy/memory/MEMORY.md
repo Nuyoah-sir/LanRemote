@@ -65,6 +65,10 @@ M2.1 Discovery Final Fix —— **已完成，两机验收 PASS（20/20，2026-0
   验收物料与文档：`905fcc8` / `5e9f245` / `846794c` / `b8dbdb3`（无产品代码）
   ✅ 两机手工 DoD **PASS**（HANDOFF §9.1 有完整时间线 + 20 步逐条证据）
 M3 TLS Host/Client + 同子网校验 —— 下一步（验收已 PASS，**等用户开工指令**）
+  - 开工前先跑 **SslStream server/client 握手 spike**（本机实测）收口 ADR-018 的 EphemeralKeySet 风险
+  - 外部模型只做「设计红队评审」（prompt 在 `docs/M3_EXTERNAL_REVIEW_PROMPT.md`）；
+    **Windows/.NET 实测行为一律不问模型，本机测**；模型结论不得直接写进 HANDOFF
+  - 本机实际系统：**Windows 10 Pro 25H2 / build 26200**（不是 22H2）
 M3~M11 —— 未开始
 
 ## M1 关键存储事实（后续里程碑会依赖）
