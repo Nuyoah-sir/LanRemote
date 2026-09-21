@@ -667,6 +667,21 @@ dotnet test LanRemote.sln -c Debug --no-build
   `{deviceId, endpoint, expectedPin, presentedPin}`；**M4 的 transcript 必须绑定 `presentedPin`**
   （M3 实际出示证书的指纹），只绑 `expectedPin` 不够——否则存在凭据中继缺口。
   `presentedPin` 是 **M3 的交付物**。
+
+### 2026-09-21 追加：ADR-018 风险已实测收口 → **ADR-029**
+
+- **ADR-029 — 证书加载改用 `X509KeyStorageFlags.Default`（0）**，同时作废 ADR-016 与 ADR-018。
+- 实测矩阵（真实 `SslStream` server/client，loopback，3 flag × 3 协议 × 重复 3 次）：
+  - `EphemeralKeySet`：**9/9 FAIL**。服务端 `AuthenticationException: ... platform does not support
+    ephemeral keys.` ← `Win32Exception: 安全包中没有可用的凭证（0x8009030E）`；
+    客户端只看到 `IOException: unexpected EOF`。
+  - `PersistKeySet`：9/9 OK，但**磁盘留下持久密钥副本**（`%APPDATA%\Microsoft\Crypto\Keys` 文件数
+    dispose+GC 后仍 +1）。
+  - `Default(0)`：9/9 OK，且密钥文件在 dispose/GC 后**删除**。
+- **⚠️ 污染陷阱**：同一进程先 `PersistKeySet` 导入过同一私钥后，再 `EphemeralKeySet` 导入 → **握手成功**。
+  所以「测试里没报错」不等于 flag 可用；结论必须在新进程、顺序受控下测。
+- **M3 第一步**：改 `ImportFlags` → `Default`，**并改掉锁住旧选择的测试**
+  `DeviceCertificateTests.ImportFlags_UsesEphemeralKeySetOnly`，然后跑通真实握手集成测试。
 两条不变量已就近写进代码注释与类型 XML doc（`DiscoveryReplyTarget`、`MulticastInterfaceOption`），
 并由单元测试锁住。
 
@@ -704,8 +719,13 @@ dotnet test LanRemote.sln -c Debug --no-build
    （`socket.LocalEndPoint.Address` / `RemoteEndPoint.Address`），不同子网立即关闭。
 2. `SslStream` + 自签名 ECDSA 证书；客户端按 discovery 得到的 `certSha256` 做 pinning，
    用 `CryptographicOperations.FixedTimeEquals` 比较；**不允许 `return true` 无条件放过**。
-3. **必须补一条真实 SslStream server/client 握手集成测试**——ADR-018 的未关闭风险就靠它收口：
-   用实测结果确认 `EphemeralKeySet` 是否满足 Windows TLS 服务端要求，再决定是否维持。
+3. **~~ADR-018 的未关闭风险~~ 已实测收口，结论是 ADR-018 错了**（2026-09-21，见 §13 的 ADR-029）：
+   `EphemeralKeySet` 在 Windows 上做 TLS **服务端** 9/9 失败（平台不支持 ephemeral keys），
+   改用 **`X509KeyStorageFlags.Default`（0）**。
+   M3 因此要做的三件事，顺序不能变：
+   ① 把 `DeviceCertificateService.ImportFlags` 改成 `Default`；
+   ② 改掉把旧选择锁成断言的 `DeviceCertificateTests.ImportFlags_UsesEphemeralKeySetOnly`；
+   ③ 新增真实 `SslStream` 握手集成测试（断言握手成功 ∧ 协议 ∈ {Tls12,Tls13} ∧ pin 匹配 ∧ 帧收发往返）。
 4. Control channel 的 length-prefixed JSON framing（上限 1 MiB）与 `channel_hello`。
 5. M3 **不要**实现 AuthChallenge / HMAC / 访问密钥认证（那是 M4）。
 6. M3 **不要**实现 UI 网络诊断 / 防火墙一键 / 临时私有地址一键——ADR-024 属 M9、ADR-025 与 ADR-026 属 M10。
@@ -749,6 +769,13 @@ dotnet test LanRemote.sln -c Debug --no-build
   `EnabledSslProtocols` 默认 `None`——三个都必须显式设置
 - **不要把 `expectedPin` 当作 M4 transcript 的唯一绑定对象**：必须绑定 M3 实际出示的 `presentedPin`（ADR-028），
   否则留下「一条连接收 nonce、另一条连接中继」的凭据中继缺口
+- **绝不使用 `EphemeralKeySet` 载入 TLS 服务端证书**（ADR-029，实测 9/9 失败）。
+  也不要因为「单元测试没报错」就以为它可用——**同一进程先 `PersistKeySet` 导入过同一私钥后，
+  `EphemeralKeySet` 会碰巧成功**（实测污染）。flag 结论必须在新进程、顺序受控下测
+- **不要只根据客户端异常判断 TLS 失败原因**：客户端只会看到 `IOException: unexpected EOF`，
+  真实原因在**服务端**异常里（`AuthenticationException` + Win32 inner）。spike 必须两边都捕获
+- **别忘了 .NET 10 的证书校验回调参数是 `X509Certificate`（基类）**，没有 `RawData` 属性；
+  算 pin 要用 `cert.GetRawCertData()`（或转型成 `X509Certificate2`）。编译器会直接报错提醒，别绕过去
 - **不要照抄直觉去改 IP**：Windows IPv4 是「DHCP 或静态」二选一；追加第二地址前必须先把整张接口
   切成静态并回填原配置，否则会丢 DHCP 租约只剩 169.254（本机已两次踩断）。撤销必须幂等，
   且**不能靠 `netsh` 退出码判成败**。完整约束见 ADR-026

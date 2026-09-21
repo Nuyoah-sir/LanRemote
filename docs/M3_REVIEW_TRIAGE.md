@@ -4,6 +4,8 @@
 **本文件的作用**：把评审结论按项目纪律**降级/升级**——只有本机实测或规格原文支持的才成为 M3 的约束，
 `[RECOLLECTION]` 一律不得写进 HANDOFF 的事实陈述。
 **状态**：仅记录设计与约束，**未启动编码**。M3 开工指令待用户下达。
+**2026-09-21 更新**：B 桶第 19、20 条**已实测完成**，结论写入 **ADR-029**（`EphemeralKeySet` 被证伪），
+见本文 §1 末尾新增行与 §8。
 
 ---
 
@@ -24,6 +26,10 @@
 | `AllowTlsResume` 默认 `true` | 客户端 **`True`**、服务端 **`True`** | ✅ 证实（评审只点了客户端，实测**两端都是 True**，两端都要显式关） |
 | `EnabledSslProtocols` 默认值 | **`None`** → 表示交给系统默认，不是"禁用" | ➕ **评审未提**：M3 必须显式传 `Tls12 \| Tls13`，不能依赖 `None` 的系统默认 |
 | `PropertyNameCaseInsensitive` | 默认 `False` | ➕ 附加证据：我第一次的经验测试因大小写不匹配而"静默没映射上属性"，说明**大小写敏感是默认值，写 JSON 契约时字段名必须逐字对齐** |
+| （评审未提）证书校验回调的证书参数类型 | .NET 10 是 **`X509Certificate`（基类）**，没有 `RawData`；编译 `cert.RawData` 直接报错 | ➕ 编译器抓到的硬事实：算 pin 必须用 `cert.GetRawCertData()` 或转型成 `X509Certificate2` |
+| 评审 B-19：`EphemeralKeySet` 服务端是否可用 | **9/9 失败**。服务端 `AuthenticationException: ... platform does not support ephemeral keys.` ← `Win32Exception: 安全包中没有可用的凭证（0x8009030E）`；客户端只看到 `IOException: unexpected EOF` | ❌ **评审没有错，但 ADR-018 错了**（它选的正是这个 flag）→ ADR-029 |
+| 评审 B-20：TLS 1.2 / 1.3 能否协商 | 都能。TLS1.2=`TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`，TLS1.3=`TLS_AES_256_GCM_SHA384`，`Tls12\|Tls13` 协商到 **TLS 1.3**；握手后真实帧收发往返成功 | ✅ 本机 Win11 25H2 / 26200 已验证；**Win10 22H2 仍未测** |
+| 评审未提：flag 结论的可复现性 | 同一进程先 `PersistKeySet` 导入同一私钥后，再 `EphemeralKeySet` 导入 → **握手成功** | ⚠️ **污染陷阱**：flag 结论必须在新进程、顺序受控下测，否则会得到假阳性 |
 
 > 教训保留：我第一版经验测试因为属性名大小写不匹配得出错误结论（看着像"没拒绝"），
 > 改对属性名后才测出真实行为。**经验测试本身也要自检**，否则会得到假的"实测"。
@@ -105,8 +111,9 @@
 
 ## 7. M3 开工前的最小清单（照此收口）
 
-1. 跑实测 19（EphemeralKeySet + ECDSA P-256 服务端，TLS1.2 / TLS1.3 各一遍）→ 收口 ADR-018
-2. 跑实测 20（本机 Win11 25H2；Win10 22H2 标注未测）
+1. ~~跑实测 19（EphemeralKeySet + ECDSA P-256 服务端）~~ → **已完成，结论 ADR-029：改用 `Default(0)`**
+2. ~~跑实测 20（TLS1.2 / TLS1.3）~~ → **已完成**：两者均可协商，本机 Win11 25H2 / 26200；
+   **Win10 22H2 仍未测**，标注未覆盖
 3. 连接上下文类型落地：`{deviceId, endpoint, expectedPin(32B), presentedPin(32B)}` 不可变
 4. `PreAuthenticated` 状态 + 除 hello 外全拒
 5. accept → 同子网校验 → 准入限额 → TLS（顺序不可换）

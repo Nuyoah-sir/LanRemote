@@ -166,3 +166,16 @@ M3~M11 —— 未开始
 - `SslServerAuthenticationOptions`：`AllowTlsResume=**True**`、`AllowRenegotiation=False`
 - `EnabledSslProtocols` 两端默认 `None`（= 交给系统默认），必须显式 `Tls12 | Tls13`
 - 取证方法：临时 console 项目 + 反射打印 `SslXxxAuthenticationOptions` 全部属性默认值（放在 %TEMP%，不进仓库）
+- **证书校验回调参数是 `X509Certificate`（基类）**，没有 `RawData` → pin 要用 `GetRawCertData()`
+
+## 证书私钥载入 flag：ADR-016/018 都被证伪，正确解是 ADR-029
+
+实测（真实 SslStream 服务端，3 flag × 3 协议 × 重复 3 次，本机 Win11 25H2 / .NET 10.0.12）：
+
+- **`EphemeralKeySet` 9/9 失败**：`AuthenticationException: ... platform does not support ephemeral keys.`
+  ← `Win32Exception 0x8009030E`（客户端只看到 `IOException: unexpected EOF`，要抓服务端异常）
+- `PersistKeySet` 9/9 可用，但**磁盘留持久密钥副本**（CNG user keys 文件 dispose 后不删）
+- **`X509KeyStorageFlags.Default`(0) 9/9 可用，且 dispose/GC 后删除临时容器** → M3 用这个
+- **污染陷阱**：同进程先 `PersistKeySet` 导入过同一私钥后，`EphemeralKeySet` 会碰巧成功 →
+  flag 结论必须**新进程 + 顺序受控 + 重复多次**，否则假阳性
+- M3 必须同步改掉把旧 flag 锁成断言的 `ImportFlags_UsesEphemeralKeySetOnly`

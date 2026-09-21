@@ -93,7 +93,7 @@
 **Consequence**：口令字段**不提供**额外安全强度，它只是 API 要求；任何人拿到 secrets.bin 但解不开 DPAPI 时，也拿不到口令。不要在文档或评审中误以为它是一层独立加密。  
 **可逆性**：可逆（未来可改用 DER + PKCS#8 私钥分开存）。
 
-### ADR-016 — 证书加载使用 `PersistKeySet | Exportable`  【❌ SUPERSEDED by ADR-018】
+### ADR-016 — 证书加载使用 `PersistKeySet | Exportable`  【❌ SUPERSEDED by ADR-018 → 最终由 ADR-029 取代】
 **日期**：2026-09-20　**作废**：2026-09-20（M1.1 审计）  
 **⚠️ 本 ADR 已被 ADR-018 取代，其中的 flags 组合已被移除，请勿照此实现。**
 **Decision**：从 PFX 还原证书时使用 `X509CertificateLoader.LoadPkcs12(pfx, password, PersistKeySet | Exportable)`。  
@@ -128,10 +128,16 @@
 **Consequence**：任何新的消费者都必须自己实现 TTL prune，不能指望收到移除事件。缓存与更新队列本身仍有界（256 / 512 DropOldest）。  
 **可逆性**：可逆，但需要一次独立的 ADR 与 API 变更，不要在后续里程碑里「顺手」改。
 
-### ADR-018 — 证书加载使用 `EphemeralKeySet`（取代 ADR-016）　【编号修正 2026-09-20】
+### ADR-018 — 证书加载使用 `EphemeralKeySet`（取代 ADR-016）　【❌ 2026-09-21 实测证伪，SUPERSEDED by ADR-029】
 > **编号修正**：本条目原被误标为「ADR-021（ECDSA 证书的 Key Usage）」，导致 ADR-016 所声明的
 > 「SUPERSEDED by ADR-018」指向一条不存在的记录。2026-09-20 核对后改回 **ADR-018**。
 > 真正的 Key Usage 决策是下方另一条 **ADR-021**，两者内容不同，不要合并。
+>
+> **⚠️ 本 ADR 已被 2026-09-21 的实测证伪，请勿照此实现**：`EphemeralKeySet` 在 Windows 上
+> 用作 **SslStream 服务端**证书时 **9/9 失败**，服务端抛
+> `AuthenticationException: Authentication failed because the platform does not support ephemeral keys.`
+> （inner `Win32Exception: 安全包中没有可用的凭证 / 0x8009030E`）。
+> 替代方案见 **ADR-029**。本条目保留仅作历史追溯。
 
 **日期**：2026-09-20（M1.1 审计）  
 **Decision**：`DeviceCertificateService` 用 `X509CertificateLoader.LoadPkcs12(pfx, password, X509KeyStorageFlags.EphemeralKeySet)` 载入证书；**不使用** `PersistKeySet`，**不使用** `Exportable`。  
@@ -284,4 +290,50 @@ M4 的 transcript 结构因此被提前固定。
 **验证**：客户端连到证书 `X` 的 TLS，而真实服务器持有证书 `Y`，中继 nonce 与 proof；
 认证必须失败，且失败原因**仅**来自 `X ≠ Y`。
 **实施时机**：M3 出接口与不可变上下文，**M4** 完成 transcript 绑定与校验。
+
+### ADR-029 — 证书加载使用 `X509KeyStorageFlags.Default`（不带任何 flag），取代 ADR-016 与 ADR-018
+**日期**：2026-09-21（M3 开工前实测，ADR-018 风险收口）  
+**Decision**：`DeviceCertificateService.ImportFlags` 改为 **`X509KeyStorageFlags.Default`（即 0）**：
+**不使用** `EphemeralKeySet`、**不使用** `PersistKeySet`、**不使用** `Exportable`。
+证书对象必须在使用结束后 `Dispose()`（临时密钥容器在 dispose / GC 时删除）。
+
+**Context**：ADR-016 选了 `PersistKeySet | Exportable`（理由是传闻中 Windows SslStream 需要持久化私钥），
+ADR-018 以「那是未经实测的猜测」为由换成 `EphemeralKeySet`——**两条都没有真实 TLS 测试支撑**。
+2026-09-21 用真实 `SslStream` server/client 握手实测（loopback；证书 profile 严格复刻
+`DeviceCertificateService`：ECDSA P-256 / non-CA / KeyUsage=digitalSignature(critical) /
+EKU serverAuth / 5 年 / PFX 随机口令），矩阵 = 3 种 flag × 3 种协议 × 重复 3 次：
+
+| 载入 flag | Tls12 | Tls13 | Tls12\|Tls13 | CNG key 文件（load → dispose+GC） |
+|---|---|---|---|---|
+| `EphemeralKeySet` | **FAIL ×3** | **FAIL ×3** | **FAIL ×3** | 145 → 145 → 145（不落盘，但**根本不能用**） |
+| `PersistKeySet` | OK ×3 | OK ×3 | OK ×3 | 145 → 146 → **146**（**磁盘留下持久副本**） |
+| `Default(0)` | OK ×3 | OK ×3 | OK ×3 | 148 → 149 → **148**（运行时有，dispose 后删除） |
+
+- 服务端真实异常：`AuthenticationException: Authentication failed because the platform does not
+  support ephemeral keys.` ← `Win32Exception: 安全包中没有可用的凭证（0x8009030E = SEC_E_NO_CREDENTIALS）`。
+  客户端只能看到 `IOException: Received an unexpected EOF or 0 bytes from the transport stream`——
+  **必须抓服务端异常才能定位**（评审 C 桶第 26 条的现实版）。
+- 成功用例均完成真实帧收发（`echo='pong:hello-lanremote'`），协商结果：
+  TLS 1.2 = `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`；TLS 1.3 = `TLS_AES_256_GCM_SHA384`；
+  `Tls12|Tls13` 协商到 **TLS 1.3**。pin 校验（`GetRawCertData()` + `FixedTimeEquals`）全部 True。
+
+**⚠️ 测试污染陷阱（本机实测，务必记住）**：同一进程内**先用 `PersistKeySet` 导入过同一把私钥**之后，
+再用 `EphemeralKeySet` 导入同一证书 → **握手居然成功**。即 `EphemeralKeySet` 能否用取决于进程内此前的
+导入历史。M1 单元测试里"看起来没报错"完全可能只是这个假象。
+**任何关于 flag 的结论都必须在新进程、顺序受控的前提下测。**
+
+**Consequence**：
+- ADR-016 与 ADR-018 **同时作废**；`DeviceCertificateService.ImportFlags` 常量改为 `Default`。
+- **必须同步改测试**：`DeviceCertificateTests.ImportFlags_UsesEphemeralKeySetOnly` 当前把
+  「flags == EphemeralKeySet」锁成了断言——它锁住的是一个已被证伪的选择，M3 必须改成断言新 flag
+  并按新语义改名 / 改注释。
+- 残余风险（如实记录，不掩饰）：`Default` 在**进程运行期间**仍会在
+  `%APPDATA%\Microsoft\Crypto\Keys` 生成一个临时密钥文件，dispose / GC 后删除；
+  **进程崩溃**时可能残留。所以证书必须 `Dispose()`，且**不能**把「磁盘上绝无第二份副本」当硬保证。
+- 私钥仍不可导出（无 `Exportable`）；持久化副本仍以 DPAPI 保护的 `secrets.bin` 为准。
+
+**可逆性**：**不可回退**——退回 `EphemeralKeySet` 会让 TLS 服务端直接无法工作。
+**验证**：M3 必须新增真实 `SslStream` 握手集成测试（即 ADR-018 遗留的那条强制要求），
+断言：握手成功 ∧ 协商协议 ∈ {Tls12, Tls13} ∧ pin 匹配 ∧ 真实帧收发往返成功。
+**实施时机**：**M3 第一步**——先改 flag 并跑通该集成测试，再写其它代码。
 
