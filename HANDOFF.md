@@ -813,6 +813,10 @@ dotnet test LanRemote.sln -c Debug --no-build
 | 取消时在 `MemoryStream` 替身上的异常类型 | **`TaskCanceledException`**（替身内部 `Task.Delay(delay, token)` 抛的）——与上一行**不是同一个类型**，所以断言只要求「是取消」 |
 | 变异：把 `CancelAfter` 挪进读循环（滑动窗口） | 低速攻击用例**变红**（8 字节全读完、1 s、无异常） |
 | 变异：注释掉握手 `CancelAfter` | 握手卡死用例**变红**（名额 12 s 未归还） |
+| `JsonSerializer.Deserialize<T>(utf8)` 会拦尾随内容吗 | 实测**不保证**——必须自己先用 `Utf8JsonReader` 探一次「恰好一个 JSON 值」 |
+| 原始字符串字面量 `"""…\n…"""` | `\n` **不是转义**，是字面反斜杠（我自己先踩了一次，测试假红） |
+| 变异：pre-auth 改用认证后的 1 MiB 额度（A-9） | 该用例 **720 ms** 以 `pre-auth-frame:…` vs `pre-auth-timeout` 变红 |
+| 变异：`HelloFrame.TryParse` 无条件返回 true | **43 条**测试变红 |
 
 **⚠️ ADR-032：别过度声称 `ExclusiveAddressUse`**。我最初据此写的注释与测试断言是错的
 （以为开了它就能发现"别人先占了更宽地址"）。实测矩阵如上：
@@ -886,23 +890,49 @@ dotnet test LanRemote.sln -c Debug --no-build
       **阶段 4 引入会话状态机后应当能被区分**，届时再拆。
     **阶段 3 结果**：`dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **513 PASS / 0 FAIL**
     （阶段 2 的 495 + 新增 18：14 条 `FrameReaderTests` + 4 条 `PreAuthDeadlineTests`）。
-    代码提交前会记录 `Last code commit`。
+    **Last code commit：`5ba5822`** · **Working tree at validation: clean**
 
 ### 阶段 4 —— Framing / hello / 状态机
 
-16. 长度前缀读取：`uint` 校验 → 拒绝 `0` → 拒绝 `> 当前阶段上限` → **之后**才转 `int`；
-    超限不 drain，直接关闭。测试长度：`0 / 1 / 上限 / 上限+1 / 0x7fffffff / 0x80000000 / 0xffffffff`。
-17. **pre-auth `channel_hello` 用独立小上限（几 KiB）**，远小于 1 MiB（未认证连接不该能逼你分配 1 MiB）。
-    验收：pre-auth 发 64 KiB 长度前缀必须断开且不分配该 payload。
-18. 严格 JSON 解析器：`AllowDuplicateProperties=false`、`UnmappedMemberHandling=Disallow`、显式 `MaxDepth`
-    （属性值默认 `0` = 内置上限 64）、拒绝注释与尾逗号、`PropertyNameCaseInsensitive=false`。
-19. 首帧必须**且仅能**是 `{type:"channel_hello", channel:"control", protocol:1}`；
-    其它 channel / 其它 protocol / 缺字段 / 重复字段 / 第二个 hello 一律断开。
-    另需覆盖：EOF 出现在长度前缀的 1/2/3 字节、payload 中途 EOF、一帧多帧粘连、非法 UTF-8（不做替换字符兜底）。
-20. 状态机：TLS + hello 完成 = 显式 `PreAuthenticated`；
-    此后除「开始 M4 认证」外，屏幕数据 / 输入能力 / session token / 权限判定 / 特权主机元数据一律拒绝。
-21. M3 单独成里程碑的终态：hello 成功后**干净关闭**，或进入 `AwaitingAuthentication` 并带**短绝对占位 deadline**；
-    M4 落地后由真实认证替换。不许把未认证 socket 无限期挂着等还不存在的 M4 代码。
+16. ✅ **已完成**（在阶段 3 随 `FrameReader.TryValidateLength` 一并落地）：`uint` 校验 → 拒绝 `0` →
+    拒绝 `> 当前阶段上限` → **之后**才转 `int`；超限不 drain、不分配。边界长度
+    `0 / 1 / 上限 / 上限+1 / 0x7fffffff / 0x80000000 / 0xffffffff` 全部有测试。
+17. ✅ **已完成** pre-auth 独立小上限：验收 `Pre_Auth_Frame_Larger_Than_4KiB_Is_Rejected`
+    —— 客户端只发一个声称 64 KiB 的长度前缀，服务端断在 `pre-auth-frame:length-exceeds-limit`，
+    且 `FrameReaderTests` 用计数器 + 流位置两把尺子证明**只读了 4 字节、没分配 payload**。
+    **已做变异验证**：把它换成认证后的 `MaxControlMessageBytes` 后，该用例 720 ms 内以
+    `Expected: pre-auth-frame:length-exceeds-limit / Actual: pre-auth-timeout` 变红。
+18. ✅ **已完成** 严格 JSON 解析器（`HelloFrame`）：`AllowDuplicateProperties=false`、
+    `UnmappedMemberHandling=Disallow`、显式 `MaxDepth=4`（属性值默认读出 `0` = 内置 64，
+    不写就等于没有主张）、拒绝注释与尾逗号、`PropertyNameCaseInsensitive=false`、
+    拒绝 UTF-8 BOM、非法 UTF-8 **不做替换字符兜底**。
+    另外单做了一步「整段字节必须**恰好**是一个 JSON 值」的检查（`Utf8JsonReader` 先探一次，
+    尾随非空白一律 `hello-trailing-data`）——`JsonSerializer.Deserialize` 本身不保证这一点。
+19. ✅ **已完成** 首帧必须**且仅能**是 `{type:"channel_hello", channel:"control", protocol:1}`
+    （`HelloFrameTests` 44 条 + `First_Frame_Must_Be_Exactly_The_Hello` 5 条真链路）。
+    「第二个 hello」用「同一会话 `RunAsync` 只允许一次」在类型层面堵掉。
+    **已做变异验证**：让 `TryParse` 无条件返回 true 后，**43 条测试变红**。
+20. ✅ **已完成** 状态机 `ControlSessionState`：`AwaitingHello` →（hello 通过）→ `PreAuthenticated`，
+    任何失败路径 → `Closed`。「此后一律拒绝」的可执行形式是
+    `AllowedOperationsWhilePreAuthenticated` **空集合**，并由
+    `PreAuthenticated_Allows_Nothing_Before_M4` 盯着——M4 落地前谁往里加东西谁红。
+21. ✅ **已完成** M3 终态选**干净关闭**（`SslStream.ShutdownAsync()` 发 close_notify 后由 Host 释放），
+    **没有**启用「进入 AwaitingAuthentication + 占位 deadline」那条备选——
+    M3 里没有任何东西值得为未认证连接继续留着它。
+
+    #### ⚠️ 阶段 4 变异验证逼出来的一处真实缺陷（已修）
+
+    第一版 `ControlPreAuthSession.RunAsync` 只接了 `FrameProtocolException` / `EndOfStreamException` /
+    `IOException`，**没接阶段超时的 `OperationCanceledException`**。后果是：
+    超时会一路飞出 `RunAsync`，`ControlPreAuthResult` **永远产生不出来**，
+    而且和「停机取消」在调用方看来完全一样。做 A-9 变异时它表现为「30 秒没有结果」，
+    而不是一条可读的断言——这个值 30 秒正是发现它的线索。
+    修法：加 `catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)`
+    → 产生 `pre-auth-timeout`；停机取消继续向上抛（那不是对端的错，不该记成拒绝原因）。
+    修完同一变异变为 **720 ms 内以可读断言失败**。新增 `Idle_Client_Is_Rejected_With_A_Timeout_Reason` 固化。
+
+    **阶段 4 结果**：`dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **568 PASS / 0 FAIL**
+    （阶段 3 的 513 + 新增 55：44 条 `HelloFrameTests` + 11 条 `ControlPreAuthSessionTests`）。
 
 ### 阶段 5 —— 收口
 
@@ -978,6 +1008,13 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **不要按取消异常的子类下断言**：真实 `SslStream` 抛的是基类 `OperationCanceledException`，
   而 `MemoryStream`/`Task.Delay` 替身抛的是 `TaskCanceledException`。
   断言写 `is OperationCanceledException` 即可，写 `IsType<>` 两边必有一边假红
+- **不要让阶段超时飞出 `RunAsync`**：它的异常类型与「停机取消」完全相同，
+  不接住就等于「结局永远不产生 + 两种取消无法区分」。必须用
+  `when (!cancellationToken.IsCancellationRequested)` 分开（阶段 4 已修，见第 15 节）
+- **不要在 `JsonSerializer.Deserialize` 之后就以为报文是「恰好一个 JSON 值」**：
+  尾随内容不保证被拒。pre-auth 这类输入必须自己先用 `Utf8JsonReader.TrySkip()` 探一次边界
+- **不要往 `AllowedOperationsWhilePreAuthenticated` 里加东西**：它在 M3 必须是空集合，
+  有测试盯着。真到了 M4，加的应当是「开始访问密钥认证」这一项，而不是「顺手先支持的」能力
 - **不要在测试里从 `MemoryStream` 派生并同时重写 `Read(Span<byte>)` 与 `ReadAsync(Memory<byte>)`**：
   一次读会被数**两遍**——`Stream.Read(Span<byte>)` 的默认实现会**虚拟调用** `Read(byte[], int, int)`。
   实测输出 `async=1 span=0 array=1` 却 `BytesRead=8`（真实只消费 4）。要计数就**包装**内部流，
