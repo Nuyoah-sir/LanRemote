@@ -2,6 +2,8 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > ADR 工作副本 `docs/DECISIONS.md`（010~036）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
+> 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；本文件 ~5.1K 字符 = 安全。
+> 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
 ## 定位与硬约束
 
@@ -39,7 +41,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | --- | --- |
 | M0~M1.3 | 完成（`104f296` / `9e75fce`） |
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
-| **M3** | 1~23 完成（0 警告 / **574 tests PASS**，`f080581`）；第 24 步物料含「一键准备本机」（ADR-035）已就绪，**等用户 B 机换包后执行验收** |
+| **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | M4~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）。
@@ -58,7 +60,7 @@ GitHub 推送阻塞：用户曾取消 `gh auth login` → **不得重试**，等
 ## M3 速查（细节在 HANDOFF.md）
 
 accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 4 KiB；终态 = hello 后干净关闭。五段绝对 deadline 只验了「执行得准」（误差 0–36 ms），**数值待外部评审**。`TransportHost` 零 logger（同子网/准入/TLS 拒绝全静默 → ADR-024/M9）。
-验收器：双击=WPF 窗口，`--headless client|host|info|prepare-lab`；退出码 0/1/2/3/4=预期内/真失败/前置不满足/工具错/无效运行；`Combine` 优先级 `InvalidRun>HarnessError>Fail>PreconditionUnmet>Pass`；四场景 `success`→`pin-mismatch`→`timeout`→`slow-dribble`（判据 `sent=3/4`）；两机配对用 4 元组（聚合计数不算证明）；控制端只给 `PENDING-HOST-EVIDENCE`；`gui.log` 只记进程级事实、每轮证据在 per-run 文件；别拿 `LanRemote.App` 验传输层（零调用）。
+验收器：双击=WPF 窗口，`--headless client|host|info|prepare-lab`；退出码 0/1/2/3/4=预期内/真失败/前置不满足/工具错/无效运行；`Combine` 优先级 `InvalidRun>HarnessError>Fail>PreconditionUnmet>Pass`；四场景 `success`→`pin-mismatch`→`timeout`→`slow-dribble`（判据 `sent=3/4`）；两机配对用 4 元组（聚合计数不算证明）；控制端只给 `PENDING-HOST-EVIDENCE`；`gui.log` 只记进程级事实、每轮证据在 per-run 文件；别拿 `LanRemote.App` 验传输层（零调用）。**被控端「停止监听」收尾 → 结局字段必为 `INVALID_RUN`（设计：按停=机械作废，防「按停伪造通过」），判定看逐条证据；`--headless host --seconds N` 定时轮不走该路径（实测 PASS）。**
 
 ## 测试/验收写法硬约束（踩过的坑）
 
@@ -73,7 +75,7 @@ accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 
 ## 网络 / lab
 
 - 本机唯一活跃网卡 = 以太网 `172.100.166.220/24`（Dhcp，非 RFC1918）→ 本机跑不通发现（正确行为）
-- A = DESKTOP-D132BMD `M5WC-14GX`（lab `192.168.1.10` 已配）；B = DESKTOP-CU2263D `3ERD-R74V`（待配 `192.168.1.20`）
+- A = DESKTOP-D132BMD `M5WC-14GX`（lab `192.168.1.10`）；B = DESKTOP-CU2263D `3ERD-R74V`（lab `192.168.1.20`）；**两机验收已跑完，lab 待两台各自「撤销准备」**
 - `set-lab-ip.ps1 -Role A|B`：整口切静态+追加 lab 地址+Private+**UDP 45872 与 TCP 45873 两条入站规则**；幂等分支也补规则；`-Undo` 一并清；**验收物料不进产品**，验收器「一键准备」调的就是它。**不要真跑 `-Undo`**（会拆掉 A 机 lab）
 
 ## 产品形态（ADR-024/025/026/035/036，规则已定未编码）
