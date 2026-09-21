@@ -1050,6 +1050,9 @@ dotnet test LanRemote.sln -c Debug --no-build
     包内含 `START-HERE.md`（=`docs/M3_TWO_MACHINE_ACCEPTANCE.md`）、
     `run-acceptance.ps1`、`set-lab-ip.ps1`，两个 ps1 均在打包时强制加 BOM。
     手册：§3 逐场景命令与判定、§4 host 汇总行、§5 两个已知缺口、§6 要贴回来的四段证据、§7 排障表。
+    **提交 `5ae052f`** · 该提交只含验收器 / 手册 / 打包脚本 / HANDOFF，**无产品代码改动**
+    （`Last code commit` 仍是 `5bf3cb6`）。zip 与 `artifacts/` 都在 .gitignore 里，
+    需要时用 `make-m3-package.py` 重现。
 
 ### M3 明确不做
 
