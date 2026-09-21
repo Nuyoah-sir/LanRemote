@@ -308,7 +308,10 @@ public sealed class PreAuthDeadlineTests(ITestOutputHelper output)
             handshakeTimeout: handshake,
             lengthPrefixTimeout: prefix,
             payloadTimeout: payload,
-            helloTimeout: TimeSpan.FromSeconds(2));
+            helloTimeout: TimeSpan.FromSeconds(2),
+            // 信封给得远高于本文件的场景时限（400–600 ms），不参与这些用例的判定；
+            // 信封自身的专项测试在 ControlPreAuthSessionTests（缩放值）。
+            preAuthEnvelopeTimeout: TimeSpan.FromSeconds(10));
 
     private static ConnectionTarget CreateTarget(int port, string pinHex)
     {

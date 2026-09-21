@@ -157,11 +157,23 @@ internal sealed class AcceptanceRun
 
         if (timeouts is not null)
         {
-            Log.WriteLine($"[ENV] deadline.connect      = {timeouts.ConnectTimeout.TotalMilliseconds:0.#} ms");
-            Log.WriteLine($"[ENV] deadline.handshake    = {timeouts.HandshakeTimeout.TotalMilliseconds:0.#} ms");
-            Log.WriteLine($"[ENV] deadline.lengthPrefix = {timeouts.LengthPrefixTimeout.TotalMilliseconds:0.#} ms");
-            Log.WriteLine($"[ENV] deadline.payload      = {timeouts.PayloadTimeout.TotalMilliseconds:0.#} ms");
-            Log.WriteLine($"[ENV] deadline.hello        = {timeouts.HelloTimeout.TotalMilliseconds:0.#} ms");
+            Log.WriteLine($"[ENV] deadline.connect         = {timeouts.ConnectTimeout.TotalMilliseconds:0.#} ms");
+            Log.WriteLine($"[ENV] deadline.handshake       = {timeouts.HandshakeTimeout.TotalMilliseconds:0.#} ms");
+            Log.WriteLine($"[ENV] deadline.lengthPrefix    = {timeouts.LengthPrefixTimeout.TotalMilliseconds:0.#} ms");
+            Log.WriteLine($"[ENV] deadline.payload         = {timeouts.PayloadTimeout.TotalMilliseconds:0.#} ms");
+
+            // M3.1 语义修正：hello 是「客户端写 hello 帧的预算」，服务端 pre-auth 不消费它。
+            // 旧表述「首个 hello 帧到达的绝对时限」暗示服务端存在独立顺序段，是坐实过的表述事故
+            // （HANDOFF §17 教训 #24）——日志行按修正后的语义如实写，不要改回去。
+            Log.WriteLine(
+                $"[ENV] deadline.hello           = {timeouts.HelloTimeout.TotalMilliseconds:0.#} ms" +
+                "（客户端写预算；服务端不消费）");
+
+            // 信封是跨分段的总量硬上限：分段各自绝对 ≠ 总量有界（前缀 5 s + payload 10 s 可加和），
+            // 信封把这类顺序等待整体封顶，且永不被子阶段的进展重置（HANDOFF §17 教训 #25）。
+            Log.WriteLine(
+                $"[ENV] deadline.preAuthEnvelope = {timeouts.PreAuthEnvelopeTimeout.TotalMilliseconds:0.#} ms" +
+                "（pre-auth 总量上限，永不重置）");
         }
 
         Log.WriteLine("[ENV] preAuthMaxBytes       = " + TransportConstants.MaxPreAuthMessageBytes);

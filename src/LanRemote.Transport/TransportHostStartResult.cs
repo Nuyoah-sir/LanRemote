@@ -32,3 +32,18 @@ public sealed record TransportHostStartResult(
     /// <summary>是否至少有一个地址在听。</summary>
     public bool IsListening => BoundAddresses.Count > 0;
 }
+
+/// <summary>
+/// Host 停机报告：哪些部分在预算内结束了、几条连接没结束。
+/// </summary>
+/// <param name="AcceptLoopsFinished">accept 循环是否全部结束（未在预算内结束 = 预算超限）。</param>
+/// <param name="UnfinishedConnections">预算内没有结束的连接数。</param>
+/// <remarks>
+/// 评审 B18：停机结局不得与「干净成功」不可区分，且必须给出未完成计数——
+/// 早先的 <c>bool</c> 把「accept 循环没结束」直接吞掉、连接侧也不给计数。
+/// </remarks>
+public sealed record TransportHostStopReport(bool AcceptLoopsFinished, int UnfinishedConnections)
+{
+    /// <summary>accept 循环与全部连接是否都在预算内结束（干净成功）。</summary>
+    public bool AllFinished => AcceptLoopsFinished && UnfinishedConnections == 0;
+}

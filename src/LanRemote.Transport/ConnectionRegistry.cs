@@ -78,8 +78,12 @@ public sealed class ConnectionRegistry
     /// 停止并等待所有已登记连接结束。
     /// </summary>
     /// <param name="timeout">总停机预算。</param>
-    /// <returns>是否所有连接都在预算内结束。</returns>
-    public async Task<bool> StopAllAsync(TimeSpan timeout)
+    /// <returns>停机报告：总数、预算内未结束数、是否全部干净结束。</returns>
+    /// <remarks>
+    /// <b>不要用 bool 表达停机结局</b>（评审 B18）：预算超限与干净成功必须可区分，
+    /// 且要给出<b>未完成计数</b>——只报「没干净」而不说几条没干净，等于把后续判断推给运气。
+    /// </remarks>
+    public async Task<ConnectionStopReport> StopAllAsync(TimeSpan timeout)
     {
         if (timeout <= TimeSpan.Zero)
         {
@@ -121,7 +125,16 @@ public sealed class ConnectionRegistry
             entry.Cancellation.Dispose();
         }
 
-        return Array.TrueForAll(snapshot, entry => entry.Completion.Task.IsCompletedSuccessfully);
+        int unfinished = 0;
+        foreach (Entry entry in snapshot)
+        {
+            if (!entry.Completion.Task.IsCompletedSuccessfully)
+            {
+                unfinished++;
+            }
+        }
+
+        return new ConnectionStopReport(snapshot.Length, unfinished);
     }
 
     internal void Remove(int id)
@@ -163,6 +176,20 @@ public sealed class ConnectionRegistry
 
         public IDisposable Resources { get; } = resources;
     }
+}
+
+/// <summary>
+/// 一次连接停机的报告。
+/// </summary>
+/// <param name="Total">停机时登记表中的连接总数。</param>
+/// <param name="Unfinished">预算内没有结束的连接数。</param>
+/// <remarks>
+/// 评审 B18：停机必须能区分「干净成功」与「预算超限」，并给出未完成计数。
+/// </remarks>
+public sealed record ConnectionStopReport(int Total, int Unfinished)
+{
+    /// <summary>是否全部在预算内结束（干净成功）。</summary>
+    public bool AllFinished => Unfinished == 0;
 }
 
 /// <summary>

@@ -149,8 +149,13 @@ public sealed class TransportHost : IAsyncDisposable
     /// 停机：停止 accept、取消全部连接、在预算内 join。
     /// </summary>
     /// <param name="timeout">停机预算；为空则用 <see cref="TransportHostOptions.ShutdownTimeout"/>。</param>
-    /// <returns>所有连接是否都在预算内干净结束。</returns>
-    public async Task<bool> StopAsync(TimeSpan? timeout = null)
+    /// <returns>停机报告：accept 循环与连接各自是否在预算内结束、未完成连接数。</returns>
+    /// <remarks>
+    /// <b>预算超限必须可观测</b>（评审 B18）：<see cref="TransportHostStopReport.AllFinished"/> 为
+    /// <see langword="false"/> 时，调用方必须能说出「是 accept 循环没停、还是几条连接没结束」，
+    /// 不得与干净成功不可区分。
+    /// </remarks>
+    public async Task<TransportHostStopReport> StopAsync(TimeSpan? timeout = null)
     {
         TimeSpan budget = timeout ?? _options.ShutdownTimeout;
         if (budget <= TimeSpan.Zero)
@@ -173,6 +178,8 @@ public sealed class TransportHost : IAsyncDisposable
 
         // accept 循环只会因为 listener.Stop() 抛 SocketException 或令牌被取消而退出，
         // 给它总预算的四分之一足够；剩下的留给连接收尾。
+        // 超时不再静默：记进报告（早先这里是一个被吞掉的 catch——「预算超限」由此变得不可观测）。
+        bool acceptFinished = true;
         TimeSpan acceptBudget = TimeSpan.FromTicks(budget.Ticks / 4);
         if (_acceptLoops.Count > 0)
         {
@@ -182,10 +189,12 @@ public sealed class TransportHost : IAsyncDisposable
             }
             catch (TimeoutException)
             {
+                acceptFinished = false;
             }
         }
 
-        bool allFinished = await _registry.StopAllAsync(budget - acceptBudget).ConfigureAwait(false);
+        ConnectionStopReport connections =
+            await _registry.StopAllAsync(budget - acceptBudget).ConfigureAwait(false);
 
         foreach (TcpListener listener in _listeners)
         {
@@ -198,7 +207,7 @@ public sealed class TransportHost : IAsyncDisposable
             }
         }
 
-        return allFinished;
+        return new TransportHostStopReport(acceptFinished, connections.Unfinished);
     }
 
     /// <summary>释放 Host。</summary>

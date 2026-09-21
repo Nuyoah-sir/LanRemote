@@ -126,13 +126,15 @@ internal static class HostRole
 
             log.WriteLine("[HOST] 正在停机……");
 
-            bool listenersStoppedCleanly = await host.StopAsync(TimeSpan.FromSeconds(5));
+            TransportHostStopReport stop = await host.StopAsync(TimeSpan.FromSeconds(5));
             int activeAtStop = host.ActiveConnections;
 
             log.WriteLine(counters.FormatBuckets());
             log.WriteLine(
                 $"[HOST][SUMMARY] connectionsEnteringSessionHandler={counters.SessionHandled} " +
-                $"listenersStoppedCleanly={listenersStoppedCleanly} " +
+                $"listenersStoppedCleanly={stop.AllFinished} " +
+                $"unfinishedConnections={stop.UnfinishedConnections} " +
+                $"acceptLoopsFinished={stop.AcceptLoopsFinished} " +
                 $"activeAtStop={activeAtStop} handlerFaults={counters.HandlerFaults}");
 
             // 这两行的存在本身就是证据的一部分：它们说的是「我们测不到什么」。
@@ -149,12 +151,14 @@ internal static class HostRole
 
             log.WriteLine("[HOST] 已停机。把上面整段日志拷走，它就是被控端的证据。");
 
-            if (!listenersStoppedCleanly || activeAtStop != 0 || counters.HandlerFaults > 0)
+            if (!stop.AllFinished || activeAtStop != 0 || counters.HandlerFaults > 0)
             {
                 return Finish(
                     run,
                     AcceptanceOutcome.Fail,
-                    $"停机不干净：listenersStoppedCleanly={listenersStoppedCleanly} " +
+                    $"停机不干净：listenersStoppedCleanly={stop.AllFinished} " +
+                    $"unfinishedConnections={stop.UnfinishedConnections} " +
+                    $"acceptLoopsFinished={stop.AcceptLoopsFinished} " +
                     $"activeAtStop={activeAtStop} handlerFaults={counters.HandlerFaults}");
             }
 

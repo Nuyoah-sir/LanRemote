@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -102,7 +103,8 @@ public sealed class TransportHostTests
                 handshakeTimeout: TimeSpan.FromMilliseconds(500),
                 lengthPrefixTimeout: TimeSpan.FromSeconds(2),
                 payloadTimeout: TimeSpan.FromSeconds(2),
-                helloTimeout: TimeSpan.FromSeconds(2));
+                helloTimeout: TimeSpan.FromSeconds(2),
+                preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8));
 
             await Assert.ThrowsAnyAsync<Exception>(
                 () => new TlsClientConnector().ConnectAsync(target, shortBudget));
@@ -158,7 +160,8 @@ public sealed class TransportHostTests
                 handshakeTimeout: TimeSpan.FromMilliseconds(500),
                 lengthPrefixTimeout: TimeSpan.FromSeconds(2),
                 payloadTimeout: TimeSpan.FromSeconds(2),
-                helloTimeout: TimeSpan.FromSeconds(2));
+                helloTimeout: TimeSpan.FromSeconds(2),
+                preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8));
 
             await Assert.ThrowsAnyAsync<Exception>(
                 () => new TlsClientConnector().ConnectAsync(target, shortBudget));
@@ -212,7 +215,8 @@ public sealed class TransportHostTests
                 handshakeTimeout: TimeSpan.FromMilliseconds(500),
                 lengthPrefixTimeout: TimeSpan.FromSeconds(2),
                 payloadTimeout: TimeSpan.FromSeconds(2),
-                helloTimeout: TimeSpan.FromSeconds(2));
+                helloTimeout: TimeSpan.FromSeconds(2),
+                preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8));
 
             // 第二条：TCP 会被内核收下（backlog 队列），但应用层不握手——没有名额。
             await Assert.ThrowsAnyAsync<Exception>(
@@ -222,6 +226,285 @@ public sealed class TransportHostTests
             Assert.Equal(1, host.ActiveConnections);
 
             release.SetResult();
+        }
+    }
+
+    /// <summary>
+    /// <b>M3.1 B15</b>：准入限额在<b>所有 listener 之间共享</b>——一个 listener 收下的连接，
+    /// 会让另一个 listener 上的新连接被拒。
+    /// </summary>
+    /// <remarks>
+    /// <para>设计要点：拒绝原因必须<b>无歧义</b>地指向全局闸门。办法是让被拒连接走一个
+    /// <b>不同的源地址桶</b>（每源限额为空）——这样「每源限额」不可能是拒绝原因，
+    /// 断言组里连桶的读数一并核验。</para>
+    /// <para>实测事实（2026-09-21，本机）：出站 socket 显式绑定源 <c>127.0.0.2</c> 可用，
+    /// 服务端看到的 remote 就是 <c>127.0.0.2</c>；不绑定时连 <c>127.0.0.2</c> 的源是 <c>127.0.0.1</c>。
+    /// 见 <see cref="ConnectRawAsync"/>。</para>
+    /// <list type="number">
+    /// <item><description>A 从 listener1（<c>127.0.0.1</c>）进、源显式为 <c>127.0.0.2</c>，
+    /// 只连 TCP 不说话，卡在握手中占住全局唯一名额（稳定可观测）；</description></item>
+    /// <item><description>B 打 listener2（<c>127.0.0.2</c>）、源 <c>127.0.0.1</c>——它自己的每源桶是空的，
+    /// 被拒就只能来自全局闸门；</description></item>
+    /// <item><description>释放 A 后，C 走完整 TLS 打 listener2 成功——
+    /// 排除「listener2 根本不可用」这个替代解释。</description></item>
+    /// </list>
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Admission_Limit_Is_Shared_Across_Listeners()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        int port = GetFreePort();
+
+        IPAddress secondAddress = IPAddress.Parse("127.0.0.2");
+
+        int handlerCalls = 0;
+
+        TransportHostOptions options = new()
+        {
+            Port = port,
+            MaxConnections = 1,
+            MaxConnectionsPerAddress = 1,
+        };
+
+        TransportHost host = new(
+            new[] { IPAddress.Loopback, secondAddress },
+            new StubSubnetPolicy(allow: true),
+            certificate,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref handlerCalls);
+                return Task.CompletedTask;
+            },
+            options);
+
+        await using (host)
+        {
+            TransportHostStartResult start = host.Start();
+            Assert.True(start.IsListening);
+            Assert.Equal(2, start.BoundAddresses.Count);
+            Assert.Empty(start.Failures);
+
+            // A：源显式 127.0.0.2 → listener1（127.0.0.1）。只连 TCP、不说话——卡在握手占住名额。
+            using (TcpClient first = await ConnectRawAsync(secondAddress, IPAddress.Loopback, port))
+            {
+                Assert.True(
+                    await WaitUntilAsync(() => host.AdmittedConnections == 1),
+                    "A 应当在握手之前就占住名额。");
+
+                Assert.Equal(1, host.Limiter.InUseFor(secondAddress));
+
+                // B：源 127.0.0.1 → listener2（127.0.0.2）。它自己的每源桶是空的。
+                using TcpClient second = await ConnectRawAsync(IPAddress.Loopback, secondAddress, port);
+
+                Task<int> pending = second.GetStream().ReadAsync(new byte[1]).AsTask();
+                Task finished = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(5)));
+
+                Assert.True(
+                    finished == pending,
+                    "被拒连接没有被关闭——要么被错误地接受了，要么根本没被处理。");
+
+                bool refused;
+                try
+                {
+                    int read = await pending;
+                    refused = read == 0;
+                }
+                catch (IOException)
+                {
+                    // 对端拆连接也算「被关闭」。
+                    refused = true;
+                }
+
+                Assert.True(refused, "被拒连接必须被服务端关闭（EOF 或连接重置）。");
+
+                // 拒绝原因的唯一性证据：全局已满（1/1），而 B 自己的桶是空的（0/1）。
+                Assert.Equal(1, host.Limiter.GlobalInUse);
+                Assert.Equal(0, host.Limiter.InUseFor(IPAddress.Loopback));
+                Assert.Equal(1, host.ActiveConnections);
+                Assert.Equal(0, Volatile.Read(ref handlerCalls));
+            }
+
+            // 释放 A（原始连接被拆）→ 名额必须归还。
+            Assert.True(await WaitUntilAsync(() => host.AdmittedConnections == 0));
+            Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
+
+            // 对照组：完整 TLS 打 listener2，成功。
+            ConnectionTarget target = CreateTarget(
+                secondAddress, port, TestCertificateFactory.Fingerprint(certificate));
+            using TlsConnection control = await new TlsClientConnector().ConnectAsync(target);
+
+            Assert.True(control.Stream.IsAuthenticated);
+            Assert.True(await WaitUntilAsync(() => Volatile.Read(ref handlerCalls) == 1));
+            Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
+        }
+    }
+
+    /// <summary>
+    /// <b>M3.1 B20</b>：握手<b>失败</b>的两条异常分支（协议错误 / 连接被重置）都必须归还名额。
+    /// </summary>
+    /// <remarks>
+    /// <para>与既有用例的分工：<c>PreAuthDeadlineTests.Stalled_Handshake…</c> 覆盖<b>时限到点</b>分支；
+    /// 本用例覆盖<b>失败异常</b>分支，并断言失败是<b>快速</b>发生的（远早于 10 s 握手时限）——
+    /// 否则「失败路径」与「时限路径」就分不开。</para>
+    /// <para>每轮都先让连接卡在握手（名额占用是稳定可观测状态），再分别把两条分支走一遍；
+    /// 最后用「限额=1 时完整 TLS 仍能成功」做对照。</para>
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Admission_Is_Returned_When_The_Tls_Handshake_Fails()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        int port = GetFreePort();
+
+        int handlerCalls = 0;
+
+        TransportHostOptions options = new()
+        {
+            Port = port,
+            MaxConnections = 1,
+            MaxConnectionsPerAddress = 1,
+            Timeouts = new TransportTimeouts(
+                connectTimeout: TimeSpan.FromSeconds(2),
+                // 给到 10 s：每轮失败都必须远早于它。
+                handshakeTimeout: TimeSpan.FromSeconds(10),
+                lengthPrefixTimeout: TimeSpan.FromSeconds(5),
+                payloadTimeout: TimeSpan.FromSeconds(5),
+                helloTimeout: TimeSpan.FromSeconds(2),
+                preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8)),
+        };
+
+        TransportHost host = new(
+            new[] { IPAddress.Loopback },
+            new StubSubnetPolicy(allow: true),
+            certificate,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref handlerCalls);
+                return Task.CompletedTask;
+            },
+            options);
+
+        await using (host)
+        {
+            host.Start();
+
+            // 第一轮：畸形握手记录——快速失败（AuthenticationException 分支）。
+            using (TcpClient broken = await ConnectRawAsync(IPAddress.Loopback, IPAddress.Loopback, port))
+            {
+                Assert.True(await WaitUntilAsync(() => host.AdmittedConnections == 1));
+
+                Stopwatch clock = Stopwatch.StartNew();
+
+                byte[] malformed = new byte[]
+                {
+                    0x16, 0x03, 0x01, 0x00, 0x08, // handshake 记录头，声明 8 字节体
+                    0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, // 体不是合法的握手消息
+                };
+
+                await broken.GetStream().WriteAsync(malformed);
+                await broken.GetStream().FlushAsync();
+
+                Assert.True(
+                    await WaitUntilAsync(() => host.AdmittedConnections == 0),
+                    "握手失败后名额必须归还。");
+
+                clock.Stop();
+
+                Assert.True(
+                    clock.Elapsed < TimeSpan.FromSeconds(5),
+                    $"归还耗时 {clock.Elapsed}——像是等到了 10 s 的握手时限，而不是失败路径。");
+            }
+
+            Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
+
+            // 第二轮：卡住后 RST——快速失败（IOException 分支）。
+            using (TcpClient reset = await ConnectRawAsync(IPAddress.Loopback, IPAddress.Loopback, port))
+            {
+                Assert.True(await WaitUntilAsync(() => host.AdmittedConnections == 1));
+
+                reset.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+                reset.Dispose();
+
+                Assert.True(
+                    await WaitUntilAsync(() => host.AdmittedConnections == 0),
+                    "连接被重置后名额必须归还。");
+            }
+
+            Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
+
+            // 对照组：限额=1 的世界里完整 TLS 仍能成功——名额真的回来了、Host 没被弄坏。
+            ConnectionTarget target = CreateTarget(port, TestCertificateFactory.Fingerprint(certificate));
+            using TlsConnection control = await new TlsClientConnector().ConnectAsync(target);
+
+            Assert.True(control.Stream.IsAuthenticated);
+            Assert.True(await WaitUntilAsync(() => Volatile.Read(ref handlerCalls) == 1));
+        }
+    }
+
+    /// <summary>
+    /// <b>M3.1 B20</b>：会话处理器抛异常后，名额与登记项都必须归还，且 Host 仍可用。
+    /// </summary>
+    /// <remarks>
+    /// 处理器异常不会被 <see cref="TransportHost"/> 的任何 <c>catch</c> 接住（那是会话层的职责），
+    /// 它会顺着 <c>HandleAsync</c> 逃逸；本用例要求 <c>finally</c> 先把资源归还。
+    /// 证伪方式：限额=1 时第二条连接仍能成功——若名额泄漏，第二条会被拒。
+    /// （处理器异常的<b>上报</b>不在 M3.1 范围：那是 M9 诊断里程碑的活。）
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Admission_Is_Returned_When_The_Session_Handler_Throws()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        int port = GetFreePort();
+
+        int handlerCalls = 0;
+        TaskCompletionSource firstHandled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        TransportHostOptions options = new()
+        {
+            Port = port,
+            MaxConnections = 1,
+            MaxConnectionsPerAddress = 1,
+        };
+
+        TransportHost host = new(
+            new[] { IPAddress.Loopback },
+            new StubSubnetPolicy(allow: true),
+            certificate,
+            (_, _) =>
+            {
+                if (Interlocked.Increment(ref handlerCalls) == 1)
+                {
+                    firstHandled.TrySetResult();
+                    throw new InvalidOperationException("测试替身：会话处理器故意抛异常。");
+                }
+
+                return Task.CompletedTask;
+            },
+            options);
+
+        await using (host)
+        {
+            host.Start();
+
+            ConnectionTarget target = CreateTarget(port, TestCertificateFactory.Fingerprint(certificate));
+
+            using (TlsConnection first = await new TlsClientConnector().ConnectAsync(target))
+            {
+                await WaitAsync(firstHandled.Task);
+            }
+
+            Assert.True(
+                await WaitUntilAsync(() => host.ActiveConnections == 0),
+                "处理器抛异常后登记项必须清掉。");
+            Assert.True(
+                await WaitUntilAsync(() => host.AdmittedConnections == 0),
+                "处理器抛异常后名额必须归还。");
+
+            // 对照：限额=1 的世界里第二条还能成功——证明①名额真的回来了、②Host 没被异常弄坏。
+            using TlsConnection second = await new TlsClientConnector().ConnectAsync(target);
+
+            Assert.True(second.Stream.IsAuthenticated);
+            Assert.True(await WaitUntilAsync(() => Volatile.Read(ref handlerCalls) == 2));
+            Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
         }
     }
 
@@ -241,7 +524,8 @@ public sealed class TransportHostTests
                 handshakeTimeout: TimeSpan.FromSeconds(60),
                 lengthPrefixTimeout: TimeSpan.FromSeconds(5),
                 payloadTimeout: TimeSpan.FromSeconds(5),
-                helloTimeout: TimeSpan.FromSeconds(5)),
+                helloTimeout: TimeSpan.FromSeconds(5),
+                preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8)),
         };
 
         TransportHost host = new(
@@ -265,9 +549,11 @@ public sealed class TransportHostTests
         Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 3));
         Assert.Equal(3, host.AdmittedConnections);
 
-        bool allFinished = await host.StopAsync(TimeSpan.FromSeconds(5));
+        TransportHostStopReport stop = await host.StopAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(allFinished, "停机会先取消、再强制释放 socket，handler 必须全部结束。");
+        Assert.True(stop.AllFinished, "停机会先取消、再强制释放 socket，handler 必须全部结束。");
+        Assert.True(stop.AcceptLoopsFinished, "accept 循环应当先于连接结束。");
+        Assert.Equal(0, stop.UnfinishedConnections);
         Assert.Equal(0, host.ActiveConnections);
         Assert.Equal(0, host.AdmittedConnections);
 
@@ -277,6 +563,77 @@ public sealed class TransportHostTests
         }
 
         await host.DisposeAsync();
+    }
+
+    /// <summary>
+    /// <b>M3.1 B18</b>：handler 不可打断时，停机报告必须给出
+    /// 「accept 循环停了、但还有 1 条连接没结束」——两个维度可区分，且在预算内返回。
+    /// </summary>
+    /// <remarks>
+    /// 既有用例 <c>Stop_Cancels_Connections_Stuck_In_Handshake…</c> 覆盖的是 <b>true 路径</b>
+    /// （取消 + 强制释放总能收掉 handler）。这里反过来：handler 不听取消令牌、
+    /// 也不受 socket 被砸的影响（它在等一个测试自己控制的 TCS），
+    /// 于是 <c>UnfinishedConnections</c> 必须是 1——报告不允许把「没干净」吞成「干净」。
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Stop_Reports_The_Connection_That_Survived_The_Shutdown_Budget()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        int port = GetFreePort();
+
+        TaskCompletionSource releaseHandler = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        TransportHostOptions options = new()
+        {
+            Port = port,
+            Timeouts = new TransportTimeouts(
+                connectTimeout: TimeSpan.FromSeconds(2),
+                handshakeTimeout: TimeSpan.FromSeconds(2),
+                lengthPrefixTimeout: TimeSpan.FromSeconds(2),
+                payloadTimeout: TimeSpan.FromSeconds(2),
+                helloTimeout: TimeSpan.FromSeconds(2),
+                preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8)),
+        };
+
+        TransportHost host = new(
+            new[] { IPAddress.Loopback },
+            new StubSubnetPolicy(allow: true),
+            certificate,
+            async (_, _) =>
+            {
+                // 不看取消令牌、不等 socket 事件：停机叫不醒它。
+                await releaseHandler.Task;
+            },
+            options);
+
+        host.Start();
+
+        try
+        {
+            ConnectionTarget target = CreateTarget(port, TestCertificateFactory.Fingerprint(certificate));
+            using TlsConnection connection = await new TlsClientConnector().ConnectAsync(target);
+
+            Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 1));
+
+            Stopwatch clock = Stopwatch.StartNew();
+            TransportHostStopReport stop = await host.StopAsync(TimeSpan.FromMilliseconds(400));
+            clock.Stop();
+
+            // 两个维度必须可区分：accept 循环停了（true），连接没结束（1 条）。
+            Assert.True(stop.AcceptLoopsFinished, "accept 循环应当先于连接收尾。");
+            Assert.Equal(1, stop.UnfinishedConnections);
+            Assert.False(stop.AllFinished, "handler 不可打断时，报告不允许把「没干净」说成「干净」。");
+
+            Assert.True(
+                clock.Elapsed < TimeSpan.FromSeconds(3),
+                $"停机耗时 {clock.Elapsed}——必须在预算（400 ms）量级内返回，而不是无限等。");
+        }
+        finally
+        {
+            // 放掉卡住的 handler，别把「永不结束的任务」留在测试进程里。
+            releaseHandler.TrySetResult();
+            await host.DisposeAsync();
+        }
     }
 
     [Fact(Timeout = 60_000)]
@@ -386,17 +743,45 @@ public sealed class TransportHostTests
         }
     }
 
-    private static ConnectionTarget CreateTarget(int port, string pinHex)
+    private static ConnectionTarget CreateTarget(int port, string pinHex) =>
+        CreateTarget(IPAddress.Loopback, port, pinHex);
+
+    private static ConnectionTarget CreateTarget(IPAddress address, int port, string pinHex)
     {
         bool created = ConnectionTarget.TryCreate(
             DeviceId,
-            IPAddress.Loopback,
+            address,
             port,
             pinHex,
             out ConnectionTarget? target);
 
         Assert.True(created, "测试前置条件：目标快照应能创建。");
         return target!;
+    }
+
+    /// <summary>
+    /// 连一条原始 TCP 连接（不做 TLS），源地址显式绑定——用来把「每源限额桶」钉死。
+    /// </summary>
+    /// <remarks>
+    /// 实测事实（2026-09-21，本机）：出站 socket 可以绑定到回环别名（如 <c>127.0.0.2</c>），
+    /// 且服务端看到的 remote 就是绑定的那个地址。这是 B15 用例里
+    /// 「A 与 B 走不同每源桶」得以成立的前提。
+    /// </remarks>
+    private static async Task<TcpClient> ConnectRawAsync(
+        IPAddress source, IPAddress destination, int port)
+    {
+        TcpClient client = new(AddressFamily.InterNetwork);
+        try
+        {
+            client.Client.Bind(new IPEndPoint(source, 0));
+            await client.ConnectAsync(destination, port);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
     }
 
     private static int GetFreePort()

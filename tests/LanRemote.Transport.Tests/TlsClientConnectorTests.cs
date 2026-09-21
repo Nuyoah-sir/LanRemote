@@ -110,7 +110,8 @@ public sealed class TlsClientConnectorTests
             handshakeTimeout: TimeSpan.FromMilliseconds(400),
             lengthPrefixTimeout: TimeSpan.FromSeconds(5),
             payloadTimeout: TimeSpan.FromSeconds(10),
-            helloTimeout: TimeSpan.FromSeconds(5));
+            helloTimeout: TimeSpan.FromSeconds(5),
+            preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8));
 
         Stopwatch stopwatch = Stopwatch.StartNew();
         Exception? caught = null;

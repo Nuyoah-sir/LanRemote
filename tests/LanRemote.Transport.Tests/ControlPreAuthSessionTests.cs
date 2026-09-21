@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -41,7 +42,7 @@ public sealed class ControlPreAuthSessionTests
     [Fact(Timeout = 60_000)]
     public async Task Valid_Hello_Reaches_PreAuthenticated_And_Closes()
     {
-        (ControlPreAuthResult result, ControlPreAuthSession session) = await RunAgainstHostAsync(
+        (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
             async (connection, _) =>
                 await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline));
 
@@ -59,7 +60,7 @@ public sealed class ControlPreAuthSessionTests
     [Fact(Timeout = 60_000)]
     public async Task Pre_Auth_Frame_Larger_Than_4KiB_Is_Rejected()
     {
-        (ControlPreAuthResult result, ControlPreAuthSession session) = await RunAgainstHostAsync(
+        (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
             async (connection, _) =>
             {
                 byte[] prefix = new byte[TransportConstants.LengthPrefixBytes];
@@ -86,7 +87,7 @@ public sealed class ControlPreAuthSessionTests
     [InlineData(HelloFrame.RejectMalformedJson, "not json at all")]
     public async Task First_Frame_Must_Be_Exactly_The_Hello(string expected, string json)
     {
-        (ControlPreAuthResult result, ControlPreAuthSession session) = await RunAgainstHostAsync(
+        (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
             async (connection, _) =>
                 await FrameWriter.WriteFrameAsync(
                     connection.Stream,
@@ -106,7 +107,7 @@ public sealed class ControlPreAuthSessionTests
     [Fact(Timeout = 60_000)]
     public async Task Immediate_Disconnect_Ends_In_Closed()
     {
-        (ControlPreAuthResult result, ControlPreAuthSession session) = await RunAgainstHostAsync(
+        (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
             (connection, _) =>
             {
                 connection.Dispose();
@@ -124,7 +125,7 @@ public sealed class ControlPreAuthSessionTests
     [Fact(Timeout = 60_000)]
     public async Task After_Hello_The_Connection_Is_Closed_And_A_Second_Hello_Gets_Nothing()
     {
-        (ControlPreAuthResult result, _) = await RunAgainstHostAsync(
+        (ControlPreAuthResult result, _, _) = await RunAgainstHostAsync(
             async (connection, _) =>
                 await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline),
             afterOutcome: async connection =>
@@ -175,7 +176,7 @@ public sealed class ControlPreAuthSessionTests
     [Fact(Timeout = 60_000)]
     public async Task Idle_Client_Is_Rejected_With_A_Timeout_Reason()
     {
-        (ControlPreAuthResult result, ControlPreAuthSession session) = await RunAgainstHostAsync(
+        (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
             async (_, stall) => await Task.Delay(Timeout.Infinite, stall));
 
         Assert.False(result.Completed);
@@ -205,22 +206,152 @@ public sealed class ControlPreAuthSessionTests
     }
 
     /// <summary>
+    /// <b>M3.1 信封专项 ①</b>：信封是硬上限——分段时限再宽，沉默的对端也必须在信封到点被切。
+    /// </summary>
+    /// <remarks>
+    /// 缩放值：prefix 5 s / payload 5 s / envelope 800 ms。若无信封，最早的分段（前缀）5 s 才切。
+    /// 判定量是<b>服务端会话内</b>的耗时：必须贴着信封（≈800 ms），而不是贴着 5 s 的分段时限。
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Envelope_Cuts_An_Idle_Client_Before_The_Length_Prefix_Budget()
+    {
+        TimeSpan envelope = TimeSpan.FromMilliseconds(800);
+
+        TransportTimeouts scaled = new(
+            connectTimeout: TimeSpan.FromSeconds(3),
+            handshakeTimeout: TimeSpan.FromSeconds(3),
+            lengthPrefixTimeout: TimeSpan.FromSeconds(5),
+            payloadTimeout: TimeSpan.FromSeconds(5),
+            helloTimeout: TimeSpan.FromSeconds(2),
+            preAuthEnvelopeTimeout: envelope);
+
+        (ControlPreAuthResult result, ControlPreAuthSession session, TimeSpan elapsed) =
+            await RunAgainstHostAsync(
+                client: async (_, stall) => await Task.Delay(Timeout.Infinite, stall),
+                timeouts: scaled);
+
+        Assert.False(result.Completed);
+        Assert.Equal(ControlPreAuthSession.RejectTimeout, result.Rejection);
+        Assert.Equal(ControlSessionState.Closed, session.State);
+
+        Assert.True(
+            elapsed >= TimeSpan.FromMilliseconds(600),
+            $"过早返回（{elapsed}），不像是信封（{envelope}）在起作用。");
+        Assert.True(
+            elapsed < TimeSpan.FromSeconds(2),
+            $"耗时 {elapsed}——信封没生效，贴到了 5 s 的分段时限。");
+    }
+
+    /// <summary>
+    /// <b>M3.1 信封专项 ②</b>：信封对「多段顺序等待」封顶——分段绝对 ≠ 总量有界。
+    /// </summary>
+    /// <remarks>
+    /// <para>缩放值：prefix 500 ms / payload 2000 ms / envelope 800 ms。
+    /// 客户端先吃 300 ms（前缀段预算内），再把完整前缀一次性交出、之后沉默。</para>
+    /// <list type="bullet">
+    /// <item><description>无信封：payload 段自己的 2 s 预算从 t≈300 ms 起算，t≈2.3 s 才切；</description></item>
+    /// <item><description>有信封：t≈800 ms 被切——顺序加和被封顶。</description></item>
+    /// </list>
+    /// <para>这正是第二轮评审计数缺陷（5 s + 10 s = 15 s 可加和）的机制级证据。</para>
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Envelope_Caps_The_Sum_Of_Sequential_Stage_Budgets()
+    {
+        TimeSpan envelope = TimeSpan.FromMilliseconds(800);
+
+        TransportTimeouts scaled = new(
+            connectTimeout: TimeSpan.FromSeconds(3),
+            handshakeTimeout: TimeSpan.FromSeconds(3),
+            lengthPrefixTimeout: TimeSpan.FromMilliseconds(500),
+            payloadTimeout: TimeSpan.FromMilliseconds(2000),
+            helloTimeout: TimeSpan.FromSeconds(2),
+            preAuthEnvelopeTimeout: envelope);
+
+        (ControlPreAuthResult result, _, TimeSpan elapsed) = await RunAgainstHostAsync(
+            client: async (connection, stall) =>
+            {
+                // 让前缀段先「吃」300 ms（在 500 ms 段预算内），再一次性交出完整前缀。
+                await Task.Delay(300, stall);
+
+                byte[] prefix = new byte[TransportConstants.LengthPrefixBytes];
+                BinaryPrimitives.WriteUInt32BigEndian(prefix, 64); // 声称 64 字节 payload，之后不发
+                await connection.Stream.WriteAsync(prefix, stall);
+                await connection.Stream.FlushAsync(stall);
+
+                // 沉默：若无信封，要等到 payload 段自己的 2 s 预算（t≈2.3 s）。
+                await Task.Delay(Timeout.Infinite, stall);
+            },
+            timeouts: scaled);
+
+        Assert.False(result.Completed);
+        Assert.Equal(ControlPreAuthSession.RejectTimeout, result.Rejection);
+
+        Assert.True(
+            elapsed >= TimeSpan.FromMilliseconds(600),
+            $"过早返回（{elapsed}），不像是信封（{envelope}）在起作用。");
+        Assert.True(
+            elapsed < TimeSpan.FromSeconds(2),
+            $"耗时 {elapsed}——顺序加和（500 ms + 2 s）没有被信封封顶。");
+    }
+
+    /// <summary>
+    /// hello 与「第二帧」粘连在同一次写入里到达：hello 仍被正确识别（TCP 粘包不进解析）。
+    /// </summary>
+    /// <remarks>
+    /// 会话层只消费一帧（M3 终态=干净关闭），所以这里证明的是「粘连的后续字节不破坏
+    /// 首帧读取与解析」；「第二帧字节级完好」由 <c>TlsFrameBoundaryTests</c> 在
+    /// <see cref="FrameReader"/> 层用两帧连读证明。
+    /// </remarks>
+    [Fact(Timeout = 60_000)]
+    public async Task Glued_Frame_After_Hello_Does_Not_Break_The_First_Frame_Read()
+    {
+        (ControlPreAuthResult result, _, _) = await RunAgainstHostAsync(
+            client: async (connection, stall) =>
+            {
+                byte[] hello = HelloFrame.Serialize();
+                byte[] extra = new byte[] { 0xAA, 0xBB, 0xCC };
+
+                byte[] glued = new byte[
+                    TransportConstants.LengthPrefixBytes + hello.Length +
+                    TransportConstants.LengthPrefixBytes + extra.Length];
+
+                BinaryPrimitives.WriteUInt32BigEndian(glued.AsSpan(0, 4), (uint)hello.Length);
+                hello.CopyTo(glued.AsSpan(TransportConstants.LengthPrefixBytes));
+
+                int second = TransportConstants.LengthPrefixBytes + hello.Length;
+                BinaryPrimitives.WriteUInt32BigEndian(glued.AsSpan(second, 4), (uint)extra.Length);
+                extra.CopyTo(glued.AsSpan(second + TransportConstants.LengthPrefixBytes));
+
+                // 一次写：两帧在同一个字节流片段里到达（粘包的真实形态）。
+                await connection.Stream.WriteAsync(glued, stall);
+                await connection.Stream.FlushAsync(stall);
+            });
+
+        Assert.True(result.Completed, result.Rejection);
+    }
+
+    /// <summary>
     /// 起一个真实 Host，把 <see cref="ControlPreAuthSession"/> 当会话处理器，
     /// 客户端按脚本说话，把服务端结局取回来。
     /// </summary>
-    private static async Task<(ControlPreAuthResult Result, ControlPreAuthSession Session)>
+    /// <param name="client">客户端脚本。</param>
+    /// <param name="afterOutcome">结局产生后的可选验证动作（连接此时还开着）。</param>
+    /// <param name="timeouts">时限预算；为空则用 <see cref="BuildTimeouts"/>（信封 10 s 宽松值）。</param>
+    /// <returns>服务端结局、会话对象，以及<b>服务端会话内</b>量到的耗时（信封类判定的可证伪量）。</returns>
+    private static async Task<(ControlPreAuthResult Result, ControlPreAuthSession Session, TimeSpan Elapsed)>
         RunAgainstHostAsync(
             Func<TlsConnection, CancellationToken, Task> client,
-            Func<TlsConnection, Task>? afterOutcome = null)
+            Func<TlsConnection, Task>? afterOutcome = null,
+            TransportTimeouts? timeouts = null)
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
         int port = GetFreePort();
 
         ControlPreAuthSession session = new();
-        TaskCompletionSource<ControlPreAuthResult> outcome =
+        TaskCompletionSource<(ControlPreAuthResult Result, TimeSpan Elapsed)> outcome =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        TransportTimeouts timeouts = BuildTimeouts();
+        TransportTimeouts effective = timeouts ?? BuildTimeouts();
 
         // 客户端脚本必须在服务端量完之后才收摊，否则服务端看到的是 EOF 而不是它自己的行为。
         using CancellationTokenSource stall = new();
@@ -231,11 +362,14 @@ public sealed class ControlPreAuthSessionTests
             certificate,
             async (connection, cancellationToken) =>
             {
+                // 计时在服务端会话内：从进入 pre-auth 到出结局，与信封的起算点一致。
+                Stopwatch sessionClock = Stopwatch.StartNew();
                 ControlPreAuthResult result =
-                    await session.RunAsync(connection, timeouts, cancellationToken);
-                outcome.TrySetResult(result);
+                    await session.RunAsync(connection, effective, cancellationToken);
+                sessionClock.Stop();
+                outcome.TrySetResult((result, sessionClock.Elapsed));
             },
-            new TransportHostOptions { Port = port, Timeouts = timeouts });
+            new TransportHostOptions { Port = port, Timeouts = effective });
 
         await using (host)
         {
@@ -254,11 +388,11 @@ public sealed class ControlPreAuthSessionTests
 
             Task clientTask = Task.Run(() => client(connection, stall.Token));
 
-            Task<ControlPreAuthResult> outcomeTask = outcome.Task;
+            Task<(ControlPreAuthResult Result, TimeSpan Elapsed)> outcomeTask = outcome.Task;
             Task finished = await Task.WhenAny(outcomeTask, Task.Delay(TimeSpan.FromSeconds(30)));
             Assert.Same(outcomeTask, finished);
 
-            ControlPreAuthResult result = await outcomeTask;
+            (ControlPreAuthResult result, TimeSpan elapsed) = await outcomeTask;
 
             stall.Cancel();
 
@@ -282,7 +416,7 @@ public sealed class ControlPreAuthSessionTests
             Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
             Assert.True(await WaitUntilAsync(() => host.AdmittedConnections == 0));
 
-            return (result, session);
+            return (result, session, elapsed);
         }
     }
 
@@ -297,13 +431,16 @@ public sealed class ControlPreAuthSessionTests
             System.Security.Authentication.SslProtocols.None);
     }
 
-    private static TransportTimeouts BuildTimeouts() =>
+    private static TransportTimeouts BuildTimeouts(
+        TimeSpan? envelope = null) =>
         new(
             connectTimeout: TimeSpan.FromSeconds(3),
             handshakeTimeout: TimeSpan.FromSeconds(3),
             lengthPrefixTimeout: PrefixDeadline,
             payloadTimeout: PayloadDeadline,
-            helloTimeout: TimeSpan.FromSeconds(2));
+            helloTimeout: TimeSpan.FromSeconds(2),
+            // 默认给得远高于本文件的场景时限（400–600 ms）；信封专项测试显式传入缩放值。
+            preAuthEnvelopeTimeout: envelope ?? TimeSpan.FromSeconds(10));
 
     private static int GetFreePort()
     {

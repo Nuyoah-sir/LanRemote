@@ -115,6 +115,16 @@ public sealed class ControlPreAuthSession
         {
             FrameReader reader = new(connection.Stream);
 
+            // pre-auth 外层信封：自进入本方法（= 进入 pre-auth）起算的硬上限，永不重置。
+            // 「分段各自绝对」不蕴含「总量有界」——前缀 5 s 与 payload 10 s 顺序执行即可加和；
+            // 信封把「对端可拖占的总时间」封顶（HANDOFF §17 教训 #25）。
+            // 它只约束本方法内对端可控的等待（读取）；hello 读取完成后的收尾是本机
+            // 非阻塞的 best-effort 写，不在信封的可中断范围内（见 TransportTimeouts 说明）。
+            using CancellationTokenSource envelope =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            envelope.CancelAfter(timeouts.PreAuthEnvelopeTimeout);
+
             byte[] payload;
             try
             {
@@ -122,7 +132,7 @@ public sealed class ControlPreAuthSession
                     TransportConstants.MaxPreAuthMessageBytes,
                     timeouts.LengthPrefixTimeout,
                     timeouts.PayloadTimeout,
-                    cancellationToken).ConfigureAwait(false);
+                    envelope.Token).ConfigureAwait(false);
             }
             catch (FrameProtocolException ex)
             {
@@ -139,9 +149,11 @@ public sealed class ControlPreAuthSession
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                // 阶段时限到点（不是停机）：这是「对端在拖」，必须留下原因。
-                // 少了这一条，超时会一路飞出 RunAsync，结局永远产生不出来——
-                // 做变异验证时就是靠它「30 秒都没结果」才被发现的。
+                // 两种来源（全都不含停机，停机在 when 处被排除、向上抛）：
+                //   ① 某一段的绝对时限到点（前缀 / payload）；
+                //   ② 外层信封到点——对端用「每段都不超时的顺序等待」加和拖时间时，由它兜底。
+                // 对端视角同为「超时」；归因差异只体现在本地（当前统一记 pre-auth-timeout，
+                // 若将来需要细分，信封与分段各持有独立 CTS，可在此处区分）。
                 return Fail(RejectTimeout);
             }
 

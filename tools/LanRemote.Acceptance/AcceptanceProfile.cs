@@ -15,13 +15,22 @@ namespace LanRemote.Acceptance;
 /// </remarks>
 internal static class AcceptanceProfile
 {
-    /// <summary>被控端实际使用的五个时限。</summary>
+    /// <summary>
+    /// 被控端实际使用的时限：五段 + pre-auth 外层信封。
+    /// </summary>
+    /// <remarks>
+    /// <b>信封（8 s）与既有判据的核对（2026-09-21，M3.1）</b>：所有场景的期望收尾时刻
+    /// （success 毫秒级、timeout / slow-dribble 贴着 5 s 的长度前缀时限）都<b>早于</b>信封；
+    /// 且 slow-dribble 的主判据是「前缀没发完」（sent &lt; 4），第 4 个字节在 t=6 s 发出、
+    /// 早于信封到点——可重置类错误实现的 sent=4 照样被抓住。判据不变。
+    /// </remarks>
     public static TransportTimeouts Timeouts { get; } = new(
         connectTimeout: TimeSpan.FromSeconds(3),
         handshakeTimeout: TimeSpan.FromSeconds(5),
         lengthPrefixTimeout: TimeSpan.FromSeconds(5),
         payloadTimeout: TimeSpan.FromSeconds(10),
-        helloTimeout: TimeSpan.FromSeconds(5));
+        helloTimeout: TimeSpan.FromSeconds(5),
+        preAuthEnvelopeTimeout: TimeSpan.FromSeconds(8));
 
     /// <summary>
     /// <c>success</c> 场景：对端必须在<b>明显早于</b>长度前缀时限时收尾。
