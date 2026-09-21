@@ -1,17 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 16:38 (+08:00)**
+> 更新时间：**2026-09-21 18:24 (+08:00)**
 >
-> 本轮（M3 第 24 步「先修再跑」）**动了代码**：`src/LanRemote.Transport/TlsConnection.cs`
-> 加了一个只读观测量 `LocalEndPoint`（两机日志配对用），其余全在
-> `tools/LanRemote.Acceptance/`（验收器）与文档里。**产品行为零改变**。
+> 本轮（M3 第 24 步 · 续「一键准备本机」）**动了代码**：全部在
+> `tools/LanRemote.Acceptance/`（验收器）与 `scripts/acceptance/set-lab-ip.ps1` 里，
+> **`src/` 一行未动、产品行为零改变**。
 >
-> 本轮的实质内容：**11 例变异矩阵 + 4 个新抓到的真缺陷 + 3 项「待实测」实测收口
-> + 新增 headless 入口**。逐条见 §15 步骤 24。
+> 本轮的实质内容：**把「准备 lab 网段」做进窗口（ADR-035 落地）+ 抓到并修掉 3 个真缺陷
+> + 手册补一键路径**。逐条见 §15「24.8」。
 >
-> 本轮代码**已提交为 `f080581`**（24 files changed, +3399 −583）。
-> 本文件与 README 的记账性修订在其之后，属文档提交。
+> 起因：用户第三次指出「这程序不是可以管理员模式打开吗，怎么还要求手动跑脚本」——
+> 核对后确认验收器**当时确实没有**配置能力（是功能没做，不是权限问题），
+> 于是按用户裁定「等一键做好再用」补齐。
 
 ---
 
@@ -20,24 +21,27 @@
 - **当前里程碑：M3 — TLS Host/Client + 同子网连接校验**
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`ffd73e9`**（M3 第 24 步收尾：`set-lab-ip.ps1` 补 TCP 45873 放行；
-  上一提交 `f080581` = 先修再跑：4 个真缺陷 + headless 入口 + 变异矩阵 11/11）
-- **Working tree at validation: 有未提交改动**——本轮全部验证（build / 574 tests /
-  11 例变异矩阵 / headless 端到端 / A 机 lab 环境实测）都发生在提交之前，随后逐批提交；
-  现在工作树只剩本文件与其后的记账性修订。
+- **Last code commit：`1d5ffc8`**（M3 第 24 步 · 续「一键准备本机」：窗口按钮 + 提升 helper
+  + headless `prepare-lab`，含 3 个真缺陷；上一提交 `ffd73e9` = lab 脚本补 TCP 45873 放行）
+- **Working tree at validation: 有未提交改动**——本轮全部验证（build 0 警告 / 574 tests /
+  `prepare-lab` 端到端 / `lab-apply` 幂等 / GUI 冒烟 / A 机 lab 实测）都发生在提交之前，
+  随后逐批提交；现在工作树只剩本文件与其后的记账性修订。
 - **A 机（本机）lab 环境已就绪**（2026-09-21 16:47 实测）：`192.168.1.10/24` 追加成功
   （原 `172.100.166.220/24` 保留、未断网）、profile=Private、UDP 45872 与 TCP 45873
   入站放行、`--headless host --seconds 8` 监听成功且退 0。
-  **B 机尚未配置** —— 第 24 步现在就卡在这里。
+  **B 机尚未配置** —— 第 24 步现在就卡在这里：B 机拷最新 zip 解压后，**双击 exe →
+  点「准备为 B 机」→ 一次 UAC** → 自检转绿（headless 等价：`--headless prepare-lab --lab-role b`）。
 - **M2.1 code 状态：Implementation complete；Two-machine manual DoD：PASS**
   （2026-09-20 17:30–18:18 两台实机跑完 20 步，20/20 通过，见第 9 节）
 - **是否满足完整 M2 DoD：是**（两机手工验收已回填）
 - **M3 代码状态：Implementation complete**——阶段 0～5 的 24 步里第 1～23 步已完成，
-  第 24 步（两机验收）的**物料与 A 机环境都已修到就绪**，当前停在**等 B 机**。
+  第 24 步（两机验收）的**物料与 A 机环境都已修到就绪**（含窗口「一键准备本机」），
+  当前停在**等 B 机**。
   `dotnet build` 0 警告 0 错误，`dotnet test` **574 PASS / 0 FAIL**。
   逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节可能滞后。
 - **验收器是 WPF 窗口程序（`WinExe`），双击 `LanRemote.Acceptance.exe` 就是一个窗口**，
-  不需要任何脚本；同一个 exe 带 `--headless` 就是命令行模式。
+  不需要任何脚本；窗口里可直接**「准备为 A/B 机」「撤销准备」**（各弹一次 UAC，拒绝不循环）；
+  同一个 exe 带 `--headless` 就是命令行模式。
   曾短暂采用「控制台 exe + `START.cmd`」的形态，被用户连纠三次后废弃——
   **别改回去**，理由与坑见第 15 节「M3 验收器的形态教训」。
 - **注意：不要拿 `LanRemote.App` 验收 M3**——它引用了 `LanRemote.Transport` 但一行都没调用，
@@ -1282,6 +1286,74 @@ dotnet test LanRemote.sln -c Debug --no-build
     手册：§0.1 双击启动、§0.2 headless 用法与退出码、§3 逐场景判定（含 `slow-dribble`）、
     §4 汇总与五条约束、§5 配对方法、§6 两个已知缺口、§7 要贴回来的证据、§8 排障表。
 
+    ### 24.8 M3 第 24 步 · 续「一键准备本机」（2026-09-21）
+
+    **起因**：用户第三次指出「这程序不是可以管理员模式打开吗，怎么还要求手动跑脚本」。
+    核对后确认验收器**当时确实没有配置能力**——是功能没做，不是权限问题。用户裁定
+    「等一键做好再用」。本小节 = 补齐过程与同轮抓到的 3 个真缺陷；落地 ADR-035
+    （主进程永不提权，提权只在窄域 helper）。
+
+    **功能面**（全部在 `tools/LanRemote.Acceptance/` 与 `set-lab-ip.ps1`，`src/` 一行未动）：
+
+    | 组件 | 内容 |
+    | --- | --- |
+    | `LabAction.cs` | 三个动作（`ApplyA` / `ApplyB` / `Undo`）的枚举与角色映射 |
+    | `LabWorkerRole.cs` | **提升实例专用**动词 `lab-apply` / `lab-undo`——只做「跑包内脚本 + 写运行尾」；脚本路径 TOCTOU 重校验（必须在 exe 目录内、非 ReparsePoint） |
+    | `ElevatedLauncher.cs` | `ShellExecuteExW(runas)` + `WaitForSingleObject` + `GetExitCodeProcess`；UAC 拒绝 = `ERROR_CANCELLED`(1223) → `outcome=UNMET reason=uac-declined`（人工取消不是失败，不循环弹窗） |
+    | `LabSetupRole.cs` | 编排：提权 → 跑脚本 → 尾随子实例日志（双写证据）→ 状态核验（`已就绪：<IP> 在监听地址里`）→ 结局；窗口按钮与 headless 走同一条路 |
+    | 窗口 | 「准备为 A 机（192.168.1.10）」「准备为 B 机（192.168.1.20）」「撤销准备（还原网络设置）」+ 完成后自动重新自检；`_processLog` 恢复 `gui.log` 写渲染行 |
+    | headless | 新动词 `prepare-lab`（普通权限可跑）/ `lab-apply` / `lab-undo`（提升专用）；`--log-file` 只属于后两者（提升实例的日志落点由编排者约定） |
+
+    **同轮的 3 个真缺陷**（都是跑出来的，不是模型提出来的）：
+
+    1. **子进程中文乱码**：`[LAB][PS]` 段全变 `U+FFFD`，而 `[LAB][SCRIPT]` 段正常。
+       根因 = .NET 10 **没有内置 CP936 解码器**（`Encoding.GetEncoding(936)` 直接抛异常 →
+       落 UTF-8 兜底），而 PS 5.1 在 **stdout 是管道**时按控制台代码页（936）编码
+       `Write-Host`。修法 = 脚本 v4 在 `[Console]::IsOutputRedirected` 为真时主动把
+       `[Console]::OutputEncoding` 切 UTF-8（`Invoke-Netsh` 的显式 936 save/restore
+       不受影响）；harness 固定按 UTF-8 解；输出出现 `U+FFFD` 记 WARN（提示包内脚本
+       可能不配套）。**顺带纠错**：早先「`GetEncoding(936)` 本机可用」的记账是错的；
+       `System.Text.Encoding.CodePages.dll` 也不是陈旧残留，而是运行时 framework 资产
+       （deps.json 里 `assemblyVersion 10.0.0.0` 的 secondary `"runtime": {}` 条目，
+       无 csproj 引用）。
+    2. **尾随转发静默丢 7 行**（子实例 90 行 vs 转发 83 行；Python 逐行差集证明缺的是
+       adapter / profile / 两条 rule / 一条分隔线 / `[SCRIPT]` 一行）。根因 = tailer 的
+       `usable` 越过「文件以换行结尾」的空占位 → 下一行恰好占用该位置 → **永不转发**。
+       修法 = 修 `Flush` 记账（`usable` 必须 = 确定写完的行数），并加**独立对账**
+       `CountCompleteLines`（数 `\n`，与 `Split` 是两条独立算法）：每次 prepare 打
+       `[LAB] 转发对账 = X 行 / Y 行（一致）`，不一致就建议以子实例自己那份为准。
+    3. **`gui.log` 的问题不是「丢了」而是「文档还在说双写」**：改 per-run 文件后
+       「窗口渲染完成」只进了 UI，「窗口没崩」的证据带不走（排查 GUI 冒烟时被 7 小时前的
+       遗留文件带偏过一次）。修法 = `MainWindow` 新增 `_processLog`（`gui.log` 重新写
+       渲染行），并把「形态教训」第 3 条与 UI 评审 prompt 的口径一起更正。
+
+    **实测（真升级路径）**：
+
+    - `--headless lab-apply`（幂等复跑）：`elevated=yes` / `scriptExit=0` /
+      `stateCheck=已就绪：192.168.1.10 在监听地址里（当前 192.168.1.10）` /
+      `keeping the saved pre-lab state`（快照未被污染）→ **PASS**。
+    - `--headless prepare-lab` 全流程：提权 → 尾随 → 双份证据 →
+      `[LAB] 转发对账 = 提升实例 89 行 / 已转发 89 行（一致）` → 状态核验 → **退 0**。
+    - GUI 冒烟：`gui.log` = `[GUI] 窗口渲染完成。 ActualWidth=960 ActualHeight=820`
+      （与当前 XAML 一致）、自检 `qualifiedNic=192.168.1.10`、`outcome=PASS`、
+      stdout 0 字节、进程存活。
+    - `dotnet build` 0 警告 0 错误；`dotnet test` **574 PASS / 0 FAIL**（`src/` 未动）。
+    - 重打包：265 files / raw 132.4 MiB / zip 57.4 MiB。**打包后手册又动过一次**
+      （净 +6 行 / +535 B：§0.2 的 `prepare-lab` 命令行形态 + `lab-apply`/`lab-undo`
+      警示）→ 用 `LANREMOTE_M3_SKIP_PUBLISH=1` 重打刷新 `START-HERE.md`（二进制未变）。
+      **最终 zip**：`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`，60 197 088 B，
+      sha256 `f81d194c6ee4cd6dd5402bfd7085a9e83dd337af267b227b148e2b90c952e1a3`；
+      265 条目全扁平、`START-HERE.md` 与手册逐字节相同（25 427 B）、`set-lab-ip.ps1`
+      与源文件一致（32 669 B、含 BOM）。
+
+    **提交**：`1d5ffc8`（本小节所述代码与文档都在这一个提交里；HANDOFF 与记忆是其后的
+    记账提交）。**B 机换包流程**：拷新 zip → 解压 → 双击 exe → 点「准备为 B 机」→
+    一次 UAC → 自检转绿 → 按手册 §3 跑四场景。
+
+    遗留（低优先，不为它单独重打包）：`HostRole.cs` 的前置失败文案仍只写
+    「用 `set-lab-ip.ps1`」——窗口路径下该分支基本不可达（自检不合格时角色按钮本来
+    就是灰的），下次动代码时顺手改。
+
 ### M3 验收器的形态教训（用户连续三次纠错后定稿）
 
 这三条是踩出来的，别改回去：
@@ -1296,8 +1368,16 @@ dotnet test LanRemote.sln -c Debug --no-build
    窗口一闪而过，用户会得出「包里没有 exe」的结论——用户的第一次反馈
    「你打包解压出来的，怎么没有启动exe」正是这个现象。
 3. **`WinExe` 没有控制台**，所以 `Console.WriteLine` 全部不可见 →
-   统一走 `AcceptanceLog`（UI + `gui.log` 双写），并且必须给
-   `DispatcherUnhandledException` 落盘 `crash.log`，否则未捕获异常只会让窗口无声消失。
+   统一走 `AcceptanceLog`：**UI 日志区 + 每轮一个不可变文件**
+   （`%TEMP%\lanremote-m3-acceptance\m3-<角色>-<UTC时刻>-<runId>.log`）；
+   进程级事实（`[GUI] 窗口渲染完成` 这种「一次进程只有一次」的行）落 `gui.log`。
+   另外必须给 `DispatcherUnhandledException` 落盘 `crash.log`，否则未捕获异常只会让窗口无声消失。
+
+   > **更正（2026-09-21，实测发现）**：这一条原先写的是「UI + `gui.log` 双写」。
+   > 那是 `f080581` **之前** `AcceptanceLog` 的行为；改成 per-run 文件之后这句话没跟着改，
+   > 而「窗口渲染完成」那一行顺势只进了 UI——等于「窗口没崩」这个证据**带不走**
+   > （排查 GUI 冒烟时被这个假线索带偏过一次：读到的 `gui.log` 是 7 小时前的遗留文件）。
+   > 现在两处都补齐：per-run 文件是主证据，`gui.log` 记进程级事实，渲染行两边都写。
 
 **踩到并修掉的坑：**
 
@@ -1430,8 +1510,10 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **不要忘了 XML 注释里不能出现 `--`**：`<PropertyGroup>` 里的注释写 `--->`（写异常链很自然）
   会直接 `MSB4025: An XML comment cannot contain '--'`，项目都加载不了
 - **不要把「对端握手失败」当成 PASS**：端口没开 / 防火墙拦 / host 没启动同样会让握手失败。
-  必须有独立的连通性探针把「没测成」和「测出来不合格」分开（本次验收器已修，
-  这是 M3 验收里真实存在过的空洞断言）
+  这条空洞断言在 M3 修过两轮：先补了独立 TCP 探针，**「先修再跑」时又删掉**（见 24.1：
+  探针自身的判据是空的，还会污染被控端连接计数、制造 TIME_WAIT）。「没测成」与「测出来
+  不合格」的分离改由**结局映射**承担：TCP 不可达抛 `SocketException`/`IOException`
+  （**永不** `AuthenticationException`）→ 退 `2`；真的连上、死在 TLS 之后才退 `1`
 - **不要伪造构建/测试结果**：本文件所有数字均为实际执行输出
 - **验收脚本别再犯这 5 个错**（详见第 9.1 节末表）：`netsh` 退出码不可信、
   `-join` 在 PS 5.1 的参数绑定陷阱、自动选网卡必须排除虚拟网卡、
@@ -1439,8 +1521,8 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **别拿 `LanRemote.App` 验收传输层**：它 `ProjectReference` 了 `LanRemote.Transport` 却**零调用**。
   任何「打 App 的包去两机跑」的方案都只能重证 discovery，碰不到 TLS/pinning/hello
 - **验收器里禁止「失败即 PASS」**：对端端口没开、防火墙拦掉、host 没启动，都会让握手失败。
-  必须先用**纯 TCP 探针**证明端口是开的，再判「被拒绝」；探针不通一律返回退出码 `2`
-  （前置条件不满足），**绝不能**报 `0`。同理按 `SocketError` 区分「没连上」与「被拒绝」时，
+  「没连上」**绝不能**报 `0`，它必须落退 `2`（前置条件不满足）；**不要**再为此加独立 TCP
+  探针（已删，理由见上一条）。按 `SocketError` 区分「没连上」与「被拒绝」时，
   **不要**把 `ConnectionReset` 归进「没连上」——accept 后立刻关闭正是走 RST
 - **不要把「对端怎么收尾」压成一个布尔**：`catch → return true` 会让「读超时」和「被切断」
   在输出里长得一模一样。要区分为 `eof` / `reset` / `still-open` / `unexpected-data` 四种，
@@ -1448,6 +1530,24 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **写验收手册前先确认被控端到底会不会打印**：`TransportHost` 无 logger，同子网拒绝 / 准入拒绝 /
   TLS 失败**全是静默**；只有发生在会话处理器**内部**的 pre-auth 超时才有输出。
   手册里不要凭"应该会记日志吧"去写判定标准（见 §14 第 12 条）
+- **不要把子进程输出按「OEM 代码页」解**（2026-09-21 实测纠错）：Windows PowerShell 5.1
+  在 stdout 是**管道**时按控制台代码页（936）编码 `Write-Host`，而 .NET 10 **没有内置
+  CP936 解码器**（`Encoding.GetEncoding(936)` 直接抛；要用得引
+  `System.Text.Encoding.CodePages` 包——本项目不引）。现行契约：脚本在
+  `[Console]::IsOutputRedirected` 时主动切 UTF-8 输出，harness 固定按 UTF-8 解，
+  输出出现 `U+FFFD` 记 WARN。中文权威副本永远看 `[LAB][SCRIPT]` 段
+  （脚本自己 `Add-Content -Encoding UTF8` 写 `%TEMP%\lanremote-lab-ip.log`）
+- **不要把 `gui.log` 当「每轮日志」**：它是**进程级事实**文件（如
+  `[GUI] 窗口渲染完成`）；每轮验收证据在不可变的 per-run 文件
+  `m3-<角色>-<UTC>-<runId>.log`。混淆过一次：排查 GUI 冒烟时读到的 `gui.log`
+  是 7 小时前的遗留文件，「窗口没崩」的证据其实带不走
+- **「按行数转发日志」的照抄陷阱**：tailer 的 `usable` 必须 = 「**确定写完**的行数」——
+  `Split('\n')` 的末段永远是特例（空占位或半行）。本工具曾因此**静默丢 7 行**
+  （文件正好以换行结尾时 `_emitted` 越过空占位，下一行恰好占用该位置 → 永不转发）。
+  必须配**独立算法**对账（`CountCompleteLines` 数 `\n`），聚合计数相等不算证明
+- **不要给提升实例动词（`lab-apply` / `lab-undo`）加功能或放宽参数面**：它们要求进程
+  本身已是管理员，参数面故意做窄（ADR-035：一次提权一件事、TOCTOU 重校验、UAC 拒绝
+  不循环）。要新能力加在编排者一侧（`prepare-lab` / 窗口按钮）
 
 ## 17. 关键上下文
 
