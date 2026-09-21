@@ -17,9 +17,18 @@ WHY THIS IS A SEPARATE SCRIPT FROM make-package.py
     that actually exercises TLS + pinning + channel_hello.
 
 The zip contains the published self-contained output plus:
+    START.cmd           - double-click entry point (ASCII only, see below)
     START-HERE.md       - the M3 two-machine acceptance manual (Chinese)
-    run-acceptance.ps1  - driver that runs the three mandatory scenarios
+    run-acceptance.ps1  - interactive driver: self-check -> pick role -> run
     set-lab-ip.ps1      - put both machines on a private 192.168.1.0/24 lab net
+
+WHY START.cmd EXISTS
+    The acceptance tool is a CONSOLE app, so double-clicking
+    LanRemote.Acceptance.exe prints usage and exits immediately - it looks like
+    "there is no exe in here". START.cmd hands over to the PowerShell driver and
+    pauses afterwards. It is ASCII-only on purpose: cmd.exe mis-decodes Chinese
+    bytes in .cmd files ("is not recognized as an internal or external
+    command"), so every Chinese string lives in run-acceptance.ps1 instead.
 """
 
 import os
@@ -34,7 +43,7 @@ PUBLISH_DIR = os.path.join(REPO_ROOT, "artifacts", "m3-acceptance")
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "acceptance")
 DOC_SOURCE = os.path.join(REPO_ROOT, "docs", "M3_TWO_MACHINE_ACCEPTANCE.md")
 
-HELPERS = ("run-acceptance.ps1", "set-lab-ip.ps1")
+HELPERS = ("START.cmd", "run-acceptance.ps1", "set-lab-ip.ps1")
 
 
 def read_version() -> str:
@@ -61,7 +70,11 @@ def publish() -> None:
     if not os.path.isfile(dotnet):
         raise SystemExit(f"dotnet.exe not found (looked at {dotnet}); source scripts/env.sh first")
 
-    if os.path.isdir(PUBLISH_DIR):
+    # Published output is overwritten in place by default. Wiping the directory
+    # first deletes 200+ files in one go, which trips bulk-delete safety prompts,
+    # and nothing needs it: `dotnet publish -o` overwrites every file it emits.
+    # Set LANREMOTE_M3_CLEAN=1 only when you want a from-scratch directory.
+    if os.environ.get("LANREMOTE_M3_CLEAN") == "1" and os.path.isdir(PUBLISH_DIR):
         shutil.rmtree(PUBLISH_DIR)
 
     print(f"publishing   : {os.path.relpath(PROJECT, REPO_ROOT)}")
@@ -101,7 +114,10 @@ def main() -> None:
 
     # PowerShell 5.1 decodes .ps1 as ANSI unless a BOM says otherwise, which
     # garbles every Chinese character in the console output.
+    # .cmd is deliberately EXCLUDED: it must stay ASCII for cmd.exe.
     for name in HELPERS:
+        if not name.lower().endswith(".ps1"):
+            continue
         target = os.path.join(PUBLISH_DIR, name)
         with open(target, "rb") as handle:
             raw = handle.read()

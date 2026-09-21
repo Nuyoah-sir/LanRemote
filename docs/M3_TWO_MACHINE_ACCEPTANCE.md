@@ -26,6 +26,43 @@
 
 ---
 
+## 0.1 怎么启动 —— 双击 `START.cmd`，不要双击 exe
+
+解压后目录里有 200 多个文件，唯一该用的程序叫 **`LanRemote.Acceptance.exe`**。
+**不要直接双击它**：它是控制台程序，不带参数时只会打印用法然后立刻退出，
+窗口一闪而过，看起来就像"包里没有 exe"。
+
+正确入口是 **`START.cmd`**：
+
+```
+START.cmd          <-- 双击这个
+START-HERE.md      本手册
+run-acceptance.ps1 交互式驱动（START.cmd 就是调用它）
+set-lab-ip.ps1     配 lab 网段（需管理员）
+LanRemote.Acceptance.exe   真正的程序，但请通过 START.cmd 用
+...其余 200+ 个是 .NET 自包含运行时的 dll
+```
+
+双击 `START.cmd` 之后会：
+
+1. 先跑 `info` 环境自检（不合格就直接中止并告诉你原因）；
+2. 问你**这台机器是被控端还是控制端**（输 `1` 或 `2`）；
+3. 被控端 → 直接起监听；控制端 → 再问你对端的设备码，然后跑完三个场景；
+4. 跑完**窗口不关**（`START.cmd` 末尾有 `pause`），方便你把输出整段拷出来。
+
+想跳过交互也可以：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role host
+powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role client -PeerDeviceCode XXXX-XXXX
+```
+
+> `START.cmd` 里**只有 ASCII 字符**，这是有意的：cmd.exe 用控制台代码页解析 `.cmd`，
+> 中文字符（连注释里的也算）会被解错并报"不是内部或外部命令"。所有中文都放在
+> `run-acceptance.ps1`（UTF-8 with BOM）里。
+
+---
+
 ## 1. 前置条件
 
 | # | 条件 | 怎么确认 |
@@ -95,23 +132,30 @@ powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Undo
 
 ### 第 2 步：在机器 B 起被控端
 
+双击 `START.cmd`，输 `1`（HOST）。它会打印 `deviceCode`、监听地址，然后等 10 分钟。
+**这个窗口不要关。**
+
+等价的命令行写法：
+
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role host
+# 或直接用程序：
 .\LanRemote.Acceptance.exe host --seconds 600
 ```
 
-它会打印 `deviceCode`、监听地址，然后等 10 分钟。**这个窗口不要关。**
-
 ### 第 3 步：在机器 A 跑三个场景
 
-一条命令跑完（把 `XXXX-XXXX` 换成机器 B 的 `deviceCode`）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -PeerDeviceCode XXXX-XXXX
-```
+双击 `START.cmd`，输 `2`（CLIENT），再输入机器 B 的 `deviceCode`（形如 `M5WC-14GX`）。
 
 它依次跑 `info` → `success` → `pin-mismatch` → `timeout`，
 每个场景的完整输出存到 `%TEMP%\lanremote-m3-acceptance\client-<场景>.txt`，
 最后打一张汇总表并给出总判定。
+
+非交互写法（把 `XXXX-XXXX` 换成机器 B 的 `deviceCode`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1 -Role client -PeerDeviceCode XXXX-XXXX
+```
 
 也可以手工一个个跑：
 

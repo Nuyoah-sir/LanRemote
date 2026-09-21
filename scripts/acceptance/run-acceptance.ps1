@@ -1,46 +1,66 @@
-# LanRemote M3 - two-machine acceptance driver (runs on the CONTROLLING machine)
-#
-# WHAT THIS DOES
-#   Runs the three mandatory M3 scenarios against the host machine, one after
-#   another, and prints a PASS/FAIL table plus an overall verdict.
-#
-#   The three mandatory scenarios are:
-#     success      - real TLS + pinning + channel_hello must be accepted
-#     pin-mismatch - a wrong certificate pin must make the handshake fail
-#     timeout      - a peer that never says hello must be cut by the deadline
-#
-#   The fourth scenario (cross-subnet) is NOT run here on purpose: it needs the
-#   two machines to sit in different subnets, which the lab setup used for M3
-#   deliberately does not create. See START-HERE.md section 5.
-#
-# PREREQUISITES
-#   1. Both machines ran  set-lab-ip.ps1  and are on 192.168.1.0/24.
-#   2. On the OTHER machine, the host role is already running:
-#        LanRemote.Acceptance.exe host --seconds 600
-#   3. You know that machine's device code (printed by its `host` or `info`).
+# LanRemote M3 - two-machine acceptance driver
 #
 # USAGE
-#   powershell -ExecutionPolicy Bypass -File run-acceptance.ps1 -PeerDeviceCode XXXX-XXXX
+#   Double-click  START.cmd          <- recommended, keeps the window open
+#   or           powershell -ExecutionPolicy Bypass -File .\run-acceptance.ps1
+#   or non-interactively:
+#                run-acceptance.ps1 -Role host
+#                run-acceptance.ps1 -Role client -PeerDeviceCode XXXX-XXXX
 #
-# Stored as UTF-8 WITH BOM so Windows PowerShell 5.1 decodes the Chinese text.
+# WHAT IT DOES
+#   1. runs `info` (environment self-check) - aborts if this machine has no
+#      eligible RFC1918 NIC, because everything after that would be meaningless
+#   2. asks which role this machine plays: HOST (controlled) or CLIENT (controller)
+#   3. HOST   -> starts the transport host and waits, printing one RESULT line
+#                per connection
+#      CLIENT -> asks for the peer device code, then runs the three mandatory
+#                scenarios and prints a PASS/FAIL table
+#
+# The three mandatory scenarios
+#   success      - real TLS + pinning + channel_hello must be accepted
+#   pin-mismatch - a wrong certificate pin must make the handshake fail
+#   timeout      - a peer that never says hello must be cut by the deadline
+#
+# The fourth scenario (cross-subnet) is deliberately NOT run: it needs the two
+# machines to sit in DIFFERENT subnets, which the lab setup used here
+# deliberately does not create. See START-HERE.md section 5.
+#
+# PREREQUISITES
+#   Both machines ran set-lab-ip.ps1 (admin) and are on 192.168.1.0/24.
+#   On the HOST machine this tool must already be running before the CLIENT
+#   starts - otherwise the client reports peer-port-unreachable (exit 2), which
+#   is "could not test", NOT "the test failed".
+#
+# Stored as UTF-8 WITH BOM so Windows PowerShell 5.1 renders the Chinese text.
 
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$PeerDeviceCode,
+    [ValidateSet('', 'host', 'client')]
+    [string]$Role = '',
+
+    [string]$PeerDeviceCode = '',
 
     [string]$Exe = '',
 
-    [string]$LogDir = ''
+    [string]$LogDir = '',
+
+    [int]$HostSeconds = 600
 )
 
 $ErrorActionPreference = 'Continue'
 
+function Say-Rule {
+    Write-Host '=====================================================================' -ForegroundColor Cyan
+}
+
+# ---------------------------------------------------------------------------
+# locate the acceptance tool
+# ---------------------------------------------------------------------------
 if ($Exe -eq '') {
     $Exe = Join-Path $PSScriptRoot 'LanRemote.Acceptance.exe'
 }
 if (-not (Test-Path -LiteralPath $Exe)) {
     Write-Host "ERROR: acceptance tool not found at $Exe" -ForegroundColor Red
-    Write-Host "       pass -Exe <path to LanRemote.Acceptance.exe>" -ForegroundColor Yellow
+    Write-Host '       pass -Exe <path to LanRemote.Acceptance.exe>' -ForegroundColor Yellow
     exit 2
 }
 
@@ -51,19 +71,15 @@ if (-not (Test-Path -LiteralPath $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 }
 
-function Say-Rule {
-    Write-Host '=====================================================================' -ForegroundColor Cyan
-}
-
 Say-Rule
 Write-Host (' LanRemote M3 two-machine acceptance   ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -ForegroundColor Cyan
-Write-Host (' peer device code : ' + $PeerDeviceCode) -ForegroundColor Cyan
-Write-Host (' logs             : ' + $LogDir) -ForegroundColor Cyan
+Write-Host (' tool  : ' + $Exe) -ForegroundColor Cyan
+Write-Host (' logs  : ' + $LogDir) -ForegroundColor Cyan
 Say-Rule
 Write-Host ''
 
 # ---------------------------------------------------------------------------
-# step 0: environment self-check. A FAIL here means the rest is meaningless.
+# step 0: environment self-check
 # ---------------------------------------------------------------------------
 Write-Host '--- step 0: info (environment self-check) ---------------------------' -ForegroundColor Cyan
 $infoLog = Join-Path $LogDir '00-info.txt'
@@ -73,17 +89,73 @@ Write-Host ''
 
 if ($infoExit -ne 0) {
     Write-Host ' ABORT: this machine has no eligible RFC1918 NIC.' -ForegroundColor Red
-    Write-Host '        Run  .\set-lab-ip.ps1 -Role A  (administrator) and try again.' -ForegroundColor Yellow
+    Write-Host '        Run (administrator):  .\set-lab-ip.ps1 -Role A   or   -Role B' -ForegroundColor Yellow
     exit 2
 }
 
 # ---------------------------------------------------------------------------
-# the three mandatory scenarios
+# step 1: which role?
 # ---------------------------------------------------------------------------
+if ($Role -eq '') {
+    Write-Host ''
+    Say-Rule
+    Write-Host ' Which machine is this?' -ForegroundColor Cyan
+    Write-Host '   1 = HOST    (the controlled machine - starts listening)' -ForegroundColor Cyan
+    Write-Host '   2 = CLIENT  (the controlling machine - runs the scenarios)' -ForegroundColor Cyan
+    Say-Rule
+    $answer = (Read-Host 'Enter 1 or 2').Trim()
+    if ($answer -eq '1') { $Role = 'host' }
+    elseif ($answer -eq '2') { $Role = 'client' }
+    else {
+        Write-Host " '$answer' is not 1 or 2 - rerun with -Role host or -Role client." -ForegroundColor Red
+        exit 2
+    }
+    Write-Host ''
+}
+
+# ---------------------------------------------------------------------------
+# HOST branch
+# ---------------------------------------------------------------------------
+if ($Role -eq 'host') {
+    Write-Host ('--- HOST: listening for ' + $HostSeconds + ' seconds (Ctrl+C to stop) ---') -ForegroundColor Cyan
+    Write-Host ' LEAVE THIS WINDOW OPEN and go run the CLIENT role on the other machine.' -ForegroundColor Yellow
+    Write-Host ''
+    & $Exe host --seconds $HostSeconds 2>&1 | Tee-Object -FilePath (Join-Path $LogDir 'host.txt')
+    $hostExit = $LASTEXITCODE
+    Write-Host ''
+    Say-Rule
+    Write-Host (' HOST exit code: ' + $hostExit) -ForegroundColor $(if ($hostExit -eq 0) { 'Green' } else { 'Red' })
+    Write-Host ' Copy this whole window back - the [HOST][RESULT] lines are the evidence.' -ForegroundColor Yellow
+    Say-Rule
+    exit $hostExit
+}
+
+# ---------------------------------------------------------------------------
+# CLIENT branch
+# ---------------------------------------------------------------------------
+if ($PeerDeviceCode -eq '') {
+    Write-Host ''
+    Say-Rule
+    Write-Host ' Peer device code' -ForegroundColor Cyan
+    Write-Host '   Printed by the HOST machine (this tool or its `info` output),' -ForegroundColor Cyan
+    Write-Host '   looks like  M5WC-14GX . It is NOT a secret.' -ForegroundColor Cyan
+    Say-Rule
+    $PeerDeviceCode = (Read-Host 'Enter the HOST device code').Trim()
+    Write-Host ''
+}
+
+if ($PeerDeviceCode -eq '') {
+    Write-Host ' ABORT: no device code given. Pass -PeerDeviceCode XXXX-XXXX' -ForegroundColor Red
+    exit 2
+}
+
+Write-Host (' peer device code : ' + $PeerDeviceCode) -ForegroundColor Cyan
+Write-Host ''
+
 $scenarios = @(
-    @{ Name = 'success';      Expected = 0; Title = 'TLS + pin + channel_hello accepted' },
-    @{ Name = 'pin-mismatch'; Expected = 0; Title = 'wrong certificate pin rejected' },
-    @{ Name = 'timeout';      Expected = 0; Title = 'silent peer cut by pre-auth deadline' }
+    @{ Name = 'success';      Title = 'TLS + pin + channel_hello accepted' },
+    @{ Name = 'pin-mismatch'; Title = 'wrong certificate pin rejected' },
+    @{ Name = 'timeout';      Title = 'silent peer cut by pre-auth deadline' }
 )
 
 $results = @()
@@ -96,14 +168,13 @@ foreach ($scenario in $scenarios) {
     $out = & $Exe client --scenario $name --device-code $PeerDeviceCode 2>&1
     $code = $LASTEXITCODE
 
-    $logFile = Join-Path $LogDir ("client-$name.txt")
-    $out | Set-Content -LiteralPath $logFile -Encoding UTF8
+    $out | Set-Content -LiteralPath (Join-Path $LogDir ("client-$name.txt")) -Encoding UTF8
     $out | ForEach-Object { Write-Host "    $_" }
 
     $resultLine = ($out | Where-Object { $_ -match '\[RESULT\]' } | Select-Object -First 1)
     if (-not $resultLine) { $resultLine = '(no RESULT line)' }
 
-    $ok = ($code -eq $scenario.Expected)
+    $ok = ($code -eq 0)
     if (-not $ok) { $verdict = 1 }
 
     Write-Host ("    => $(if ($ok) { 'PASS' } else { 'FAIL' })  exit=$code") -ForegroundColor $(if ($ok) { 'Green' } else { 'Red' })
@@ -111,7 +182,7 @@ foreach ($scenario in $scenarios) {
 
     $results += [pscustomobject]@{
         Scenario = $name
-        Expected = $scenario.Expected
+        Expected = 0
         Actual   = $code
         Verdict  = $(if ($ok) { 'PASS' } else { 'FAIL' })
         Result   = $resultLine.Trim()
@@ -126,7 +197,7 @@ Write-Host ' SUMMARY' -ForegroundColor Cyan
 $results | Format-Table Scenario, Expected, Actual, Verdict -AutoSize | Out-String | Write-Host
 
 foreach ($row in $results) {
-    Write-Host ("  " + $row.Verdict + "  " + $row.Scenario + "  ::  " + $row.Result)
+    Write-Host ('  ' + $row.Verdict + '  ' + $row.Scenario + '  ::  ' + $row.Result)
 }
 
 Write-Host ''
@@ -145,7 +216,7 @@ Say-Rule
 if ($verdict -eq 0) {
     Write-Host ' OVERALL: PASS (3/3 mandatory scenarios)' -ForegroundColor Green
 } else {
-    Write-Host ' OVERALL: FAIL - see the per-scenario logs in ' + $LogDir -ForegroundColor Red
+    Write-Host (' OVERALL: FAIL - see the per-scenario logs in ' + $LogDir) -ForegroundColor Red
 }
 Say-Rule
 

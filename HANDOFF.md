@@ -1045,14 +1045,29 @@ dotnet test LanRemote.sln -c Debug --no-build
     `eof` / `reset` / `still-open` / `unexpected-data` 四种可判定结局，不再把超时和切断混为一谈。
 
     **物料**：`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`
-    （216 条目 / 原始 77.8 MiB / zip 34.6 MiB），由 `scripts/acceptance/make-m3-package.py` 产出
-    （`LANREMOTE_M3_SKIP_PUBLISH=1` 可跳过 publish 只重新打包）。
-    包内含 `START-HERE.md`（=`docs/M3_TWO_MACHINE_ACCEPTANCE.md`）、
-    `run-acceptance.ps1`、`set-lab-ip.ps1`，两个 ps1 均在打包时强制加 BOM。
-    手册：§3 逐场景命令与判定、§4 host 汇总行、§5 两个已知缺口、§6 要贴回来的四段证据、§7 排障表。
+    （217 条目 / 原始 77.8 MiB / zip 34.6 MiB），由 `scripts/acceptance/make-m3-package.py` 产出
+    （`LANREMOTE_M3_SKIP_PUBLISH=1` 跳过 publish 只重打包；`LANREMOTE_M3_CLEAN=1` 才先清空目录）。
+    包内含 `START-HERE.md`（=`docs/M3_TWO_MACHINE_ACCEPTANCE.md`）、`START.cmd`、
+    `run-acceptance.ps1`、`set-lab-ip.ps1`。两个 ps1 打包时强制加 BOM，
+    **`START.cmd` 不加 BOM 且必须是纯 ASCII**（cmd.exe 按控制台代码页解析 `.cmd`，
+    中文连注释都会解错并报「不是内部或外部命令」）。
+    手册：§0.1 怎么启动、§3 逐场景命令与判定、§4 host 汇总行、§5 两个已知缺口、
+    §6 要贴回来的四段证据、§7 排障表。
     **提交 `5ae052f`** · 该提交只含验收器 / 手册 / 打包脚本 / HANDOFF，**无产品代码改动**
     （`Last code commit` 仍是 `5bf3cb6`）。zip 与 `artifacts/` 都在 .gitignore 里，
     需要时用 `make-m3-package.py` 重现。
+
+    **补：为什么又加了 `START.cmd`**（用户反馈「解压出来没有启动 exe」）。
+    exe 其实在包里，叫 `LanRemote.Acceptance.exe`，但 ① 混在 200 多个 dll 里，
+     ② 它是**控制台程序**，双击不带参数只会打 usage 然后 exit 2，窗口一闪而过——
+    看起来就像没有 exe。`START.cmd` 做三件事：切到自身目录 → 调 `run-acceptance.ps1`
+    → **末尾 `pause`** 让窗口不关。同时把驱动脚本改成**交互式**：
+    先跑 `info` 自检（不合格直接中止），再问「这台是被控端还是控制端」（输 1/2），
+    控制端再问对端设备码，然后跑完三个场景。非交互仍可
+    `-Role host` / `-Role client -PeerDeviceCode XXXX-XXXX`。
+    实测：`-Role host` → step 0 中止 exit 2 且中文渲染正常；`-Role bogus` → ValidateSet 拒绝；
+    **全新解压目录**端到端跑通（自动找到同目录的 exe）。
+    未本机实测：交互式 1/2 菜单与 host 分支的等待（被「本机无 RFC1918 网卡」挡在 step 0 之前）。
 
 ### M3 明确不做
 
