@@ -19,6 +19,17 @@ public static class TransportConstants
     /// <summary>正常 Control 消息的建议上限，用于告警而非拒绝。</summary>
     public const int NominalControlMessageBytes = 64 * 1024;
 
+    /// <summary>
+    /// <b>未认证阶段</b>（pre-auth）单帧上限，4 KiB。
+    /// </summary>
+    /// <remarks>
+    /// <para>外部红队评审 A-9：规格只写了 control 消息最大 1 MiB，但那是<b>认证之后</b>的额度。
+    /// 一个还没通过任何认证的连接不该能逼我们分配 1 MiB——pre-auth 阶段用远小得多的上限。
+    /// 这是本里程碑对规格的<b>新增</b>约束。</para>
+    /// <para>4 KiB 对一个 <c>channel_hello</c>（几十字节）来说绰绰有余。</para>
+    /// </remarks>
+    public const int MaxPreAuthMessageBytes = 4 * 1024;
+
     /// <summary>长度前缀字段长度（字节）。</summary>
     public const int LengthPrefixBytes = 4;
 

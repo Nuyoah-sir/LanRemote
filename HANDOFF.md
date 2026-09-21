@@ -21,7 +21,10 @@
 - **M2.1 code 状态：Implementation complete；Two-machine manual DoD：PASS**
   （2026-09-20 17:30–18:18 两台实机跑完 20 步，20/20 通过，见第 9 节）
 - **是否满足完整 M2 DoD：是**（两机手工验收已回填）
-- 下一阶段：**M3 — TLS Host/Client + 同子网连接校验**（本轮不施工，等两机验收结果）
+- 下一阶段：**M3 — TLS Host/Client + 同子网连接校验**
+- **M3 已于 2026-09-21 开工**（用户指令：「开始步骤吧，遇到要我帮忙的地方你就停」）。
+  阶段 0～3 已完成，当前推进到阶段 4（Framing / hello / 状态机）。
+  逐步明细、实测数据与禁止回访项见**第 15、16 节**——以第 15 节为准，本节的 M3 描述可能滞后
 
 ### 关于 git 记账方式
 
@@ -801,6 +804,15 @@ dotnet test LanRemote.sln -c Debug --no-build
 | 我们先 bind 具体地址（exclusive），别人再 bind `0.0.0.0` | **也成功** |
 | 带 `SO_REUSEADDR` 的后来者抢同地址同端口 | 开不开 exclusive **都被拒**（`AccessDenied` 10013） |
 | 连到具体地址的连接归谁 | 归**更具体**的 listener，不会被更宽的 socket 截走 |
+| **步骤 15**：pre-auth 空闲，长度前缀时限 400 ms | **413 ms** 切断，`System.OperationCanceledException`，名额归零 |
+| **步骤 15**：只发 2 字节（半截长度前缀） | **400 ms** 切断，`System.OperationCanceledException` |
+| **步骤 15**：声称 64 字节只发 10 个（半截 payload） | **608 ms** 切断（时限 600 ms），`System.OperationCanceledException`；证明 payload 段有**自己的**预算，没被前缀段吃掉 |
+| **步骤 15**：3 条 TCP 连上但永不握手，时限 400 ms | **436 ms** 内名额全部归还，**全程没有调用 `StopAsync`** |
+| deadline 执行开销 | **0–36 ms** 量级，几百毫秒级时限可放心使用 |
+| 取消时在 `SslStream` 上的异常类型 | **基类** `OperationCanceledException`（不是 `TaskCanceledException`） |
+| 取消时在 `MemoryStream` 替身上的异常类型 | **`TaskCanceledException`**（替身内部 `Task.Delay(delay, token)` 抛的）——与上一行**不是同一个类型**，所以断言只要求「是取消」 |
+| 变异：把 `CancelAfter` 挪进读循环（滑动窗口） | 低速攻击用例**变红**（8 字节全读完、1 s、无异常） |
+| 变异：注释掉握手 `CancelAfter` | 握手卡死用例**变红**（名额 12 s 未归还） |
 
 **⚠️ ADR-032：别过度声称 `ExclusiveAddressUse`**。我最初据此写的注释与测试断言是错的
 （以为开了它就能发现"别人先占了更宽地址"）。实测矩阵如上：
@@ -837,18 +849,44 @@ dotnet test LanRemote.sln -c Debug --no-build
 
 ### 阶段 3 —— TLS
 
-12. 服务端显式设置：`EnabledSslProtocols = Tls12 | Tls13`、`AllowTlsResume = false`、
-    `AllowRenegotiation = false`、`ClientCertificateRequired = false`。客户端同样显式关 resume / renegotiation。
+12. ✅ **已完成** 服务端显式设置（`TransportHost.CreateServerOptions`）：
+    `EnabledSslProtocols = Tls12 | Tls13`、`AllowTlsResume = false`、`AllowRenegotiation = false`、
+    `ClientCertificateRequired = false`、`CertificateRevocationCheckMode = NoCheck`；
+    客户端 `TlsClientConnector` 同样显式关 resume / renegotiation。
     （默认值实测：`AllowTlsResume` 两端都 True；`AllowRenegotiation` 客户端 True / 服务端 False；
     `EnabledSslProtocols` 默认 `None`。三个都不能靠默认。）
-13. 客户端校验回调：仅当**精确 pin 匹配** ∧ 本地不变量全过才接受 —— leaf 存在 / 32 字节 pin 相等 /
-    ECDSA P-256 / non-CA / KU 含 digitalSignature / EKU 含 serverAuth / 有效期当前有效。
-    这些是**不变量检查不是独立安全边界**；注入时间测试过期证书（不许改系统时钟）。
-14. **阶段绝对 deadline**，不是"距上次读到字节 N 秒"：TCP connect / TLS 握手 / 4 字节帧头 / 整帧 payload /
-    首个 hello 各自独立；异步读不靠 `ReadTimeout`。
-    验收：每 `(timeout - ε)` 发一个字节，连接仍必须在原 deadline 被关闭。
-15. 实测取消延迟与异常形态（triage B-24 / B-25）：握手停滞、帧头读一半、payload 读一半、
-    空闲 pre-auth 五种情况分别取消，断言 handler 终止且限额归零，**并如实记录异常类型**（不预填）。
+13. ✅ **已完成** 客户端校验回调 `PeerCertificateValidator`：仅当**精确 pin 匹配** ∧ 本地不变量全过才接受
+    —— leaf 存在 / 32 字节 pin 相等 / ECDSA P-256 / non-CA / KU 含 digitalSignature /
+    EKU 含 serverAuth / 有效期当前有效。这些是**不变量检查不是独立安全边界**；
+    注入 `TimeProvider` 测试过期证书（不许改系统时钟）。拒绝码只进本地日志，**绝不下发给对端**
+    （否则等于免费探测探针）。
+14. ✅ **已完成** **阶段绝对 deadline**（`FrameReader` + `TransportTimeouts`），不是"距上次读到字节 N 秒"：
+    TCP connect / TLS 握手 / 4 字节帧头 / 整帧 payload / 首个 hello 各自独立、各自重新计时；
+    异步读不靠 `ReadTimeout`（它只覆盖同步读）。
+    - 实现要点：`ReadExactlyAsync` 在**每一段进入时**建一个 `CancelAfter` 的 CTS，
+      循环里**不再重置**——这就是"绝对"的全部内容。
+    - 验收：`Slow_Trickle_Does_Not_Extend_The_Absolute_Deadline`（8 字节 × 150 ms vs 400 ms 时限）。
+      **已做变异验证**：把 `CancelAfter` 挪进循环变成滑动窗口后，该用例**变红**
+      （滑动窗口版把 8 字节全读完了、耗时 1 s、根本不抛异常）。
+    - 顺带把**步骤 16 的长度校验**也做完并落在这里（`FrameReader.TryValidateLength`）：
+      `uint` 域内拒 0、拒超上限，**之后**才转 `int`；超限**不 drain**、不分配 payload。
+      边界用例：`0 / 1 / 上限 / 上限+1 / 0x7fffffff / 0x80000000 / 0xffffffff`。
+    - 新增常量 `TransportConstants.MaxPreAuthMessageBytes = 4 KiB`（评审 A-9）：
+      规格里 1 MiB 是**认证之后**的额度，未认证连接不该能逼我们分配 1 MiB。
+15. ✅ **已完成** 实测取消延迟与异常形态（triage B-24 / B-25）——**数据是跑出来的，不是推断的**，
+    详见下面「M3 已实测记录」与新增用例 `PreAuthDeadlineTests`。
+    五个场景各自断言 handler 终止、`ActiveConnections == 0`、`AdmittedConnections == 0`。
+    - **握手卡死**这条**已做变异验证**：注释掉 `handshakeCts.CancelAfter(...)` 后，
+      名额 12 s 都还不上，用例变红——证明它测的确实是时限而不是碰巧结束。
+    - **本步骤只量了「时限执行得准不准」，没有量「五个数值本身合不合适」**。
+      数值仍留给第二轮外部评审，不在本机实测范围。
+    - 顺手修正了一处会误导后续实现的注释：`TransportHost.HandleAsync` 的
+      `catch (OperationCanceledException)` 原先只写「停机取消」，但它同时也是**握手时限到点**的落点
+      （卡住的是未认证连接，属于预期防御）。当前处理相同（直接断开），
+      **阶段 4 引入会话状态机后应当能被区分**，届时再拆。
+    **阶段 3 结果**：`dotnet build` PASS（0 警告 0 错误）+ `dotnet test` **513 PASS / 0 FAIL**
+    （阶段 2 的 495 + 新增 18：14 条 `FrameReaderTests` + 4 条 `PreAuthDeadlineTests`）。
+    代码提交前会记录 `Last code commit`。
 
 ### 阶段 4 —— Framing / hello / 状态机
 
@@ -931,7 +969,19 @@ dotnet test LanRemote.sln -c Debug --no-build
 - **不要给 `SslClientAuthenticationOptions.TargetHost` 填设备相关的名字**：CN 是
   `LanRemote-<设备码>`，SNI 是明文，等于向整个局域网广播设备标识。pinning 下主机名校验不参与
   安全判定，`TargetHost = string.Empty` 实测可用（不发 SNI、不做名字校验）
-- **不要把 `TransportTimeouts` 里的数值当成实测结论**：它们是初始值，步骤 15 实测取消延迟后要回来调
+- **不要把 `TransportTimeouts` 里的数值当成实测结论**：它们是初始值，步骤 15 实测取消延迟后要回来调。
+  ⚠️ 步骤 15 **只验证了「时限执行得准」（0–36 ms 误差）**，**没有**验证「这五个数值合不合适」——
+  后者留给第二轮外部评审，别把前者当成后者的结论
+- **不要把 `FrameReader.ReadExactlyAsync` 里的 `CancelAfter` 挪进读循环**（评审 A-8）：
+  那会把绝对 deadline 变成滑动窗口，被「每 `timeout - ε` 发一字节」无限续命。
+  变异已验证：挪进循环后低速攻击用例立刻变红
+- **不要按取消异常的子类下断言**：真实 `SslStream` 抛的是基类 `OperationCanceledException`，
+  而 `MemoryStream`/`Task.Delay` 替身抛的是 `TaskCanceledException`。
+  断言写 `is OperationCanceledException` 即可，写 `IsType<>` 两边必有一边假红
+- **不要在测试里从 `MemoryStream` 派生并同时重写 `Read(Span<byte>)` 与 `ReadAsync(Memory<byte>)`**：
+  一次读会被数**两遍**——`Stream.Read(Span<byte>)` 的默认实现会**虚拟调用** `Read(byte[], int, int)`。
+  实测输出 `async=1 span=0 array=1` 却 `BytesRead=8`（真实只消费 4）。要计数就**包装**内部流，
+  且用「计数器 + 流自身 Position」两把尺子交叉验证
 - **不要声称 `ExclusiveAddressUse` 能发现端口已被占用**（ADR-032，实测证伪）。
   它能挡的只有「带 `SO_REUSEADDR` 的后来者」，而且在本机开不开结果一样。
   真正的冲突信号是 `AddressAlreadyInUse`，已在 `TransportHostStartResult.Failures` 里

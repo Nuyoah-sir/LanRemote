@@ -299,7 +299,11 @@ public sealed class TransportHost : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            // 停机取消，正常路径。
+            // 两种来源都会走到这里，当前处理相同（直接断开），但别把注释写成单一来源：
+            //   ① 停机取消（registration.Cancellation）；
+            //   ② 握手时限到点（handshakeCts）——这是被卡住的<b>未认证</b>连接，属于预期防御。
+            // 实测见 PreAuthDeadlineTests：400 ms 时限下 3 条连接 436 ms 内名额全部归还。
+            // M3 阶段 4 引入会话状态机后，这两者应当能被区分（可观测性），届时再拆。
         }
         catch (AuthenticationException)
         {

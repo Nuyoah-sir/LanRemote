@@ -439,3 +439,50 @@ System.Security.Authentication.AuthenticationException:
 **对照组**的 socket 上，导致「把被测属性改成 false」的变异**没有让测试失败**——
 测试隔离错了，看起来通过其实是空断言。发现方式是：变异后测试仍然绿。
 **变异验证必须做完并确认真的变红，否则等于没做。**
+
+---
+
+## ADR-033 — 未认证阶段（pre-auth）的输入预算：4 KiB 上限 + 五段绝对 deadline + 超限不 drain
+
+**日期**：2026-09-21（M3 阶段 3）
+**状态**：已定（**对规格的新增约束**，来自外部红队评审 A-8 / A-9 / A-10）
+
+**Context**：规格只规定了「Control 消息最大 1 MiB」。但那条额度属于**认证之后**。
+一个刚 accept 上来、还没通过任何认证的 TCP 连接，凭什么能逼我们 `new byte[1 MiB]`？
+同样地，「超时」若实现成「距上次读到字节 N 秒」，攻击者每 `timeout - ε` 发一个字节就能
+把一个未认证连接无限期挂住——名额不归还，等价于低成本资源耗尽。
+
+**Decision**：
+1. `TransportConstants.MaxPreAuthMessageBytes = 4 KiB` 作为 **pre-auth 单帧上限**，
+   与认证后 `MaxControlMessageBytes = 1 MiB` 严格区分。4 KiB 对 `channel_hello` 绰绰有余。
+2. 五段**绝对** deadline（connect / handshake / 长度前缀 / payload / hello）各自独立计时，
+   由每段入口处的 `CancellationTokenSource.CancelAfter` 实现，**读循环内不得重置**
+   （评审 A-8）。不使用 `Stream.ReadTimeout`——它只覆盖同步读。
+3. 长度先在 `uint` 域校验（拒 `0`、拒超上限），**之后**才转 `int`（评审 A-10）。
+   `0xFFFFFFFF` 直接转 int 是 `-1`。
+4. **超限一律不 drain**：直接抛 `FrameProtocolException` 并关闭连接。
+   违规的一侧没有资格让我们继续读它的数据。
+5. 拒绝原因（`length-zero` / `length-exceeds-limit`）**只进本地日志，绝不下发给对端**——
+   下发等于送一个免费的探测探针。
+
+**实测（本机 Win11 25H2 / 26200，回环，真实 `SslStream`，见 `PreAuthDeadlineTests`）**：
+
+| 场景 | 时限 | 实测 | 异常类型 | 名额归还 |
+| --- | --- | --- | --- | --- |
+| pre-auth 空闲 | 400 ms | **413 ms** | `System.OperationCanceledException` | 是 |
+| 只发 2 字节（半截前缀） | 400 ms | **400 ms** | 同上 | 是 |
+| 声称 64 字节只发 10 个 | 600 ms | **608 ms** | 同上 | 是 |
+| 3 条 TCP 连上但永不握手 | 400 ms | **436 ms**（未调 `StopAsync`） | — | 是 |
+
+**两点结论**：
+- deadline 执行开销在 **0–36 ms** 量级，几百毫秒级时限可放心使用。
+- 真实 `SslStream` 取消抛的是**基类** `OperationCanceledException`；
+  而 `MemoryStream` / `Task.Delay` 替身抛的是 `TaskCanceledException`。
+  **两者不是同一个类型**，所以断言只写 `is OperationCanceledException`，不锁死子类。
+
+**变异验证（两条都确认真变红）**：
+- 把 `CancelAfter` 挪进读循环 → 低速攻击用例变红（8 字节被全读完、耗时 1 s、根本不抛）。
+- 注释掉握手 `CancelAfter` → 握手卡死用例变红（名额 12 s 未归还）。
+
+**未决**：五个 deadline 的**数值本身**是否合适，不在本机实测范围内，
+留给第二轮外部评审。本 ADR 只确立「绝对 deadline」这一机制与 4 KiB 上限。
