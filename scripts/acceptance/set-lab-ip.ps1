@@ -19,11 +19,14 @@
 #     2. save it to %TEMP%\lanremote-lab-ip-state.json
 #     3. switch the interface to STATIC with exactly that config  -> no outage
 #     4. append 192.168.1.10 (role A) or 192.168.1.20 (role B), /24, no gateway
+#     5. set the profile to Private and open INBOUND UDP 45872 + TCP 45873
+#        (discovery AND control - opening only UDP makes M3 fail silently)
 #   Result: the NIC keeps 172.100.166.x AND gains 192.168.1.x at the same time.
 #
-#   -Undo removes the lab address and puts the interface back to DHCP (or back to
-#   the original static config, if that is how it was). It self-verifies and, if
-#   only an APIPA 169.254.x.x address is left, prints the manual fix commands.
+#   -Undo removes the lab address, deletes those two firewall rules and puts the
+#   interface back to DHCP (or back to the original static config, if that is how
+#   it was). It self-verifies and, if only an APIPA 169.254.x.x address is left,
+#   prints the manual fix commands.
 #
 # USAGE (ADMIN PowerShell, run once per machine with a different -Role)
 #   Machine A:  powershell -ExecutionPolicy Bypass -File set-lab-ip.ps1 -Role A
@@ -196,6 +199,54 @@ function Resolve-Adapter {
 }
 
 # ---------------------------------------------------------------------------
+# private profile + inbound firewall rules
+#
+# The transport needs TWO ports: UDP 45872 (discovery) and TCP 45873 (control).
+# An earlier revision only opened UDP 45872. That is enough for M2.1 discovery
+# acceptance, but NOT for M3: the accepting machine silently drops the inbound
+# SYN and the client reports "connection refused / timed out" with no hint that
+# the firewall was the cause. (Measured on machine A: Windows Firewall blocks
+# inbound by default on the Private profile and no TCP 45873 rule existed.)
+# ---------------------------------------------------------------------------
+function Set-LabNetworkProfileAndFirewall {
+    param([string]$Alias)
+
+    Say ''
+    Say '  network profile + inbound firewall rules ...'
+
+    # After switching to static the adapter briefly sits in "Identifying...", and
+    # Set-NetConnectionProfile fails during that window. Retry instead of giving up.
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            Set-NetConnectionProfile -InterfaceAlias $Alias -NetworkCategory Private -ErrorAction Stop
+            Say '  profile = Private' 'Green'
+            break
+        } catch {
+            if ($attempt -eq 5) {
+                Say ('  could not set profile: ' + $_.Exception.Message) 'Yellow'
+                Say '  set it manually: Settings > Network & Internet > Ethernet > Private.' 'Yellow'
+            } else {
+                Start-Sleep -Seconds 3
+            }
+        }
+    }
+
+    $rules = @(
+        @{ Name = 'LanRemote Discovery UDP 45872'; Proto = 'UDP'; Port = 45872 },
+        @{ Name = 'LanRemote Control TCP 45873';   Proto = 'TCP'; Port = 45873 }
+    )
+    foreach ($r in $rules) {
+        if (Get-NetFirewallRule -DisplayName $r.Name -ErrorAction SilentlyContinue) {
+            Say ('  rule exists : ' + $r.Name) 'Green'
+        } else {
+            New-NetFirewallRule -DisplayName $r.Name -Direction Inbound -Protocol $r.Proto `
+                -LocalPort $r.Port -Action Allow -Profile Any | Out-Null
+            Say ('  rule created: ' + $r.Name) 'Green'
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # snapshot of the current IPv4 config
 # ---------------------------------------------------------------------------
 function Get-IpState {
@@ -294,6 +345,19 @@ if ($Undo) {
             Say ('  removed ' + $address) 'Green'
         } else {
             Say ('  not present ' + $address) 'DarkGray'
+        }
+    }
+
+    # 1b. drop the inbound rules this script creates, so -Undo really undoes
+    #     everything it did (address + profile-side effects are listed above;
+    #     the profile itself is left as-is because "Private" is also what the
+    #     user's own LAN wants).
+    foreach ($ruleName in @('LanRemote Discovery UDP 45872', 'LanRemote Control TCP 45873')) {
+        if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) {
+            Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+            Say ('  removed firewall rule: ' + $ruleName) 'Green'
+        } else {
+            Say ('  no firewall rule: ' + $ruleName) 'DarkGray'
         }
     }
 
@@ -401,10 +465,14 @@ Say ('  current : ' + $state.Address + '/' + $state.PrefixLength +
      '  dhcp=' + $state.WasDhcp +
      '  dns=' + $(if (@($state.Dns).Count) { (@($state.Dns) -join ',') } else { '(none)' }))
 
-# 2. idempotent: if the lab address is already there, do nothing destructive
+# 2. idempotent: if the lab address is already there, leave the address alone -
+#    but STILL verify the profile and BOTH firewall rules. An earlier revision
+#    only opened UDP 45872, so exiting here without re-checking would leave
+#    TCP 45873 blocked and the M3 control connection would fail silently.
 $already = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $target.Address -ErrorAction SilentlyContinue)
 if ($already.Count -gt 0) {
-    Say ('  ' + $target.Address + ' already present - nothing to change.') 'Yellow'
+    Say ('  ' + $target.Address + ' already present - address left untouched.') 'Yellow'
+    Set-LabNetworkProfileAndFirewall -Alias $alias
     Show-IpState -Title '--- current IPv4 -----------------------------------------'
     Say-Rule
     exit 0
@@ -451,35 +519,10 @@ Invoke-Netsh -Alias $alias -Index $index `
     -Arguments @('add', 'address', ('addr=' + $target.Address), 'mask=255.255.255.0') | Out-Null
 Say '  appended.' 'Green'
 
-# 5. private profile + inbound firewall rule for UDP 45872
+# 5. private profile + inbound firewall rules (UDP 45872 + TCP 45873)
 Say ''
-Say '  step 3/3: private network profile + inbound UDP 45872 rule ...'
-# After switching to static the adapter briefly sits in "Identifying...", and
-# Set-NetConnectionProfile fails during that window. Retry instead of giving up.
-for ($attempt = 1; $attempt -le 5; $attempt++) {
-    try {
-        Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private -ErrorAction Stop
-        Say '  profile = Private' 'Green'
-        break
-    } catch {
-        if ($attempt -eq 5) {
-            Say ('  could not set profile: ' + $_.Exception.Message) 'Yellow'
-            Say '  set it manually: Settings > Network & Internet > Ethernet > Private.' 'Yellow'
-        } else {
-            Start-Sleep -Seconds 3
-        }
-    }
-}
-
-$ruleName = 'LanRemote Discovery UDP 45872'
-$rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-if ($rule) {
-    Say '  firewall rule already exists.' 'Green'
-} else {
-    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol UDP `
-        -LocalPort 45872 -Action Allow -Profile Any | Out-Null
-    Say '  firewall rule created.' 'Green'
-}
+Say '  step 3/3: network profile + firewall (UDP 45872 discovery, TCP 45873 control) ...'
+Set-LabNetworkProfileAndFirewall -Alias $alias
 
 Show-IpState -Title '--- resulting IPv4 ---------------------------------------'
 

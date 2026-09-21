@@ -93,7 +93,7 @@ LanRemote.Acceptance.exe --headless client --address <IP> --pin <指纹> [--port
 | 1 | 两台 Windows 机器，接在同一个交换机 / 同一根线上 | `ipconfig` 能看到同一段地址 |
 | 2 | **两台机器都必须在 RFC1918 私有网段**（`10/8`、`172.16–172.31`、`192.168/16`） | 窗口里"监听地址"不是 `(无合格 RFC1918 网卡)` |
 | 3 | 管理员 PowerShell（**只有配 IP 那一步需要**，验收本身不需要） | 标题栏带"管理员" |
-| 4 | 入站 UDP 45872 放行 | `set-lab-ip.ps1` 会顺手建规则 |
+| 4 | 入站 **UDP 45872 + TCP 45873** 放行 | `set-lab-ip.ps1` 会顺手建两条规则 |
 
 ### 1.1 为什么第 2 条最容易踩
 
@@ -124,7 +124,13 @@ powershell -ExecutionPolicy Bypass -File .\set-lab-ip.ps1 -Role B
 ```
 
 结果：A 得到 `192.168.1.10/24`，B 得到 `192.168.1.20/24`，
-**同时保留原来的 `172.100.166.x` 不断网**。
+**同时保留原来的 `172.100.166.x` 不断网**；网络配置文件被设为「专用」，
+并建两条入站规则：`LanRemote Discovery UDP 45872` 与 `LanRemote Control TCP 45873`。
+
+> 早先版本的脚本**只放行 UDP 45872**。那对 M2.1 的发现验收够用，对 M3 **不够**：
+> 被控端会静默丢掉 B 的入站 SYN，B 那边只看到"连接被拒/超时"，而且没有任何线索
+> 指向防火墙。现在两条都建；脚本可**重复运行**，缺哪条补哪条（地址已是 lab 地址时
+> 也会照样检查防火墙）。`-Undo` 会把这两条规则一起删掉。
 
 > 这个脚本为什么是"先整口切静态再追加"？因为 Windows 一张网卡**只能二选一**：
 > DHCP 或静态，不能共存。直接给 DHCP 接口追加地址会把接口翻成 `Dhcp=Disabled`
@@ -421,7 +427,7 @@ B 只留 `192.168.1.20`，并且中间有路由能通），我再把场景 5 加
 | 状态红字 `no-qualified-rfc1918-nic` | 没跑 `set-lab-ip.ps1`，或跑完没生效；`ipconfig` 复核 |
 | 两个角色按钮是灰的 | 同上——这是**故意的**，防止点了没反应 |
 | `reason=peer-not-found deviceCode=…` | A 没发现 B。查 UDP 45872 入站规则、两台是否同一广播域、B 的窗口还在不在监听 |
-| `clientOutcome=UNMET handshake=…SocketException stage=tcp` | B 的 TCP 45873 连不上。被控端没点开始？防火墙拦了？地址填错？**这是"没测成"，不是"测出来不合格"** |
+| `clientOutcome=UNMET handshake=…SocketException stage=tcp` | B 的 TCP 45873 连不上。被控端没点开始？**TCP 45873 入站规则缺失**（重跑一次 `set-lab-ip.ps1` 就会补上）？别的安全软件拦了？地址填错？**这是"没测成"，不是"测出来不合格"** |
 | `clientOutcome=FAIL` 且 `peerClosed=reset` | 收尾方式不是有序 EOF。若同时 `closedAtMs` 贴着 5000，说明 hello 根本没被接受 |
 | `slow-dribble` 显示 `sent=4/4` | 长度前缀时限被逐字节重置了——**真缺陷**，把两段日志都贴我 |
 | `② rejection=pre-auth-timeout 的行恰好 2 条` 对不上 | 某个场景提前/推迟收尾，看 `closedAtMs` 是否贴在 5000 |
