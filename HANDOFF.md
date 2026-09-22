@@ -1,40 +1,44 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-22 10:48 (+08:00)**
+> 更新时间：**2026-09-22 11:36 (+08:00)**
 >
-> 本轮（**M4 · 阶段 2「认证消息帧（JSON 严格解析）」**）**动了代码**：
-> 新增 `src/LanRemote.Transport/Auth/` 5 个帧类（challenge / response / success /
-> approval_pending + 计划外 `AuthenticationFailedFrame`）+ 3 个 canonical 编码类
-> （base64 / HEX / GUID）+ `AuthJson` 类型提示预读 + 8 个测试文件；
-> 提交 `21a8829`（18 files，+3031）；全量 **877 PASS / 0 FAIL**（Transport 226→460，+234）。
-> 变异验证 ×4，其中 M3 当场抓到一条假测试（手抄 base64 坏字面量）并修复；
-> 合同级决定已立 **ADR-040**。逐条见 §18.7。
+> 本轮（**M4 · 阶段 3「服务端认证状态机」**）**动了代码**：
+> 新建 7 个产品文件（`ConnectionSecurityContext` / `ControlAuthContext` /
+> `ControlAuthSession` / `ControlPreAuthHandoff` / `FailedAuthLimiter` /
+> `LocalApprovalGate` / `SessionRegistry`）+ 认证测试 `ControlAuthSessionTests.cs`
+> （25 用例）+ 6 个修改文件（衔接层改写与指纹冻结）；提交 `760e950`
+> （14 files，+2780/−89）；全量 **902 PASS / 0 FAIL**（Transport 460→485，+25）。
+> 变异验证 ×4（M4 证明纵深防御「全拆才红」形态）；
+> 合同级决定已立 **ADR-041**。逐条见 §18.8。
 >
-> 上轮（2026-09-22）：M4 阶段 1「transcript + HMAC proof 纯函数核心」+ 同日重定位
-> Security → Transport（ADR-039），见 §18.6；更早：阶段 0「衔接盘点与定案」
-> （ADR-037/038 + ADR-027 落地）见 §18.5，第二轮外部评审回收见 §18.4。
+> 上轮（2026-09-22）：M4 阶段 2「认证消息帧（JSON 严格解析）」（ADR-040）见 §18.7；
+> 阶段 1「transcript + HMAC proof 纯函数核心」+ 同日重定位 Security → Transport
+> （ADR-039）见 §18.6；更早：阶段 0「衔接盘点与定案」（ADR-037/038 + ADR-027 落地）
+> 见 §18.5，第二轮外部评审回收见 §18.4。
 
 ---
 
 ## 1. 当前状态
 
-- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0、1、2 完成（2026-09-22；
-  阶段 2 = 5 个认证消息帧 + canonical base64/HEX/GUID + 严格 JSON 解析（ADR-040）；
-  单机全量验证 877 PASS；执行记录见 §18.5 / §18.6 / §18.7）**
-- **下一里程碑步骤：M4 阶段 3 —— 服务端认证状态机（步骤 13–17）**
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0、1、2）
+- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0、1、2、3 完成（2026-09-22；
+  阶段 3 = 服务端认证状态机 + 衔接层落地（ADR-037 可执行形式 + ADR-041 合同级决定）；
+  单机全量验证 902 PASS；执行记录见 §18.5 / §18.6 / §18.7 / §18.8）**
+- **下一里程碑步骤：M4 阶段 4 —— 客户端侧（步骤 18–20：认证流程 / 失败处理 / 客户端 e2e）**
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0、1、2、3）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`21a8829`**（feat：M4 阶段 2——认证消息帧；上一条代码提交 `e7687ec`
-  = 认证核心重定位 Security → Transport，ADR-039；再上一条 `35506b5` = M4 阶段 1 主体）。
-- **Working tree at validation（M4 阶段 2）：无未提交代码**——877 PASS 跑的就是被如实提交为
-  `21a8829` 的工作树（含变异验证 ×4 全部恢复后的干净树：`grep TEMP-MUTATION` 零命中 +
-  `git diff` 只含目标改动）；验证后未再动代码（其后记账提交只动文档）。
+- **Last code commit：`760e950`**（feat：M4 阶段 3——服务端认证状态机；上一条代码提交
+  `21a8829` = M4 阶段 2 认证消息帧；再上一条 `e7687ec` = 认证核心重定位
+  Security → Transport，ADR-039）。
+- **Working tree at validation（M4 阶段 3）：无未提交代码**——902 PASS 跑的就是被如实提交为
+  `760e950` 的工作树（含变异验证 ×4 全部恢复后的干净树：`grep TEMP-MUTATION` 零命中 +
+  `git diff` 只含目标改动；另于提交后对 M1 变异做过一次重放核实（4 红精确）、随即
+  `git checkout` 还原并重建确认）；验证后未再动代码（其后记账提交只动文档）。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
-- **注意：M3.1 与 M4 阶段 0 均已改动 `src` / `tests`**——M3 两机验收的旧物料（zip `f81d194c…`，由
-  `1d5ffc8` 后工作树打出，harness / transport 哈希两端逐字符一致）**已成为历史版本**；
-  如需重跑两机验收，物料必须重打（§18.4 A 节 / §18.5 D 节）。
+- **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
+  （zip `f81d194c…`，由 `1d5ffc8` 后工作树打出，harness / transport 哈希两端逐字符一致）
+  **早已是历史版本**；如需重跑两机验收，物料必须按最新代码重打（§18.4 A 节 / §18.5 D 节）。
 - **两机 lab 环境均已就绪，且第 24 步两机验收已跑完（PASS，2026-09-21）**：
   A（本机）= `192.168.1.10`、B = `192.168.1.20`，UDP 45872 + TCP 45873 入站放行；
   A 侧四场景 4/4 PASS（runId `8a7e3d03`）、B 侧四条连接行与五条汇总约束全部对上
@@ -1798,17 +1802,21 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 12. ✅ `base64 canonical` 定义与测试——**判定式 = round-trip 逐字符相等**；
     另有 canonical HEX / canonical GUID 同规则、跨帧 wrong-type 分类（ADR-040 第 1/3 条）。
 
-**阶段 3 —— 服务端认证状态机**
+**阶段 3 —— 服务端认证状态机** ✅ 完成（2026-09-22，执行记录见 §18.8）
 
-13. challenge 生成（`sessionId` / nonce32 / `certSha256`←本机证书 / `expiresInMs=15000`）
-    与超时（**绝对** deadline，勿做成可重置，见 §16 `CancelAfter` 条）。
-14. 服务端验证链：未过期 / session+device 对齐 / proof 长度 / 重算 +
-    `FixedTimeEquals` / 失败一律 generic `authentication_failed`（不泄露细节）。
-15. failed auth limiter（按 remote IP）：10 分钟窗口 / 5 失败 → 拒 60s /
-    每次失败 300–800ms 随机延时 / 成功清计数 / 不打日志。
-16. local approval（默认 `RequireLocalApprovalForUnknownController=true`；
-    v1 语义 = 每次 unknown 都审批或运行期记住，**阶段 0 定案**）+ `approval_pending` 流程。
-17. `sessionToken`（32 随机字节）+ `SessionRegistry`（auth success 才注册——DoD 的可执行形式）。
+13. ✅ challenge 生成（**构造期定稿**：`sessionId` / nonce32 / `certSha256`←冻结上下文 /
+    `expiresInMs=15000`）与超时（**绝对** deadline = 机器窗口 10 s，覆盖写/读/校验；
+    压线后置校验）。
+14. ✅ 服务端验证链：限流前置 / 机器窗口 / 帧级严格解析 / 密钥加载（**解析通过后才触碰**）/
+    重算 + `FixedTimeEquals`（唯一计限流失败 + 300–800 ms 随机延时）/ 失败一律 generic
+    `authentication_failed`。**「session+device 对齐」不做独立字段比对**——proof 重算把
+    session / device / 两端 nonce / 证书指纹全部隐式绑死（跨会话重放必然 MAC 失败）。
+15. ✅ failed auth limiter（按 remote IP）：10 分钟窗口 / 5 失败 → 拒 60 s /
+    每次失败 300–800 ms 随机延时 / 成功清计数 / 不打日志；封禁到点放行、再失败即再封。
+16. ✅ local approval（`ILocalApprovalGate` 5 值显式终态 + fail closed；v1 = 每个新控制连接
+    都要批，ADR-038）+ `approval_pending` 流程（三路竞速 + 单读者复用）。
+17. ✅ `sessionToken`（32 随机字节）+ `SessionRegistry`（**success 字节写出成功**才注册
+    ——ADR-041 第 1 条；DoD 的可执行形式）。
 
 **阶段 4 —— 客户端侧**
 
@@ -2071,3 +2079,101 @@ Transport 226→460 = +234）。
 failed auth limiter（按 remote IP）/ local approval + `approval_pending`（v1 = 每个新连接
 都批，ADR-038）/ sessionToken + `SessionRegistry`。衔接层（ADR-037 的
 `ControlPreAuthHandoff`）随之落地，门禁测试改写与实现同批（写了才有 → 能测）。
+
+### 18.8 阶段 3 执行记录（2026-09-22）—— 服务端认证状态机（步骤 13–17 + 衔接层落地）
+
+**状态：完成**（提交 `760e950`，14 files，+2780/−89；§18.2 步骤 13–17 全落地 + ADR-037 衔接层
+同批落地；测试 +25，Transport 460→485；全量 **902 PASS / 0 FAIL**。）
+
+**产出与落点**
+
+- **衔接层（ADR-037 的可执行形式，与状态机同批）**：
+  - `ConnectionSecurityContext`（77 行）：本连接安全事实冻结快照——`ConnectionId` / 地址端口 /
+    协商 TLS 版本 / **本机证书 DER SHA-256（32 字节）**；`TransportHost` 构造期算一次、
+    全生命周期冻结；challenge `certSha256` 的唯一来源（「声称 = 实际出示」）。
+  - `AcceptedConnection` 由 5 参记录收编为 `(ConnectionSecurityContext Security, SslStream Stream)`
+    + 4 个转发属性（既有消费点零破坏）。
+  - `ControlPreAuthHandoff`（59 行）：线性所有权交接对象；`BeginAuthentication` **exactly-once**
+    （第二次抛 `InvalidOperationException`，消息含「只允许」）。
+  - `ControlPreAuthSession`：成功路径**不再** `ShutdownAsync`（M3 终态被有意识改写，注释保留
+    理由与原文）；`AllowedOperationsWhilePreAuthenticated` 空集合 → **恰好一项**
+    `begin-authentication`（门禁测试 = 精确集合相等）；`ControlPreAuthResult` 增 `Handoff` 字段。
+  - `ControlSessionState` 扩展 `Authenticating` / `Authenticated`（一个枚举贯穿全链）。
+- **状态机（步骤 13–17）**：
+  - `ControlAuthContext` + `ControlAuthOptions`（85 行）：跨连接共享守卫（密钥存储 / 限流 /
+    待批配额 / 审批面 / 登记表 / 时钟）+ **值旋钮**（全部时限可整体缩放 = 测试能测超时路径的前提）。
+  - `ControlAuthSession`（664 行）：`RunAsync` 八段主干 = ①限流前置（被罚 IP 连 challenge
+    都不发）→ ②机器窗口（10 s **绝对** deadline，覆盖 challenge 写 + response 读 + 校验判定）→
+    ③帧级严格解析 → ④密钥加载（**解析通过后才触碰**）→ ⑤重算 + `FixedTimeEquals`（唯一计限流
+    失败 + 300–800 ms 随机延时）→ ⑥审批（quota → `approval_pending` → 三路竞速）→
+    ⑦serverProof + token + `auth_success` → ⑧登记 + 保持。challenge 构造期定稿
+    （sessionId / nonce 此后不变）。
+  - `FailedAuthLimiter`（166 行）：10 分钟滑窗 / 5 失败 → 60 s 封禁；封禁到点**放行**、
+    再失败即再封（净效果：持续攻击被压到「每 60 s 一次尝试」直到旧记录滑出 10 分钟窗）；
+    成功清全部（含封禁）；条目懒清理；`TimeProvider` 可注入；零日志。
+  - `LocalApprovalGate`（119 行）：`ILocalApprovalGate` + `LocalApprovalOutcome` **5 值显式终态**
+    （无 bool、无 handler ≠ 同意、UI 不可用必须 Unavailable）；不可变请求快照（自称字段标注）+
+    短关联码 = `SHA256("LANREMOTE-APPROVAL-CODE-V1"\0‖sessionId‖clientNonce)` 前 3 字节大写 hex。
+  - `SessionRegistry`（185 行）：`Register` 为 **internal 唯一入口**（认证状态机在
+    `Authenticated` 调用）；token 防御性拷贝；`SessionRegistration.Dispose` → 注销 + token 清零；
+    公开面只有计数 / Snapshot（无 token、无注册入口——反射测试钉死）。
+- **修改 ×6**：`AcceptedConnection`（+37/−）、`AuthProtocol`（+31：8 常量）、
+  `ControlPreAuthSession`（+76/−：交接改写）、`TransportHost`（+16：指纹冻结 + 上下文构造）、
+  `ControlPreAuthSessionTests`（+108/−：适配 2 参构造 + 门禁改写）、`HostRole`（±5：
+  `localShutdownSent` UNOBSERVED 行更新——M4 起成功路径不再关闭连接）。
+- **测试 +25**（`ControlAuthSessionTests.cs`，1241 行；真实回环 TLS + 真实 `TransportHost` 全链；
+  21 方法 = 20 Fact + 1 Theory×5）：
+  - 交接 exactly-once ×2：`BeginAuthentication_Is_Exactly_Once_Per_Handoff`（detached 流）+
+    `Auth_Session_Cannot_Be_Run_Twice`（第二次必抛「只允许跑一次」）。
+  - 成功全链 ×1：帧序列**恰为** `[auth_challenge, approval_pending, auth_success]`；客户端
+    **独立**重算 proof / 验证 serverProof（两套独立算式交叉印证）；登记摘要逐字段；token 与
+    下发逐字节相同；保持探针；断开后注销清零。
+  - 失败面 ×6：错钥（计数 = 1）/ 篡改 permission / 篡改指纹（签名页 ≠ 报文页构造）/
+    帧违规（零长度前缀 → `auth-frame:length-zero`，不计）/ 断连 EOF（不计）/ 密钥存储失败
+    fail closed。
+  - 时限/限流 ×2：机器窗口 700 ms 截断拖流（可证伪耗时断言）/ 被限流源**收不到 challenge**。
+  - 审批面 ×8 方法：终态 Theory ×5（denied / cancelled / unavailable / timedout /
+    抛异常→Unavailable，全 fail closed）/ 错请求 ID / 越权授予拒 / 降级 view-only 允许 /
+    窗口截断 + 迟到决定作废 / 断连作废迟到决定 / 配额截断第二个待批（双连接）。
+  - 数值/DoD ×3：失败延时边界（200–400 ms 上下界）/ 反射（公开面无注册无 token）/
+    帧键集白名单（`AssertJsonKeySet` 逐帧精确相等）。
+
+**实测事实（本阶段新增，全部实锤）**
+
+- **测试夹具竞速（本阶段最贵的一课）**：harness 在服务端出结局后立即拆线（cancel + dispose），
+  与客户端脚本「读最后一帧」构成竞速——快速失败路径（错钥 / 被限流 / 即时拒绝）下偶发
+  「收不到 generic 失败帧 / approval_pending」；修复 = 拆线前先
+  `await Task.WhenAny(clientTask, Task.Delay(TimeSpan.FromSeconds(3)))` 给客户端自然收场机会
+  （服务端收线后正文先于 FIN 到达，读类脚本毫秒级自结束；静止类脚本由后续 cancel 兜底）。
+  **教训：测试夹具的「清理」也是被测系统的一部分**——拆线快 ≠ 对。
+- 「迟到决定」测试的延时**不能绑 stall 令牌**（harness 取消它会把这笔「迟到」吞掉，测不到
+  目标路径）——改用不绑令牌的 `Task.Delay(150)`。
+- `Assert.False(probe.Frames.Contains(...))` 触发 xUnit2017 → 改 `Assert.DoesNotContain`。
+- 机器窗口「压线后置校验」（读返回后立即查 `IsCancellationRequested`）在代码里只有两行——
+  没有它，「窗口 + 解析耗时」会漂移成实际 deadline。
+
+**设计微决策（记录在案；合同级内容已 ADR-041 化）**
+
+- 失败帧是 best-effort（对端可能早走了，发不出去不改变「已拒绝」）；但**停机取消照常上抛**。
+- `ControlAuthResult` 成败都带 `SessionId`（日志关联）；15 个 `auth-*` 前缀失败短码只进本地。
+- `RequireLocalApproval=false` 时跳过审批阶段（发 success 前无 `approval_pending`）——测试用。
+
+**变异验证（4 组；恢复后均以 `git diff` + `grep TEMP-MUTATION` 确认干净）**
+
+- M1「proof 校验恒成功」（`false && !FixedTimeEquals(...)`）→ **4 红精确**：错钥 / 篡改权限 /
+  篡改指纹 / 失败延时边界（2026-09-22 提交后原样重放核实）；
+- M2「删 `RecordFailure`」→ **3 红**：错钥 + 两条篡改的计数断言；
+- M3「`IsGrantable` 恒真」→ **1 红**：`Over_Grant_In_Decision_Is_Rejected`；
+- M4「双重拆除断连防线」（`winner == clientActivity` 分支与 `clientActivity.IsCompleted`
+  后置校验同时失效）→ **1 红**：`Approval_Disconnect_Discards_A_Later_Decision`——
+  顺带证明纵深防御形态：两道防线各自在场时都测不出，**全拆才红**。
+
+**全量验证**：Debug `dotnet build` **0 警告 0 错误**；`dotnet test` **902 PASS / 0 FAIL**
+（Protocol 223 + Transport 485 + Core 125 + Security 66 + Integration 3；Transport 460→485 = +25）。
+
+**下一站 = 阶段 4（客户端侧，步骤 18–20）**：客户端认证流程（hello → challenge → clientNonce →
+transcript **绑 presentedPin** → response → success → **验证 serverProof**）；失败处理
+（serverProof 验证失败 → 立即断开 + UI 文案「远端身份验证失败，可能是错误密码或伪造设备广播」+
+不发送输入）；客户端 e2e（真 TLS 双端：correct key success / wrong key generic
+`authentication_failed` / serverProof 篡改必拒）。落点估计：`TlsClientConnector` 侧接线 +
+`AuthTranscriptBuilder` 客户端语义复用（**独立重算**，勿共享服务端算式）。

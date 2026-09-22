@@ -1,8 +1,8 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR 工作副本 `docs/DECISIONS.md`（010~040；037=衔接层 / 038=认证协议 / 039=认证核心层次 / 040=canonical 判定式与帧校验合同）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
-> 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；本文件 ~8.2K 字符 = 安全（2026-09-22）。
+> ADR 工作副本 `docs/DECISIONS.md`（010~041；037=衔接层 / 038=认证协议 / 039=认证核心层次 / 040=canonical 判定式与帧校验合同 / 041=认证状态机合同级决定）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
+> 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；本文件 8830 字符 = 安全（2026-09-22）。
 > 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
 ## 定位与硬约束
@@ -43,10 +43,10 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
-| **M4** | **进行中：阶段 0、1、2 完成（2026-09-22）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：双档 transcript + HMAC proof 纯函数核心 + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（643 PASS）；阶段 2（**`21a8829`**）：**5 个认证帧 + canonical base64/HEX/GUID + 严格 JSON 解析**（ADR-040；Transport 226→460，**877 PASS**；变异 ×4，M3 抓到一条假测试并修复）。下一站 = 阶段 3（服务端认证状态机）。6 阶段 21 步见 HANDOFF §18 |
+| **M4** | **进行中：阶段 0、1、2、3 完成（2026-09-22）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：双档 transcript + HMAC proof 纯函数核心 + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（643 PASS）；阶段 2（**`21a8829`**）：**5 个认证帧 + canonical base64/HEX/GUID + 严格 JSON 解析**（ADR-040；Transport 226→460，**877 PASS**；变异 ×4，M3 抓到一条假测试并修复）；阶段 3（**`760e950`**）：**服务端认证状态机 + 衔接层落地**——7 产品文件（`ControlPreAuthHandoff` exactly-once / `ConnectionSecurityContext` 冻结 / `ControlAuthSession` 八段主干 / `FailedAuthLimiter` / `ILocalApprovalGate` 5 值终态 / `SessionRegistry` / `ControlAuthContext` 旋钮）+ 25 新测试（真实回环 TLS + 真实 TransportHost 全链；Transport 460→485，**902 PASS**；ADR-041）。下一站 = 阶段 4（客户端侧，步骤 18–20）。6 阶段 21 步见 HANDOFF §18 |
 | M5~M11 | 未开始 |
 
-M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**。
+M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**；M4 阶段 3 = **`760e950`**。
 远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **helper-selector 陷阱**（源码级定论）：`git-credential-helper-selector` 每次被调必弹 GUI（无静默委托、无桌面即挂起、`--help` 也弹并写配置），「`<no helper>`+Always」= 把 `credential.helper` 写成空串（清链）。**已全局修复（2026-09-21）**：`selected = manager` + 链「空值+`manager`」（repo 级同配双保险）；机器级 fill rc=0、trace 只见 GCM；**勿裸跑 selector**。此后每轮收尾 `git push origin main`。
 
 ## 实测事实（别再猜）
@@ -81,6 +81,7 @@ accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 
 - `dotnet test` 全量数总数用 `| grep -E "已通过!|失败!"`：`tail -N` 会截掉**首个**项目结果行（Protocol.Tests 曾被整行吞掉，574→601 的「差值」据此而来）
 - **黄金向量黄金律**：期望值必须来自被测实现之外的**独立第二实现**（`scripts/reference/gen-auth-golden-vectors.py`，纯标准库 Python）；NUL 字面量一律写 `\u0000`——C# 字符串 **`\0` 后跟数字会被解析成八进制转义**（uuid 串以数字开头时必踩，实测）；变异验证专抓「只断言常量关系、不触实现」的假测试（M3 变异实测抓到一条）
 - **测试字面量纪律**：长 base64 **一律 `Convert.ToBase64String` 现造**（`B64(int)` helper），手抄必错——「31 字节」手抄串实为 45 字符（excess padding，非法 base64），测试被别的拒绝路径救活 = 假测试（M4 阶段 2 变异验证第二次抓到同类，邻界值必须走编码器构造）
+- **夹具拆线竞速（M4 阶段 3 实测，最贵一课）**：harness 出结局后立即 `cancel+dispose` 会与客户端「读终帧」抢跑——快速失败路径（错钥/被限流/即时拒绝）偶发丢帧；修复 = 拆线前先 `await Task.WhenAny(clientTask, Task.Delay(3s))` 让客户端自然收场。**拆线快 ≠ 对**：「迟到决定」类测试的延时**不绑 stall 令牌**（绑了会被 harness 取消吞掉，测不到目标路径）
 
 ## 网络 / lab
 
