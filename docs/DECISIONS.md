@@ -907,23 +907,25 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 
 ---
 
-### ADR-041 — 认证状态机的合同级决定（M4 阶段 3 落地）：登记时点、密钥触碰时点、窗口后置校验、限流语义、审批单读者
+### ADR-041 — 认证状态机的合同级决定（M4 阶段 3 历史记录）：登记时点、密钥触碰时点、窗口后置校验、限流语义、审批单读者
 **日期**：2026-09-22（M4 阶段 3）
-**Decision**：
+**状态**：第 3 条旧读后检查与「排队不计入」、第 5 条未定义优先级的竞速解释已由 **ADR-042 取代**；第 1/2 条的本地写出与密钥所有权边界由 ADR-042 澄清。其余不冲突的限流、权限校验与短码规则保留。用户已拍板按状态机接受时刻、`elapsed >= budget` 拒绝，不再等待该合同的外部裁定。
+**Decision（历史，须连同上述取代关系阅读）**：
 
-1. **登记的精确时点 = 「`auth_success` 字节写出成功」**：`SessionRegistry.Register` 只在
-   success 帧经 `FrameWriter` 写出且未抛异常之后调用；写失败（IOException / EndOfStream /
+1. **登记的精确时点 = 「`auth_success` 本地写出成功」**：`SessionRegistry.Register` 只在
+   success 帧经 `FrameWriter` 本地写出且未抛异常之后调用；写失败（IOException / EndOfStream /
    ObjectDisposed）→ `auth-success-not-delivered` → **不登记、不保持、认证不成立**。
+   **澄清**：这个历史短码表示本地写出失败；本地写成功不证明远端已经收到或接受，审批完成后的写出另有预算（ADR-042），不是远端交付确认。
    这是 DoD「auth success 才能有 session」的时序化可执行形式（与 ADR-038 第 5 条配套：
    注册入口 internal + 只有从 `Authenticated` 状态可达的路径调用它）。
 2. **访问密钥的触碰时点 = response 帧通过严格解析之后**：challenge 生成、限流拒绝、
    帧级格式违规全程**不触碰** `IAccessSecretStore`；密钥整个 `RunAsync` 只加载一次、
    `finally` 清零。理由：未认证对端不得用任意垃圾帧驱使 DPAPI / 密钥路径工作
    （攻击面最小化，「格式合规才配见秘密」）。
-3. **机器窗口的后置校验**：读完 response 后**立即**检查窗口令牌 `IsCancellationRequested`
-   ——「response 校验完成 ≤ MachineWindow」是硬语义（读恰好压线完成也算超时）。
-   没有它，窗口实际边界会漂移成「窗口 + 解析耗时」。审批窗口同规理解：
-   自请求提交给审批面起算（ADR-038 第 4 条），排队等待不计入。
+3. **机器窗口的后置校验（已由 ADR-042 取代）**：**2026-09-22 复核结论：旧实现的 CTS 在密钥加载/校验前已释放，且审批计时晚于 gate 调用；「读后检查足够」与「排队不计入」已被真实 TLS 反例证伪（HANDOFF §18.9）。修复后的合同由 ADR-042 定案，不再标作等待评审。** 以下仅保留旧决定原意，不能作为当前实现满足合同的证明：读完 response 后**立即**检查窗口令牌 `IsCancellationRequested`
+   ——旧文写「response 校验完成 ≤ MachineWindow」（又称读恰好压线完成也算超时）。
+   旧解释认为没有它，窗口边界会漂移成「窗口 + 解析耗时」；审批窗口自请求提交给审批面起算（ADR-038 第 4 条），排队等待不计入。
+   **现行替代**：接受必须满足 `elapsed < budget`，不能只看取消令牌；机器窗口覆盖至 MAC 判定的最终接受检查，审批窗口在调用 gate 前起算，包含同步前缀、排队、UI 调度与展示。
 4. **限流实现语义（ADR-038 第 2 条的落地细化）**：
    ① **封禁到点即放行**（`IsBlocked` 不因窗口内保留的 ≥5 条旧记录继续拒）；到期后
    **任一**新失败若窗口内累计仍 ≥5，立即再封 60 s——净效果：持续攻击被压到
@@ -934,7 +936,7 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 5. **审批三路竞速与单读者复用**：审批阶段 = 「决定 / 客户端活动（1 字节读）/ 窗口」三路
    竞速；「客户端活动」这路读同时承担**断连侦测**与**成功后的保持读**——决定胜出时该
    任务原样交接（handoff）给 `HoldUntilDisconnectAsync`，**全程只有一个读者**消费流
-   （审批期间断连 / 越界数据 >0 字节，与窗口到点、迟到决定同规：首个终态胜、其余作废）。
+   （历史表述为「首个终态胜、其余作废」；不能据此让 `WhenAny` 返回顺序决定授权。现行优先级、决定校验后复核及已观察活动边界见 ADR-042）。
 6. **审批决定的校验式**：`Approved` 必须携带 `granted` 且通过 `IsGrantable`——
    降级（control → view）永远可授 / 升级（view → control）仅当请求为 control /
    未定义枚举拒（**不依赖枚举序数**）；请求 ID 不回指、缺权限、越权、未知终态 →
@@ -948,16 +950,202 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 
 **Context**：阶段 3 是 ADR-037（衔接）+ ADR-038（协议定案）+ ADR-040（帧）三层决定在
 服务端状态机的汇合落地；本 ADR 固化实现中**超出三层既有文本**的语义决定——每一条都
-直接映射一个具体失败模式：「写了 success 但对端没收到却登记了 session」/「垃圾帧触发密钥
+直接映射一个具体失败模式：「本地 success 写出失败却登记了 session」（不等于能证明远端收到）/「垃圾帧触发密钥
 路径」/「窗口因解析耗时漂移」/「把 60 s 封禁误读成 10 min 锁死或反之」/「审批期两个读者
 抢一条流」/「越权授予」/「短码被当成认证凭据」。
 **Consequence**：M5 video attach 校验复用 `SessionRegistry.TryGetSessionToken`（internal）；
 `ControlAuthOptions` 是**测试缩放形态**（全部时限可调）——产品默认值单点定义在
-`AuthProtocol`，不得被测试缩放误导；阶段 4 客户端须实现对称的两端验证
-（serverProof 独立重算 + 展示短码）。
+`AuthProtocol`，不得被测试缩放误导；阶段 4 客户端的 serverProof 独立重算与高层连接所有权见 ADR-043。
+短码可计算不等于批准前双端展示已接线；该过程 API 尚未定案，步骤 19 的 Transport 文案与阶段 5 展示接线边界见 ADR-043。
 **可逆性**：未上线（无外部对端）——除第 3 条（放宽 = 弱化 deadline 语义）与第 6 条
 （fail closed 形态）外均可演进；一经两机验收冻结。
-**验证**：25 条 `ControlAuthSessionTests`（真实回环 TLS + 真实 TransportHost 全链）+
+**验证（历史基线，不作为当前时限合同的证明）**：25 条 `ControlAuthSessionTests`（真实回环 TLS + 真实 TransportHost 全链）+
 变异 ×4（M1 于提交后重放核实 = 4 红精确：错钥 / 篡改权限 / 篡改指纹 / 失败延时边界）+
-全量 902 PASS / 0 FAIL。
-**实施时机**：已完成（提交 `760e950`；HANDOFF §18.8；Transport 460→485，全量 902 PASS）。
+当时全量 902 PASS / 0 FAIL。
+**历史落地记录**：提交 `760e950`；HANDOFF §18.8；Transport 460→485，当时全量 902 PASS。后续反例与修复以 ADR-042/043 及对应定向证据为准。
+
+---
+
+### ADR-042 — 服务端单调安全接受 deadline、审批终态与有界迟到 key 所有权
+**日期**：2026-09-22
+**状态**：已定（用户已拍板按状态机接受时刻；不是 UI 点击时刻，不再等待该语义的外部裁定）。
+**关联**：取代 ADR-041 第 3 条旧读后检查/排队不计入与第 5 条含糊的竞速解释；澄清其第 1/2 条的本地写出与密钥所有权。ADR-038 的双 transcript、限流计数口径、审批 fail closed 不变。
+
+**Context**：真实 TLS 反例已证明：response 读后看一次 CTS，不能约束后续密钥加载和 MAC；在 gate 返回 awaitable 后才计时，会漏掉同步前缀与 UI 调度。取消回调延迟也不能成为延长授权窗口的理由。修复目标是「过期结果不得被安全接受」，不是以普通 CTS 承诺任意本机代码都能准点中断。
+
+**Decision**：
+
+1. **截止判据 = 单调时间 + 状态机接受点**。`AuthenticationDeadline` 用同一 `TimeProvider` 的
+   `GetTimestamp` / `GetElapsedTime` 与固定起点计算预算；**`elapsed >= budget` 一律拒绝**，
+   只有 `elapsed < budget` 才可能接受。timer / token 只负责唤醒合作式等待，不能替代接受点的单调复核；
+   timer 未派发也不能接受已过期结果。UTC 只供审批到期时间展示，不参与授权裁决。
+   构造 timer 前已消耗的时间必须扣除，零预算/初始化期间到点不等待 timer。
+2. **机器窗口从 challenge 写出前起算，持续到 proof verdict 的接受点**（默认 10 s）。
+   覆盖 challenge 写出、response 读取、严格解析、loader 准入等待、store 同步前缀/异步加载、
+   transcript/HMAC 与 `FixedTimeEquals`；读取后、解析后、密钥加载后及 MAC 判定后均复核。
+   **最后复核在 `RecordSuccess` / `RecordFailure`、进入审批之前**：过期时不提交正确/错误 proof 的结论，
+   不清空或递增 limiter、不进入审批、不发 success、不登记。及时确定的错误 proof 才计一次失败；
+   随机失败延时及 generic 失败帧是收尾，不延长安全接受窗口。调用方取消优先并保留取消语义；
+   store 自己取消/出错且 caller 与窗口仍有效时是 `auth-key-unavailable`，不是伪装成机器超时。
+3. **秘密加载有独立且有界的所有权**。严格解析 response 前不触碰 store；每次认证至多加载一次，
+   store 返回独立 key 数组。`ControlAuthContext.SecretLoader` 跨该 context 的连接共享，
+   **同一 context 最多一项尚未真正终结/清理的实际 store 工作**，不是每连接各建一个 loader，
+   也不声称是进程全局上限。准入等待消耗该连接的机器预算，可取消且不启动新的 store 工作。
+   - 正常返回：key 所有权交给认证会话，loader 释放准入；会话在 `RunAsync` 的 `finally` 清零自己的 key。
+   - 等待取消但 store 不合作：等待者可以退出，**唯一 late-result owner 继续持有准入**；
+     late success 的 `AccessKeyBytes` **先清零，再释放名额**，late fault/cancel 必须被观察并释放名额。
+     不因「不再等待」就提前归还名额；永久不结束的 store 占住该 context 的一个名额，不能不断积累实际加载任务。
+   - 不用 `Task.Run` 包裹同步 store 来伪造硬时限；有界准入不等于能强杀 DPAPI。
+4. **审批从调用 gate 前起算，调用即受理**（默认独立 60 s）。待批配额仍为独立全局 3 / 单源 1；
+   `approval_pending` 本地写出有自己的写预算，失败不得提交 gate。
+   之后在调用 `RequestApprovalAsync` 前建立 deadline，包含 gate 同步前缀、排队、Dispatcher 调度、
+   展示及人类等待；**不存在不计时的前置队列**。`ExpiresAt` 仅为显示用 UTC 提示。
+   gate 必须快速返回 awaitable，取消回调也必须快速非阻塞；UI 不可用仍为 `Unavailable`。
+5. **审批终态优先级固定为 `caller 取消 > 截止 > 已观察客户端活动 > 决定`**。
+   `WhenAny` 只唤醒，不按参数顺序或哪个 Task 先返回来批准；先复核 stop 条件，再读取并校验决定，
+   **校验 RequestId、Outcome、GrantedPermission 后，在最终接受前再次按同一优先级复核**。
+   gate fault/cancel 的异常路径也要复核，不能用 `Unavailable` 掩盖 caller 取消或已发生的超时/活动。
+   已观察的 0 字节/读故障是断连，>0 字节是越界数据；均不能发 token。只有合法 `Approved` 且
+   grant 不高于请求权限才接受；迟到决定不能反转已定终态。UI 点击及时但状态机接受已到点，仍拒绝。
+6. **单读者与清理边界**。审批期唯一的一字节活动读在批准后原样交给保持阶段；
+   不为了复核、清理或探测「是否还有字节」新增读取。失败/取消时观察迟到任务异常，关闭流仍由 Host 最终负责。
+   终态确定后的 gate 取消是合作式清理，不是重新裁决；取消回调抛错不得覆盖既定结局。
+   这里的「活动优先」只指接受检查时**已经观察到的活动任务状态**，不保证识别尚未完成的网络读，
+   也不保证批准之后的断连永远先于 success 写出被发现。
+7. **审批接受、success 本地写出、会话登记是三个不同边界**。审批终态接受后，serverProof/token 构造及
+   success 写出不再受已结束的审批窗口约束；success 使用 `FrameWriter` 的独立写预算
+   （当前传入 `_timeouts.LengthPrefixTimeout`，覆盖整帧本地 write/flush）及 caller token。
+   本地写失败/该写预算取消 → `auth-success-not-delivered`，不登记、不保持；本地 write/flush 成功后才登记。
+   **本地写成功不证明远端已经收到、验过 serverProof 或接受会话**，协议没有交付确认。
+   不把「接受 deadline 有效」扩大为「deadline 内一定写完 success、完成登记、远端收到或全部清理完成」。
+8. **普通 CTS 的能力边界不变**。同步 DPAPI、gate 同步前缀、阻塞的取消回调都不能被普通 CTS 硬中断；
+   返回后仍须拒绝迟到结果，但永不返回/永远阻塞的本机代码没有准点返回保证。
+   `AuthenticationDeadline.Dispose` 不主动取消，避免释放时额外同步执行 gate 回调；
+   回调异常隔离也不等于能消除阻塞。以上边界不得被测试替身的合作行为掩盖。
+
+**源码依据**：`src/LanRemote.Transport/AuthenticationDeadline.cs:13`、
+`src/LanRemote.Transport/AuthenticationSecretLoader.cs:17`、`src/LanRemote.Transport/ControlAuthContext.cs:59`、
+`src/LanRemote.Transport/ControlAuthSession.cs:180`（机器窗口）、`src/LanRemote.Transport/ControlAuthSession.cs:410`（审批窗口）、
+`src/LanRemote.Transport/ControlAuthSession.cs:467`（最终复核）、`src/LanRemote.Transport/ControlAuthSession.cs:605`（优先级）、
+`src/LanRemote.Transport/LocalApprovalGate.cs:102`、`src/LanRemote.Transport/FrameWriter.cs:25`。
+
+**定向证据与证明边界**：
+- `outputs/m4-deadline-review/final-mutation-1..5-build.log` 均构建成功，随后 `final-mutation-1..5-tests.log`
+  命中测试断言；不是把编译失败当作防线命中。逐项红/绿为：
+
+  | 编号 | 定向防线 | 变异红 / 仍绿 |
+  | --- | --- | --- |
+  | 1 | 机器 MAC 后最终接受检查 | 2 / 2 |
+  | 2 | 精确到点、timer 未派发也算过期 | 1 / 0 |
+  | 3 | 审批决定校验后的最终接受复核 | 1 / 1 |
+  | 4 | late secret 清零后才能释放名额 | 1 / 0 |
+  | 5 | 取消等待不能放行仍被卡住的 store 准入 | 1 / 0 |
+
+  `final-mutation-1..5-restored.log` 是三个目标源文件的恢复哈希检查，不冒充回绿测试日志。
+- `tests/LanRemote.Transport.Tests/ControlAuthDeadlineTests.cs:16`（机器密钥/MAC 边界）、
+  `tests/LanRemote.Transport.Tests/ControlAuthDeadlineTests.cs:114`（gate 同步前缀）、
+  `tests/LanRemote.Transport.Tests/ControlAuthDeadlineTests.cs:138`（按接受时刻裁决）使用真实回环 TLS / Host，
+  可控单调时钟允许故意不派发 timer。`tests/LanRemote.Transport.Tests/AuthenticationSecretLoaderTests.cs:127`
+  与 `tests/LanRemote.Transport.Tests/AuthenticationSecretLoaderTests.cs:281` 是 loader 所有权与有界准入单元测试，不是 DPAPI 强杀证明。
+- `tests/LanRemote.Transport.Tests/ControlAuthCleanupTests.cs:110` 是预先完成活动任务的优先级判定器测试，
+  `tests/LanRemote.Transport.Tests/ControlAuthCleanupTests.cs:229` 是受控 I/O 的写取消映射；
+  不冒充真实 TLS 竞速/网络写超时实测，也不声称直接观察到了私有包装读任务的异常清理。
+  `tests/LanRemote.Transport.Tests/ControlAuthCleanupTests.cs:157` 的真实 TLS 迟到 gate 决定只证明已定拒绝不会被反转。
+
+**Consequence / 可逆性**：旧「读后检查足够」「排队不计入」不得回退；清晰区分安全接受、合作式取消、
+本地写出和资源回收。当前记录只引用定向证据，最终全量 Debug/Release 数字与收口结论留给 `HANDOFF.md`，本 ADR 不代填。
+
+---
+
+### ADR-043 — 客户端高层独占连接、实际 presentedPin、权限 serverProof、时限与内存清理边界
+**日期**：2026-09-22
+**状态**：已定（M4 阶段 4 Transport 合同；不等于验收器 UI 或阶段 5 已完成）。
+**关联**：落实 ADR-028 的实际 TLS 指纹绑定、ADR-038 的双 transcript/grant proof、ADR-040 的严格帧解析；
+客户端采用 ADR-042 的单调安全接受原则，但两端计时起点不同，不能把本地等待窗口当作远端审批时刻。
+
+**Decision**：
+
+1. **高层连接入口独占整个认证过程**。`ControlClientConnector.ConnectAndAuthenticateAsync` 接收冻结的
+   `ConnectionTarget`，内部建立 TLS、写 hello 并认证；不接收调用方已持有的流，不交出中间 `TlsConnection`。
+   所有验证与接受检查通过，且返回 `AuthenticatedControlSession` 时，才向高层公开成功并移交独占连接。
+   失败/取消关闭仍由本次调用拥有的连接；调用方取消保留 `OperationCanceledException`，底层 TLS
+   `AuthenticationException` 不冒充 serverProof 失败。既有低层 `TlsClientConnector` 不因此变成完整访问密钥认证入口。
+2. **公开会话不暴露 stream、sessionToken 或输入发送能力**。公开信息仅含冻结身份、已验证权限、SessionId、
+   ShortCode 及释放能力；stream/token 只供未来 Transport 消费方内部独占使用，不得另起并行读者。
+   `Dispose` 清零私有 token 并关闭连接，允许重复调用；`videoAttachExpiresInMs` 只作为 internal 提示，
+   不是已验证的本地权威 TTL，M5 消费时仍须施加本地上限。M4 不发送输入，也不新增输入 API。
+3. **必须绑定实际 `presentedPin`，不能偷换为 expectedPin**。TLS 校验回调从实际证书 DER 计算并捕获指纹，
+   冻结身份的 `PinsMatch` 必须成立；challenge 的 `serverDeviceId` 必须匹配冻结目标，
+   challenge 指纹必须与 `Identity.PresentedCertSha256` 做定长比较。不匹配时在发送 response 之前拒绝。
+   ClientAuthTranscript 的证书字段明确取 `PresentedCertSha256`，不回读 discovery，不以 challenge 自称或
+   期望 pin 替代实际 TLS 事实；其余字节布局仍精确遵循 ADR-038。
+4. **权限门禁与 serverProof 门禁独立且缺一不可**。仅允许保持请求权限或 `Control → ViewOnly` 降级，
+   `ViewOnly → Control` 即使附有有效 MAC 也拒绝；未定义权限由严格解析拒绝。
+   使用**本次本地保存的 ClientAuthTranscript + 实际收到的 grantedPermission** 重建 ServerGrantTranscript，
+   按 ADR-038 的 `HMAC-SHA256(key, UTF8("server\0") || ServerGrantTranscript)` 重算并 `FixedTimeEquals`。
+   不能用 requestedPermission 替代实际 grant。MAC 后再次检查接受 deadline，再提交 proof 判定；
+   会话构造后还要复核，失败则清理未移交会话。验证成功前不把 token 交给会话消费者。
+   serverProof 不符的本地短码为 `client-server-proof-mismatch`，固定展示文案精确为
+   **「远端身份验证失败，可能是错误密码或伪造设备广播」**（常量本身无句末标点）。
+   认证异常不携带远端载荷、key、proof、token 或可能包含它们的内层异常；本地短码不发送给对端。
+5. **客户端时限按协议事件的原始单调起点计算，`elapsed >= budget` 拒绝**。
+   - hello 使用自己的写预算；**hello 本地写完后**起算默认 **10 s machine**，覆盖 challenge 读取/解析/身份校验、
+     response 构造/写出，以及首个合法 pending 的接受或直接 success 的完整权限/MAC/会话接受检查。
+   - challenge 的 `expiresInMs` 仅收窄：以**收齐 challenge 的时刻**为起点，解析耗时也扣除，
+     有效余量为本地 machine 与该提示窗口余量的最小值，父窗口从不重置；远端给 15 s 或更大也不能延长本地 10 s。
+   - response 写完后才接受 pending；**首次严格解析合法的 pending 被状态机接受时**记录起点，
+     开始独立默认 **60 s approval**，不链接已经结束的 machine/challenge token。
+     **duplicate pending 立即拒绝**，不忽略后继续等待、不续期；pending 接受不是远端 gate 受理时刻的证明。
+   - 审批期等首个长度前缀可用整个剩余 approval 预算，不被默认短前缀超时误杀；一旦开始 payload，
+     仍取 payload 分段预算与窗口剩余量的最小值。机器期前缀同样取分段预算与窗口余量的最小值。
+     分段读取、解析、身份/权限校验与 MAC 后均复核，timer/token 只是合作式唤醒，不能把收到字节当作已及时接受。
+6. **认证只消费首个终帧**。允许 challenge → response → success，或 challenge → response → 一次 pending → success；
+   也在相应等待阶段接受严格的 generic failure 并拒绝。已消费位置上的乱序/重复 challenge、duplicate pending、
+   非法类型或格式均拒绝；**不为探测未来的第二个 success 再读一帧**。
+   返回成功会话后的后续帧由未来协议消费方处理，不能声称认证层已经检测所有未来重复终帧。
+7. **key 在首次 await 前复制；清理只承诺产品实际拥有且可擦写的缓冲区**。
+   调用方提供 16 字节 key，高层入口同步复制后只读私有副本，不持有调用方可变输入；
+   成功、失败、取消都在退出时清零私有副本，**不清零调用方数组**。
+   客户端清理收到的认证 payload、response 序列化数组、临时 clientProof/expectedProof、
+   自有 transcript 字节；success 帧内 token 在失败或复制入会话后清零，会话私有 token 在 Dispose 时清零。
+   - `AuthSuccessFrame.TryParse` 的 token 解码使用 **32 字节 stack buffer**，canonical 重编码使用栈上 char buffer；
+     仍要求解码恰好 32 字节且 round-trip 逐字符相等，不能只检查 BCL 可解码或长度。
+     栈上临时 token、canonical chars 及临时 serverProof 在 `finally` 清理；合法 `+` / `/` 不误拒。
+   - `FrameReader.ReadPayloadAsync` 在 EOF、I/O、取消及其他异常时清零**整块尚未交付的自有 payload buffer**，
+     然后原样重抛；成功时交出原数组，由调用方负责清理。上层读完后若 deadline 复核失败，也清理尚未移交的 payload。
+   - **不保证擦除 DTO 的不可变 string、JSON/编码器/运行时内部副本或 TLS 内部副本**。
+     清零一个数组不等于全进程无残留；也不把客户端上述清理扩大为服务端 success 序列化、FrameWriter
+     内部帧副本全部已擦除的保证。stack buffer 是缩小可控临时副本，不是消灭所有副本的证明。
+8. **交付与 UI 接线边界**。步骤 19 的 Transport 异常类型、短码和固定 serverProof 文案已提供；
+   **验收器展示接线仍在阶段 5**，本 ADR 不声明验收器 UI、产品 WPF UI 或阶段 5 收口完成。
+   ShortCode 当前只随成功会话公开；「两端都能算」不等于「批准前双端已展示」。
+   **批准前双端短码展示需要新的认证过程 API，形态当前未定**，不能靠提前泄露连接/token 或假称现有返回值已经支持。
+
+**源码依据**：`src/LanRemote.Transport/ControlClientConnector.cs:23`（高层入口）、
+`src/LanRemote.Transport/ControlClientConnector.cs:121`（窗口）、`src/LanRemote.Transport/ControlClientConnector.cs:223`（challenge）、
+`src/LanRemote.Transport/ControlClientConnector.cs:271`（回复顺序）、`src/LanRemote.Transport/ControlClientConnector.cs:322`（权限/proof）、
+`src/LanRemote.Transport/ControlClientConnector.cs:375`（分段读取）、
+`src/LanRemote.Transport/TlsClientConnector.cs:55`、`src/LanRemote.Transport/AuthenticatedControlSession.cs:10`、
+`src/LanRemote.Transport/ControlClientAuthenticationException.cs:8`、
+`src/LanRemote.Transport/Auth/AuthSuccessFrame.cs:181`、`src/LanRemote.Transport/FrameReader.cs:118`。
+
+**定向证据与不得扩大的范围**：
+- 首轮 `outputs/m4-deadline-review/client-mutation-10-summary.log`：01–09 共 **9 项**真实产品变异，
+  全部在构建成功后命中目标断言；变异 **24 红 / 16 绿**，逐项恢复 **0 红 / 40 绿**。
+  防线包括 serverProof 比较、实际 grant 绑定、overgrant、challenge device/实际 pin、MAC 后 deadline、
+  duplicate pending、token canonical round-trip、读失败 buffer 清零。
+- 首轮**保留测试 clock 观察点改进**：到期事件移到权限/MAC 前检查取样之后，本次仍返回旧采样；
+  删除 MAC 后检查也不能一并删掉测试的到期事件。该白盒具名阶段顺序以后若增加取时点必须复核，
+  不应把这项测试改进当作待恢复的产品变异。
+- 第二轮 `outputs/m4-deadline-review/client-mutation-rerun-summary.log`：11–19 同样 **9 项**，
+  同样 **24 红 / 16 绿**、恢复 **0 红 / 40 绿**；前后 `src/tests` 被跟踪或未忽略的 **181 个文件**
+  文件集及 SHA-256 清单一致，四份指定测试未改。两轮红绿数均为**测试执行次数，不是去重用例数**。
+- MAC 后单点变异中，错误 proof 的两例由 timeout 错变 proof-mismatch 而红；正确 proof 两例仍被会话构造后复核拒绝，
+  不能把它们称为 MAC 后单点独立覆盖。实际 pin 变异证明「错误 challenge pin 在 response 前被拒」，
+  不声称在正常 `PinsMatch` 连接中用这项实验区分了数值相等的 expectedPin 与 presentedPin 来源。
+- buffer 清零变异的四例失败来自可观察原数组的自定义 Stream；不是 TLS 内部缓冲或 DTO string 擦除证明。
+  duplicate pending 变异保留原窗口，只证明立即拒绝的合同，不能外推成已单独验证所有窗口起点变异。
+
+**Consequence / 可逆性**：高层调用方只消费已认证会话，不参与中间连接读写；任何放宽 pin、权限、proof、
+接受 deadline 或所有权边界的改动都须重新评审。以上是 Transport 合同与定向证据，不是最终全量验收；
+**最终全量 Debug/Release 数字、阶段 5 与两机验收结论留 `HANDOFF.md` 记账，本 ADR 不预写通过结论**。
