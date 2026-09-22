@@ -1,34 +1,34 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-21 22:05 (+08:00)**
+> 更新时间：**2026-09-22 10:25 (+08:00)**
 >
-> 本轮（**M4 开工 · 阶段 0「衔接盘点与定案」**）**动了代码**：
-> `src/LanRemote.Discovery/DiscoveryDeviceCache.cs`（ADR-027 身份冲突语义落地）与两处测试
-> （`DiscoveryDeviceCacheTests` +8、`TlsClientConnectorTests.Frozen_Pin...` 有意识改写）；
-> 其余为定案文档（`docs/DECISIONS.md`：ADR-027 修订 + 新增 ADR-037/038）。
+> 本轮（**M4 · 阶段 1「transcript + HMAC proof 纯函数核心」**）**动了代码**：
+> 新增 `src/LanRemote.Security/Auth/`（`AuthProtocol` + `AuthTranscriptBuilder`）与 34 条测试
+> （Security 66→100）、入库独立黄金向量脚本 `scripts/reference/gen-auth-golden-vectors.py`、
+> `docs/PROTOCOL_AND_SECURITY.md` 工作副本 §9 同步（本地修订 1）。
 >
-> 本轮的实质内容：**把「PreAuthenticated 之后」的衔接与 M4 认证协议全部定案并写成 ADR +
-> 落地 ADR-027**（发现层身份冲突：同 deviceId 不同指纹不再静默覆盖，标记冲突禁用入口）。
-> 逐条见 §18.5。
+> 本轮的实质内容：**ADR-038 双档 transcript（client / grant）与两个 HMAC proof 落地为可测纯函数**；
+> 黄金向量由独立 Python 参考实现生成（期望值不取自被测实现，ADR-034 纪律）；变异 ×4。
+> 逐条见 §18.6。
 >
-> **2026-09-21 晚补记**：第二轮外部评审已回收并按纪律分流
-> （`docs/M3_IMPLEMENTATION_REVIEW_TRIAGE.md`；两处缺陷级发现：transcript 拆分、pre-auth 外层信封）。
-> 计划修订见 §18.4。
+> 上轮（2026-09-21）：M4 阶段 0「衔接盘点与定案」（ADR-037/038 + ADR-027 落地），见 §18.5；
+> 第二轮外部评审回收见 §18.4。
 
 ---
 
 ## 1. 当前状态
 
-- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0 完成（2026-09-21；
-  盘点定案 + ADR-027 落地件；单机全量验证 609 PASS；执行记录见 §18.5）**
-- **下一里程碑步骤：M4 阶段 1 —— transcript + HMAC proof（纯函数核心）**
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0）
+- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0、1 完成（2026-09-22；
+  阶段 1 = 双档 transcript + HMAC proof 纯函数核心 + 独立黄金向量；单机全量验证 643 PASS；
+  执行记录见 §18.5 / §18.6）**
+- **下一里程碑步骤：M4 阶段 2 —— 认证消息帧（JSON 严格解析）**
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0、1）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`2312e70`**（M4 阶段 0：ADR-027 身份冲突落地（Discovery）+ ADR-037/038
-  定案；上一条代码提交 `2dee00c` = M3.1 加固）。
-- **Working tree at validation（M4 阶段 0）：无未提交代码**——609 PASS 跑的就是被如实提交为
-  `2312e70` 的工作树；验证后未再动代码（其后记账提交只动文档）。
+- **Last code commit：`35506b5`**（M4 阶段 1：`LanRemote.Security/Auth` 双档 transcript +
+  proof + 黄金向量脚本 + 工作副本修订；上一条代码提交 `2312e70` = M4 阶段 0）。
+- **Working tree at validation（M4 阶段 1）：无未提交代码**——643 PASS 跑的就是被如实提交为
+  `35506b5` 的工作树；验证后未再动代码（其后记账提交只动文档）。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 与 M4 阶段 0 均已改动 `src` / `tests`**——M3 两机验收的旧物料（zip `f81d194c…`，由
@@ -1724,7 +1724,8 @@ Private（B 机为 `already Private`）。类别还原逻辑自 v3 起存在（�
 ## 18. 下一步 —— M4（Access Key Challenge Auth）· 计划与执行
 
 **状态：进行中。**阶段 0（衔接盘点与定案）**已完成（2026-09-21）**，含 ADR-027 落地件；
-执行记录见 §18.5，下一步为阶段 1（transcript + HMAC 纯函数核心）。
+阶段 1（transcript + HMAC 纯函数核心）**已完成（2026-09-22）**。
+执行记录见 §18.5（阶段 0）/ §18.6（阶段 1），下一步为阶段 2（认证消息帧 JSON 严格解析）。
 （M3 已全链闭环：24 步 + 两机验收 PASS + 两机 lab 还原；仓库已推 GitHub。）
 本计划按 `LanRemote_Implementation_Package/04_PROTOCOL_AND_SECURITY.md` §9/§14/§15 +
 `07_MILESTONES_AND_TASKS.md` M4 编制；阶段 0 的盘点结论已落为 ADR-037/038（`docs/DECISIONS.md`）。
@@ -1768,15 +1769,18 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
    **并已随本阶段落地**（实现 + 8 条新测试 + 1 处既有测试有意识改写；见 §18.5）。
 4. ✅ 第二轮外部评审输入：已回收（2026-09-21，见 §18.4）。
 
-**阶段 1 —— transcript + HMAC proof（纯函数核心）**
+**阶段 1 —— transcript + HMAC proof（纯函数核心）** ✅ 完成（2026-09-22，执行记录见 §18.6）
 
-5. `AuthProtocol` 常量：版本串 `LANREMOTE-AUTH-V1`、字段名、各时限。
-6. `AuthTranscriptBuilder`：固定字段顺序、`\0` 分隔、base64 canonical、uppercase hex；
+5. ✅ `AuthProtocol` 常量：版本串 `LANREMOTE-AUTH-V1`、字段名、各时限。
+6. ✅ `AuthTranscriptBuilder`：固定字段顺序、`\0` 分隔、base64 canonical、uppercase hex；
    输入全部字节级确定（uuid 串 / base64 / hex / 枚举）。
-7. `clientProof = HMAC-SHA256(accessKeyBytes, transcript)`；
-   `serverProof = HMAC-SHA256(accessKeyBytes, UTF8("server\0") || transcript)`。
-8. 测试：deterministic transcript（同输入字节级相同）；correct / wrong key；
-   modified cert fingerprint / modified permission（改任一字段必改 proof）。
+7. ✅ `clientProof = HMAC-SHA256(accessKeyBytes, ClientAuthTranscript)`；
+   `serverProof = HMAC-SHA256(accessKeyBytes, UTF8("server\0") || ServerGrantTranscript)`
+   ——**本条已按 ADR-038 修订为双档拆分**：计划原文的「serverProof 绑单 transcript」作废，
+   现为「绑 ServerGrantTranscript（域分隔 `LANREMOTE-GRANT-V1` + SHA256(client 档) + granted）」。
+8. ✅ 测试：deterministic transcript（同输入字节级相同）；correct / wrong key；
+   modified cert fingerprint / modified permission（改任一字段必改 proof）；
+   另加：黄金向量逐字节（3 向量 + granted 篡改对照）、双档 NUL 分割（8/3 段）、参数校验。
 
 **阶段 2 —— 认证消息帧（JSON 严格解析）**
 
@@ -1936,3 +1940,45 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 - 下一站 = 阶段 1（transcript + HMAC proof 纯函数核心）；落地时同步
   `docs/PROTOCOL_AND_SECURITY.md` 工作副本与 ADR-038 的差异（**以 ADR-038 为准**）。
 - 两机验收重跑仍不急：物料需重打（本轮已含 Discovery 改动），归入 M4 收口批次。
+
+### 18.6 阶段 1 执行记录（2026-09-22）—— 双档 transcript + HMAC proof 纯函数核心
+
+**状态：完成**（提交 `35506b5`，6 files，+1113/−11；步骤 5–8 全落地）。
+§18.5 D 节遗留：「工作副本同步 ADR-038」**已完成**；「两机验收重跑」仍挂账（物料需重打）。
+
+**产出与落点**
+
+- `src/LanRemote.Security/Auth/AuthProtocol.cs` —— 协议词汇表单一事实源：
+  两个域串（`LANREMOTE-AUTH-V1` / `LANREMOTE-GRANT-V1`）、`server\0` 前缀、5 个帧 type、
+  16 个 JSON 字段名、4 个尺寸（nonce/proof/token/cert 均 32B）、两个时限初值
+  （认证 10s / 审批 60s，provisional，待数值实验回写）、权限词（`view`/`control`）
+  + `EncodePermission`（未定义枚举值抛异常——防将来扩展枚举时静默误编码）。
+- `src/LanRemote.Security/Auth/AuthTranscriptBuilder.cs` —— 纯函数核心：
+  `BuildClientTranscript` / `BuildGrantTranscript` / `ComputeClientProof` / `ComputeServerProof`。
+  输入全部强类型（`Guid` / `ReadOnlySpan<byte>` / 枚举）、**不接收 string**（规范形式只由本类
+  输出，从类型上消灭「对端编码差异（hex 大小写 / 非规范 base64 / uuid 格式）进 transcript」
+  整类问题）；固定长度字段（nonce×2 / cert / key）不符即 `ArgumentException`（fail fast）。
+- `scripts/reference/gen-auth-golden-vectors.py`（入库）—— 独立 Python 参考实现（只用标准库
+  hmac/hashlib/base64/uuid）；输出 3 个黄金向量（control/control、view/view、
+  requested=view+granted=control）+ granted 篡改对照向量 + 可直接粘贴的 C# 常量块
+  （NUL 用 `\u0000` 转义——C# 的 `\0` 后跟数字会被解析为八进制转义，是实测踩过的坑）。
+- 测试 +34（Security 66→100）：`AuthProtocolTests` 8 条字面量锁定；
+  `AuthTranscriptBuilderTests` 26 条 case（黄金向量逐字节/hex、client 档 8 段 / grant 档 3 段
+  NUL 分割、域分隔、字段敏感性、granted 篡改必致 serverProof 验证失败、前缀参与 MAC、参数校验）。
+- `docs/PROTOCOL_AND_SECURITY.md` 工作副本 §9 同步 —— 头部「本地修订记录」+【本地修订 1】
+  （双档 transcript + serverProof 绑 grant 档；原文保留对照）；该文件自此进入「随里程碑修订」模式。
+
+**变异验证（4 次）** —— 恢复后均以 `git diff` + `grep TEMP-MUTATION` 确认干净：
+
+- M1「client 档追加尾随 `\0`」→ **8 红**（3 向量链 + 8 段分割 + granted 篡改对照）；
+- M2「cert 改小写 hex」→ **8 红**（同组；uppercase 合同受黄金向量保护）；
+- M3「serverProof 去 `server\0` 前缀」→ 首轮 4 红；**由此发现
+  `ServerProof_DependsOnServerPrefix` 只断言常量关系、不断言实现输出**（变异下不红）——
+  立即强化为「实现输出 ≠ 无前缀 HMAC」，**重放 M3 确认 5 红**；
+- M4「移除 serverNonce 长度校验」→ **精确 3 红**（theory 全 case，零误伤）。
+
+**全量验证**：Debug `dotnet build` **0 警告 0 错误**；`dotnet test` **643 PASS / 0 FAIL**
+（Protocol 223 + Transport 192 + Core 125 + Security 100 + Integration 3）。
+
+**下一站 = 阶段 2（认证消息帧 JSON 严格解析）**：4 类帧 + canonical base64 校验/解析；
+照 `HelloFrame` 严格模式（重复字段 / 未知字段 / 大小写 / 深度全写死 + 逐项测试）。
