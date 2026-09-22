@@ -858,3 +858,49 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **可逆性**：低风险——纯物理位置；若将来 Security 改多目标（net10.0;net10.0-windows）
 再议（当前不做，M1 决策不动）。
 **验证**：NU1201 实测（Transport→Security 引用实验，已回退）；重定位后全量测试总数不变。
+
+---
+
+### ADR-040 — 认证帧的 canonical 判定式与拒绝分类（M4 阶段 2 落地）
+**日期**：2026-09-22（M4 阶段 2）
+**Decision**：
+
+1. **canonical 的唯一定义 = round-trip 逐字符相等**：`CanonicalBase64` / `CanonicalHex` /
+   `CanonicalGuid` 一律实现为「宽松 decode → 重新 encode → Ordinal 比较」。
+   - **base64**：标准字母表（含 `+` `/`）、必须带正确填充、长度为 4 的倍数；
+     非规范尾部位拒绝（`"AB=="` 拒）；`"AA++"` / `"AA//"` **是**合法 canonical
+     （`+` `/` 属标准字母表，实测纠正过先入为主的误判）。
+   - **HEX**：只接受 `Convert.ToHexString` 的输出形状（uppercase）；**长度语义不在编码层
+     强制**（31 字节的大写 hex 形状合法），归帧层——有显式测试锁定这条边界防漂移。
+   - **GUID**：只接受 `"D"` 格式（8-4-4-4-12）；大写 / 花括号 / 无连字符 / 前后空白全拒。
+     实测：`Guid.TryParseExact("D")` 容忍大写**和前后空白**——round-trip 是唯一收窄者。
+2. **两端字节一致的机制保证**（与 ADR-038 配合）：帧解析只产出强类型
+   （`Guid` / `byte[]`）；transcript 构造器**不接收 string**——非规范形式进不来，
+   「对端编码差异进 transcript」整类问题在类型层面被消灭；canonical 校验是第二道
+   （**拒绝**而非规范化）。
+3. **跨帧载荷的拒绝分类**：`AuthJson.TryDeserializeStrict` 在结构校验后做可选
+   type 提示预读（`expectedType` / `wrongTypeCode`；扫根对象第一层 `type` 字符串）——
+   结构合法但类型是别的帧时报 `*-wrong-type` 而非 `*-malformed-json`。
+   预读**不影响接受与否**（主反序列化仍是唯一权威）。
+4. **拒绝短码只用于本地日志、永不下发对端**（既有纪律的帧级重申）：五个
+   `challenge-*` / `response-*` / `success-*` / `approval-pending-*` / `auth-failed-*`
+   前缀族一律短码、不含输入内容；对外失败只有 `authentication_failed`（语义为空）。
+5. **`AuthenticationFailedFrame` 提前落地**（阶段 2 附带件，记录在案）：
+   `authentication_failed` 早在 `AuthProtocol` 词汇表中（阶段 1），本帧只是其唯一实现
+   （static class、零字段、永不携带原因码）——阶段 3/4 的公共前置件，
+   避免届时手写第二套 JSON 解析面。
+6. **`clientName` 硬化（本地显示面策略，非规格常量）**：非空 / ≤64 字符
+   （`ClientNameMaxLength`）/ 无控制字符 / UTF-16 良构（孤立代理拒）。名字最终出现在
+   被控端**本机审批面**上；放宽需构造器与解析两处同步。
+
+**Context**：阶段 2 的 5 个帧全部出现在未认证阶段（攻击面最敏感）；每一项宽松
+（重复字段 / 未知字段 / 大小写 / 注释 / 尾逗号 / 尾随内容 / 非法 UTF-8 兜底）都必须显式拒绝
+且逐项有测试（`HelloFrame` 先例 + ADR-037 第 8 条）。帧上限沿用 pre-auth 4 KiB（ADR-033）。
+**Consequence**：帧层所有拒绝路径都有精确本地短码 → 阶段 3/4 状态机可直接用于本地诊断；
+`wrong-type` 预读对恶意对端**无观测差异**（对端只见 generic 失败），纯本地可观测性收益。
+**可逆性**：canonical 判定式**不放宽**（放宽 = 重新引入两端不一致面，危险）；
+`clientName` 上限单点可改。
+**验证**：3 个 canonical 测试文件（往返扫掠 1..96 + 各拒绝组）+ 5 个帧测试的逐项拒绝矩阵 +
+跨帧交叉拒绝（真实序列化字节互喂）+ 变异 ×4；其中 M3 当场抓到并修复一条
+「手抄 base64 坏字面量」造成的**假测试**（测试改用 BCL 编码器构造邻界值）。
+**实施时机**：已完成（提交 `21a8829`；HANDOFF §18.7；Transport 226→460，全量 877 PASS）。
