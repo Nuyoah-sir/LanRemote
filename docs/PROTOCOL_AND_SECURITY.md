@@ -212,7 +212,7 @@ Client 生成 32-byte `clientNonce`。
 Canonical transcript 必须用**固定字段顺序的二进制/UTF8 构造函数**，不要直接对任意 JSON 字符串做 HMAC，因为空格/字段顺序会不同。
 
 > 【本地修订 1】以下**双档** transcript 为定案形态（ADR-038 第 1 条）；字节级实现见
-> `src/LanRemote.Security/Auth/AuthTranscriptBuilder.cs`，独立黄金向量见
+> `src/LanRemote.Transport/Auth/AuthTranscriptBuilder.cs`，独立黄金向量见
 > `scripts/reference/gen-auth-golden-vectors.py`。
 
 ```text

@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using LanRemote.Core.Models;
 
-namespace LanRemote.Security.Auth;
+namespace LanRemote.Transport.Auth;
 
 /// <summary>
 /// M4 认证 transcript 与 HMAC proof 的纯函数核心。

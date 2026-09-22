@@ -1,10 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
 using LanRemote.Core.Models;
-using LanRemote.Security.Auth;
+using LanRemote.Transport.Auth;
 using Xunit;
 
-namespace LanRemote.Security.Tests;
+namespace LanRemote.Transport.Tests;
 
 /// <summary>
 /// M4 认证 transcript 与 HMAC proof 的确定性测试（纯函数核心，ADR-038 第 1 条）。

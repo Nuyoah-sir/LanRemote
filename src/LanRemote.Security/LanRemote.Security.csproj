@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Security：DPAPI 秘密存储、自签名证书、访问密钥、认证挑战。
-       依赖 Windows DPAPI (ProtectedData, CurrentUser)，因此使用 Windows TFM。M1/M4 施工。 -->
+  <!-- Security：DPAPI 秘密存储、自签名证书、访问密钥。
+       依赖 Windows DPAPI (ProtectedData, CurrentUser)，因此使用 Windows TFM。M1 施工。
+       注：M4 认证协议核心（transcript/proof/帧）在 Transport.Auth（net10.0）——
+       net10.0 项目无法引用本项目的 net10.0-windows（NU1201 实测），见 ADR-039。 -->
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>

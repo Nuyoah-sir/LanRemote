@@ -829,3 +829,32 @@ serverProof 无法证明「服务端对**这条连接请求的权限**做过承�
 correct / wrong key；modified cert fingerprint / modified permission（改任一字段必改 proof）；
 granted 篡改 → 客户端必须拒绝（serverProof 验证失败）。
 **实施时机**：M4 阶段 1–4 全程；数值（第 4 条）随数值实验定案。
+
+---
+
+### ADR-039 — M4 认证协议核心的层次归属：Transport（net10.0），非 Security
+**日期**：2026-09-22（阶段 2 开工盘点；阶段 1 件重定位）
+**Decision**：
+
+1. M4 认证协议核心（`AuthProtocol` / `AuthTranscriptBuilder` / 后续认证帧）位于
+   **`LanRemote.Transport/Auth/`**（命名空间 `LanRemote.Transport.Auth`，net10.0）；
+   Security 不再含认证协议逻辑，继续只负责「必须 Windows 的东西」：
+   DPAPI 秘密存储、自签名证书、访问密钥生成/存储。
+2. **硬约束（实测，非判断）**：`LanRemote.Transport`（net10.0）引用
+   `LanRemote.Security`（net10.0-windows）构建直接失败——
+   `error NU1201: 项目 LanRemote.Security 与 net10.0 不兼容。支持: net10.0-windows7.0`
+   （2026-09-22 本机实测）。而认证核心的**全部消费者都在 Transport 侧**：
+   服务端状态机（阶段 3）接管 `ControlPreAuthHandoff`、客户端流程（阶段 4）在
+   `TlsClientConnector`、验收器/App 均引用 Transport。
+3. 先例一致性：`HelloFrame` / `CertificatePin` 已在 Transport
+   （「传输层消息 + 传输层安全」的先例成立）。
+
+**Context**：阶段 1 曾按 Security.csproj 自述职责（「访问密钥、认证挑战」）把 Auth 核心放
+Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位——机械搬移（`git mv`）+
+命名空间改名，**协议字节与测试语义零变化**（黄金向量不变）。
+**Consequence**：Security.Tests 的 34 条认证测试迁至 Transport.Tests；
+未来 M5 视频 attach 的 proof/帧同规则（Transport）；「Security 引用 Transport」的
+反向依赖被明确禁止（会构成层次倒置）。
+**可逆性**：低风险——纯物理位置；若将来 Security 改多目标（net10.0;net10.0-windows）
+再议（当前不做，M1 决策不动）。
+**验证**：NU1201 实测（Transport→Security 引用实验，已回退）；重定位后全量测试总数不变。

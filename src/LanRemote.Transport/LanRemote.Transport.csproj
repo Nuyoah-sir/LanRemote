@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Transport：TLS/TCP、长度前缀帧协议、连接状态机。
+  <!-- Transport：TLS/TCP、长度前缀帧协议、连接状态机、M4 认证协议核心（Auth/，ADR-039）。
        Control 与 Video 使用两条独立 TLS/TCP 连接（ADR-003），M3 施工。 -->
 
   <PropertyGroup>

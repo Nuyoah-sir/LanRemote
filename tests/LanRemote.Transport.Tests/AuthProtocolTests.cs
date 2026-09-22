@@ -1,9 +1,9 @@
 using System.Text;
 using LanRemote.Core.Models;
-using LanRemote.Security.Auth;
+using LanRemote.Transport.Auth;
 using Xunit;
 
-namespace LanRemote.Security.Tests;
+namespace LanRemote.Transport.Tests;
 
 /// <summary>
 /// M4 认证协议词汇表（<see cref="AuthProtocol"/>）的字面量锁定。

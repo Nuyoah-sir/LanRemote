@@ -1,6 +1,6 @@
 using LanRemote.Core.Models;
 
-namespace LanRemote.Security.Auth;
+namespace LanRemote.Transport.Auth;
 
 /// <summary>
 /// M4 认证协议的常量与规范编码——协议词汇表的单一事实源。
