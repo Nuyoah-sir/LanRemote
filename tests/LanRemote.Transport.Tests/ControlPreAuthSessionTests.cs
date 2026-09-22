@@ -10,7 +10,7 @@ namespace LanRemote.Transport.Tests;
 
 /// <summary>
 /// 步骤 19～21 的验收：首帧只能是 hello / 显式的 <see cref="ControlSessionState.PreAuthenticated"/> /
-/// M3 的终态是干净关闭。
+/// 成功时交出一次性交接对象（ADR-037 起，M3 的「成功即关闭」终态被显式交接取代）。
 /// </summary>
 /// <remarks>
 /// 走的是<b>真实回环 TLS</b>（不是替身）：pre-auth 这一层的失败模式几乎全在
@@ -24,23 +24,27 @@ public sealed class ControlPreAuthSessionTests
     private static readonly TimeSpan PayloadDeadline = TimeSpan.FromMilliseconds(600);
 
     /// <summary>
-    /// 步骤 20 的可执行形式：M3 里 PreAuthenticated 状态<b>不允许任何操作</b>。
+    /// 步骤 20 的可执行形式（M4 形态）：PreAuthenticated 状态下允许的操作<b>恰好一项</b>——
+    /// 「开始访问密钥认证」（ADR-037 第 5 条）。
     /// </summary>
     /// <remarks>
-    /// 这条测试一旦变红，说明有人在 M4 落地前给未认证连接开了口子——**不要改这条测试**，
-    /// 要么撤回那处改动，要么它确实属于 M4 且已经连带落地了认证。
+    /// <b>这条测试在 M4 阶段 3 被有意识改写</b>：M3 版本断言空集合
+    /// （名 <c>PreAuthenticated_Allows_Nothing_Before_M4</c>），M4 落地时按 ADR-037 改成
+    /// <b>精确集合相等</b>——任何人往里加第二项（= 给未认证连接开口子）即红。
     /// </remarks>
     [Fact]
-    public void PreAuthenticated_Allows_Nothing_Before_M4()
+    public void PreAuthenticated_Allows_Exactly_BeginAuthentication()
     {
-        Assert.Empty(ControlPreAuthSession.AllowedOperationsWhilePreAuthenticated);
+        Assert.Equal(
+            new[] { ControlPreAuthHandoff.OperationBeginAuthentication },
+            ControlPreAuthSession.AllowedOperationsWhilePreAuthenticated);
     }
 
     /// <summary>
-    /// 走完全程：客户端发一个合法 hello，服务端进入 PreAuthenticated 并干净关闭。
+    /// 走完全程：客户端发一个合法 hello，服务端进入 PreAuthenticated 并交出交接对象。
     /// </summary>
     [Fact(Timeout = 60_000)]
-    public async Task Valid_Hello_Reaches_PreAuthenticated_And_Closes()
+    public async Task Valid_Hello_Reaches_PreAuthenticated_With_A_Handoff()
     {
         (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
             async (connection, _) =>
@@ -52,6 +56,13 @@ public sealed class ControlPreAuthSessionTests
 
         // 状态不是"猜出来的"：会话对象自己也停在这个状态上。
         Assert.Equal(ControlSessionState.PreAuthenticated, session.State);
+
+        // ADR-037 第 1 条：成功 = 交出一次性交接对象（不是关闭连接）；
+        // 交接对象带着冻结的安全上下文（字段值来自这条真实回环连接）。
+        ControlPreAuthHandoff handoff = Assert.IsType<ControlPreAuthHandoff>(result.Handoff);
+        Assert.NotEqual(Guid.Empty, handoff.Security.ConnectionId);
+        Assert.Equal(IPAddress.Loopback, handoff.Security.RemoteAddress);
+        Assert.Equal(CertificatePin.LengthBytes, handoff.Security.ServerCertificateSha256.Length);
     }
 
     /// <summary>
@@ -119,50 +130,49 @@ public sealed class ControlPreAuthSessionTests
     }
 
     /// <summary>
-    /// 步骤 21 的端到端形式：hello 之后连接必须<b>已经关闭</b>，
-    /// 第二个 hello 换不到任何东西。不许把未认证 socket 挂着等 M4。
+    /// ADR-037：pre-auth 成功后连接<b>保持打开</b>——它被交给交接对象，而不是被本会话关闭。
     /// </summary>
+    /// <remarks>
+    /// <b>本条在 M4 阶段 3 被有意识改写</b>：M3 版本断言「hello 之后连接必须已关闭、
+    /// 第二个 hello 换不到任何东西」（<c>After_Hello_The_Connection_Is_Closed_And_A_Second_Hello_Gets_Nothing</c>）。
+    /// M4 有了后继（认证），关闭时机随所有权移交（ADR-037 Consequence ①）——
+    /// 旧断言在 M4 语义下等于「认证永远不能发生」，故改为「连接保持、由持有者（handler）决定何时收」。
+    /// </remarks>
     [Fact(Timeout = 60_000)]
-    public async Task After_Hello_The_Connection_Is_Closed_And_A_Second_Hello_Gets_Nothing()
+    public async Task After_Hello_The_Connection_Stays_Open_For_The_Handoff()
     {
+        TaskCompletionSource hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool stayedOpen = false;
+
         (ControlPreAuthResult result, _, _) = await RunAgainstHostAsync(
             async (connection, _) =>
                 await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline),
             afterOutcome: async connection =>
             {
-                bool writeFailed = false;
+                // handler 还挂着（hold 未放行）：马上读应当<b>没有</b> EOF。
+                Task<int> probe = connection.Stream.ReadAsync(new byte[1]).AsTask();
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => probe.WaitAsync(TimeSpan.FromMilliseconds(400)));
+
+                stayedOpen = true;
+
+                hold.SetResult();
+
+                // 放行 handler → Host 释放流 → 这一读以「有序 EOF 或非 close_notify 断开」收场。
                 try
                 {
-                    await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline);
+                    int read = await probe.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal(0, read);
                 }
-                catch (Exception)
+                catch (IOException)
                 {
-                    writeFailed = true;
+                    // 释放而非 close_notify 也会让对端读抛异常——同样是「已断开」。
                 }
-
-                bool closed = writeFailed;
-                if (!closed)
-                {
-                    // 写被本机缓冲下来也不算成功——必须读回来是个 EOF。
-                    byte[] buffer = new byte[1];
-                    try
-                    {
-                        int read = await connection.Stream
-                            .ReadAsync(buffer)
-                            .AsTask()
-                            .WaitAsync(TimeSpan.FromSeconds(5));
-                        closed = read == 0;
-                    }
-                    catch (Exception)
-                    {
-                        closed = true;
-                    }
-                }
-
-                Assert.True(closed, "hello 之后连接必须已关闭，第二个 hello 换不到任何东西。");
-            });
+            },
+            holdHandlerUntil: hold.Task);
 
         Assert.True(result.Completed, result.Rejection);
+        Assert.True(stayedOpen, "hello 成功之后连接不应当被 pre-auth 会话关闭。");
     }
 
     /// <summary>
@@ -335,14 +345,17 @@ public sealed class ControlPreAuthSessionTests
     /// 客户端按脚本说话，把服务端结局取回来。
     /// </summary>
     /// <param name="client">客户端脚本。</param>
-    /// <param name="afterOutcome">结局产生后的可选验证动作（连接此时还开着）。</param>
+    /// <param name="afterOutcome">结局产生后的可选验证动作（此时 handler 尚未返回，连接开着）。</param>
     /// <param name="timeouts">时限预算；为空则用 <see cref="BuildTimeouts"/>（信封 10 s 宽松值）。</param>
+    /// <param name="holdHandlerUntil">可选：结局产出后 handler 继续挂住，直到本任务完成——
+    /// 用于验证「成功之后连接保持打开」这类需要 handler 不退场的断言。</param>
     /// <returns>服务端结局、会话对象，以及<b>服务端会话内</b>量到的耗时（信封类判定的可证伪量）。</returns>
     private static async Task<(ControlPreAuthResult Result, ControlPreAuthSession Session, TimeSpan Elapsed)>
         RunAgainstHostAsync(
             Func<TlsConnection, CancellationToken, Task> client,
             Func<TlsConnection, Task>? afterOutcome = null,
-            TransportTimeouts? timeouts = null)
+            TransportTimeouts? timeouts = null,
+            Task? holdHandlerUntil = null)
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
         int port = GetFreePort();
@@ -368,6 +381,12 @@ public sealed class ControlPreAuthSessionTests
                     await session.RunAsync(connection, effective, cancellationToken);
                 sessionClock.Stop();
                 outcome.TrySetResult((result, sessionClock.Elapsed));
+
+                if (holdHandlerUntil is not null)
+                {
+                    // handler 继续持有连接（不返回 = Host 不释放流）。
+                    await holdHandlerUntil;
+                }
             },
             new TransportHostOptions { Port = port, Timeouts = effective });
 
@@ -423,12 +442,17 @@ public sealed class ControlPreAuthSessionTests
     private static AcceptedConnection CreateDetachedConnection()
     {
         // 一个不与任何 socket 相连的流：读它会立刻 EOF。
-        return new AcceptedConnection(
+        // 安全快照里的指纹只要求 32 字节形态；本用例（run 两次被守卫拦）不消费它。
+        ConnectionSecurityContext security = new(
             IPAddress.Loopback,
             IPAddress.Loopback,
             0,
-            new System.Net.Security.SslStream(new MemoryStream(Array.Empty<byte>())),
-            System.Security.Authentication.SslProtocols.None);
+            System.Security.Authentication.SslProtocols.None,
+            new byte[CertificatePin.LengthBytes]);
+
+        return new AcceptedConnection(
+            security,
+            new System.Net.Security.SslStream(new MemoryStream(Array.Empty<byte>())));
     }
 
     private static TransportTimeouts BuildTimeouts(

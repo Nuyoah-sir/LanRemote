@@ -6,6 +6,8 @@ namespace LanRemote.Transport;
 /// <remarks>
 /// <b>「TLS 握手完成」不等于「认证通过」。</b>本项目把这两件事用两个不同的状态表达，
 /// 就是为了防止「反正已经加密了，那就先让它干点活吧」这种推理悄悄发生。
+/// 一个枚举贯穿整条链（不另立平行枚举，ADR-037 第 4 条）；后续里程碑（Video Attach 等）
+/// 继续扩展本枚举。
 /// </remarks>
 public enum ControlSessionState
 {
@@ -15,10 +17,22 @@ public enum ControlSessionState
     /// <summary>
     /// hello 已通过：<b>已建立经过 pin 校验的加密通道，但对端身份<b>尚未</b>被认证</b>。
     /// 这是外部红队评审要求的显式状态（A 桶第 1 条）。
-    /// M4 落地前，此状态下<b>允许的操作集合为空</b>——见
-    /// <see cref="ControlPreAuthSession.AllowedOperationsWhilePreAuthenticated"/>。
+    /// 此状态下<b>允许的操作集合恰好一项</b>——「开始访问密钥认证」，
+    /// 见 <see cref="ControlPreAuthSession.AllowedOperationsWhilePreAuthenticated"/>。
     /// </summary>
     PreAuthenticated,
+
+    /// <summary>
+    /// 认证进行中（由 <see cref="ControlAuthSession"/> 推进）：challenge 已发出（或即将发出），
+    /// 正在等 response / 验证 / 审批。
+    /// </summary>
+    Authenticating,
+
+    /// <summary>
+    /// 认证成功（DoD「auth success 才能有 session」的对应状态）：会话已登记，
+    /// 连接保持以承载会话；其生命周期 = 直到客户端断开或停机。
+    /// </summary>
+    Authenticated,
 
     /// <summary>已关闭（被拒绝或正常收尾）。终态。</summary>
     Closed,
@@ -28,12 +42,14 @@ public enum ControlSessionState
 /// pre-auth 阶段的结局。
 /// </summary>
 /// <param name="Completed">是否成功走到 <see cref="ControlSessionState.PreAuthenticated"/>。</param>
-/// <param name="State">终态。</param>
+/// <param name="State">结局状态（成功 = <see cref="ControlSessionState.PreAuthenticated"/>，其余为 <see cref="ControlSessionState.Closed"/>）。</param>
 /// <param name="Rejection">失败时的短原因码，<b>只用于本地日志</b>。</param>
+/// <param name="Handoff">成功时的<b>一次性交接对象</b>（ADR-037）；失败恒为 <see langword="null"/>。</param>
 public sealed record ControlPreAuthResult(
     bool Completed,
     ControlSessionState State,
-    string? Rejection);
+    string? Rejection,
+    ControlPreAuthHandoff? Handoff = null);
 
 /// <summary>
 /// Host 侧的 pre-auth 会话：读且只读一帧，必须是 <c>channel_hello</c>，然后进入
@@ -42,14 +58,16 @@ public sealed record ControlPreAuthResult(
 /// <remarks>
 /// <para><b>步骤 20</b>：TLS + hello 完成 = 显式的 <see cref="ControlSessionState.PreAuthenticated"/>。
 /// 在此之后，屏幕数据 / 输入能力 / session token / 权限判定 / 特权主机元数据一律拒绝。
-/// M3 的表达方式就是 <see cref="AllowedOperationsWhilePreAuthenticated"/> 为空集合——
-/// 有测试盯着它，M4 之前谁往里加东西谁红。</para>
-/// <para><b>步骤 21</b>：M3 单独成里程碑的终态是<b>干净关闭</b>（发 close_notify 后释放），
-/// 而不是把未认证 socket 无限期挂着等还不存在的 M4 代码。
-/// 没有启用「短绝对占位 deadline 后进入 AwaitingAuthentication」那条备选——
-/// M3 里没有任何东西值得为它继续留着连接。</para>
+/// 表达方式是 <see cref="AllowedOperationsWhilePreAuthenticated"/> 恰好一项——
+/// 「开始访问密钥认证」（ADR-037 第 5 条；M3 的空集合版本已随 M4 落地有意识改写）。
+/// 有测试盯着这个集合，谁加第二项谁红。</para>
+/// <para><b>M3 的「成功即干净关闭」已被 M4 的显式交接取代</b>（ADR-037 第 1 条）：
+/// 成功路径<b>不再</b>调用 <c>ShutdownAsync</c>——「活着的流 + 冻结的安全上下文」交给
+/// <see cref="ControlPreAuthHandoff"/>，关闭时机随所有权一并移交。M3 的干净关闭是
+/// 「没有后继」时的正确终态；M4 有了后继（认证），关闭时机就不该再由 pre-auth 决定。</para>
 /// <para>本类<b>每次连接一个实例</b>，<see cref="RunAsync"/> 只允许调用一次——
-/// 「第二个 hello」在协议上就该断开，这里用「不允许第二次 run」把它在类型层面堵掉。</para>
+/// 「第二个 hello」在协议上就该断开，这里用「不允许第二次 run」把它在类型层面堵掉。
+/// 认证侧的对应物是 <see cref="ControlPreAuthHandoff.BeginAuthentication"/> 的 exactly-once。</para>
 /// </remarks>
 public sealed class ControlPreAuthSession
 {
@@ -78,15 +96,18 @@ public sealed class ControlPreAuthSession
     /// <see cref="ControlSessionState.PreAuthenticated"/> 下允许的操作集合。
     /// </summary>
     /// <remarks>
-    /// <b>M3 必须为空。</b>M4 落地时把「开始访问密钥认证」这一项加进来。
-    /// 这不是占位代码：它是「未认证连接不得换取任何能力」这条约束的<b>可执行形式</b>，
-    /// 并且有测试（<c>PreAuthenticated_Allows_Nothing_Before_M4</c>）盯着。
+    /// <b>M4 形态：恰好一项——<see cref="ControlPreAuthHandoff.OperationBeginAuthentication"/></b>
+    /// （ADR-037 第 5 条）。这不是占位代码：它是「未认证连接不得换取任何能力」这条约束的
+    /// <b>可执行形式</b>，并且有测试做<b>精确集合相等</b>（任何人加第二项即红）。
+    /// M3 原文（空集合 + 测试名 <c>PreAuthenticated_Allows_Nothing_Before_M4</c>）随本批
+    /// 有意识改写，改写理由即本条 ADR。
     /// </remarks>
     public static IReadOnlyCollection<string> AllowedOperationsWhilePreAuthenticated { get; } =
-        Array.Empty<string>();
+        new[] { ControlPreAuthHandoff.OperationBeginAuthentication };
 
     /// <summary>
-    /// 跑完 pre-auth：读一帧 → 校验 → 成功则干净关闭并返回。
+    /// 跑完 pre-auth：读一帧 → 校验 → 成功则留在 <see cref="ControlSessionState.PreAuthenticated"/>
+    /// 并交出 <see cref="ControlPreAuthHandoff"/>（ADR-037：不再由本方法关闭连接）。
     /// </summary>
     /// <param name="connection">已完成 TLS 的连接。</param>
     /// <param name="timeouts">时限预算。</param>
@@ -164,23 +185,20 @@ public sealed class ControlPreAuthSession
 
             State = ControlSessionState.PreAuthenticated;
 
-            // 步骤 21：M3 的终态是干净关闭——把 close_notify 发出去，别让对端靠 RST 猜。
-            // 对端可能早就走了，所以这里best-effort。
-            try
-            {
-                await connection.Stream.ShutdownAsync().ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // 对端已断开 / socket 已被释放：都不影响「我们这一侧已经干净收尾」。
-            }
+            // ADR-037 第 1 条：成功路径不再关闭连接——「活着的流 + 冻结的安全上下文」交给
+            // 一次性交接对象（线性所有权 + exactly-once）。关闭时机随所有权一并移交：
+            // 认证成功 → 连接保持（承载 session）；认证失败/停机 → 由持有方与 Host 收尾。
+            // 本方法此后不再触碰流；对端可能早走了这种「收尾写」也不复存在（这是有意的：
+            // 交接对象不做 IO，只有拿它的 BeginAuthentication 才会再次用到流）。
+            ControlPreAuthHandoff handoff = new(connection.Stream, connection.Security);
 
-            return new ControlPreAuthResult(true, ControlSessionState.PreAuthenticated, null);
+            return new ControlPreAuthResult(
+                true, ControlSessionState.PreAuthenticated, null, handoff);
         }
         finally
         {
-            // run 结束即终态：成功留在 PreAuthenticated（连接随后由 Host 干净关闭），
-            // 其余任何一条失败路径都归到 Closed。
+            // run 结束即本对象的终态：成功留在 PreAuthenticated（后续由交接对象/认证会话推进，
+            // 本对象不再触碰连接），其余任何一条失败路径都归到 Closed。
             if (State != ControlSessionState.PreAuthenticated)
             {
                 State = ControlSessionState.Closed;

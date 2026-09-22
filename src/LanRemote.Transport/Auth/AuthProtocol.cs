@@ -123,6 +123,37 @@ public static class AuthProtocol
     /// <summary>人类审批窗口的初值（自获批面受理起算）。</summary>
     public const int ApprovalWindowMilliseconds = 60_000;
 
+    /// <summary>challenge 的 <c>expiresInMs</c> 对外提示值。</summary>
+    /// <remarks>
+    /// <b>与 <see cref="AuthenticationWindowMilliseconds"/> 的张力记录在案</b>：本值 = 规格 04 §9
+    /// 样本字面值（对客户端的提示），服务端机制窗口 = 10 s（ADR-038 第 4 条，provisional）。
+    /// 当前服务端<b>以 10 s 为准</b>；两值是否对齐留待数值实验（HANDOFF §18.4 C）定案后一并回写。
+    /// </remarks>
+    public const int ChallengeExpiresInMs = 15_000;
+
+    /// <summary>视频重连窗口的初值（M5 用；规格 04 §10 的 <c>videoAttachExpiresInMs</c>）。</summary>
+    public const int VideoAttachExpiresInMs = 15_000;
+
+    /// <summary>失败限流的观察窗口（规格 04 §14：10 分钟）。</summary>
+    public const int FailedAuthWindowMilliseconds = 600_000;
+
+    /// <summary>触发封禁的失败次数（规格 04 §14：连续 5 次）。</summary>
+    public const int MaxFailedAuthAttempts = 5;
+
+    /// <summary>触发后的拒绝时长（规格 04 §14：60 秒）。</summary>
+    public const int FailedAuthBlockMilliseconds = 60_000;
+
+    /// <summary>每次密码学失败的最小随机延时（规格 04 §14：300~800 ms）。</summary>
+    public const int FailureDelayMinMilliseconds = 300;
+
+    /// <summary>每次密码学失败的最大随机延时（规格 04 §14：300~800 ms）。</summary>
+    public const int FailureDelayMaxMilliseconds = 800;
+
+    /// <summary>
+    /// 审批短关联码的派生域串（其字节参与 SHA-256 输入；改动即改短码，无协议兼容负担但需同步测试）。
+    /// </summary>
+    public const string ApprovalCodeDomain = "LANREMOTE-APPROVAL-CODE-V1";
+
     // ─────────────────────────── 权限枚举 ↔ 线上串 ───────────────────────────
 
     /// <summary>线上串：仅查看（对应 <see cref="SessionPermission.ViewOnly"/>）。</summary>

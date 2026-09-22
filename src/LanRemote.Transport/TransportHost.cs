@@ -39,6 +39,7 @@ public sealed class TransportHost : IAsyncDisposable
     private readonly IReadOnlyList<IPAddress> _localAddresses;
     private readonly ISubnetPolicy _subnetPolicy;
     private readonly X509Certificate2 _serverCertificate;
+    private readonly byte[] _serverCertificateSha256;
     private readonly Func<AcceptedConnection, CancellationToken, Task> _sessionHandler;
     private readonly TransportHostOptions _options;
     private readonly ConnectionAdmissionLimiter _limiter;
@@ -71,6 +72,11 @@ public sealed class TransportHost : IAsyncDisposable
         _localAddresses = localAddresses;
         _subnetPolicy = subnetPolicy;
         _serverCertificate = serverCertificate;
+
+        // 本机出示证书的指纹在构造期算一次、全生命周期冻结（ADR-037 第 3 条）：
+        // 它是 challenge `certSha256` 的唯一来源——「challenge 声称的指纹 = 本连接实际出示的证书」。
+        _serverCertificateSha256 = CertificatePin.Compute(serverCertificate);
+
         _sessionHandler = sessionHandler;
         _options = options ?? new TransportHostOptions();
 
@@ -297,12 +303,16 @@ public sealed class TransportHost : IAsyncDisposable
                     .ConfigureAwait(false);
             }
 
-            AcceptedConnection accepted = new(
+            // TLS 完成即冻结本连接的安全事实快照（ADR-037 第 3 条）：
+            // 地址 / 端口 / 协商版本 / 本机证书指纹——认证期间的唯一素材来源。
+            ConnectionSecurityContext security = new(
                 localEndPoint.Address,
                 remoteEndPoint.Address,
                 remoteEndPoint.Port,
-                stream,
-                stream.SslProtocol);
+                stream.SslProtocol,
+                _serverCertificateSha256);
+
+            AcceptedConnection accepted = new(security, stream);
 
             await _sessionHandler(accepted, registration.Cancellation).ConfigureAwait(false);
         }

@@ -143,8 +143,9 @@ internal static class HostRole
                 "// TransportHost 对同子网拒绝/准入拒绝/TLS 失败全部静默 return（HANDOFF §14.12）" +
                 "——本次验收里这些连接不留任何记录，不能用 0 顶替");
             log.WriteLine(
-                "[HOST][UNOBSERVED] localShutdownSent=best-effort " +
-                "// ControlPreAuthSession 调 ShutdownAsync 但吞掉异常，成功与否本进程未观测");
+                "[HOST][UNOBSERVED] localShutdownSent=UNOBSERVED " +
+                "// M4 起 ControlPreAuthSession 成功路径不再关闭连接（ADR-037 显式交接）；" +
+                "本角色未消费交接对象，关闭由 TransportHost 释放流完成，close_notify 与否本进程未观测");
 
             using CancellationTokenSource stopBudget = new(TimeSpan.FromSeconds(3));
             await context.Discovery.StopAsync(stopBudget.Token);
