@@ -21,11 +21,12 @@ namespace LanRemote.Transport.Tests;
 /// 「两端各自算出什么、谁先说什么」上，替身流很容易测出一个只在替身里成立的行为。</para>
 /// <para>客户端侧在本层是<b>测试脚本</b>（真实产品客户端在 M4 阶段 4）：它独立使用
 /// <see cref="AuthTranscriptBuilder"/> 重算 proof（不经过服务端任何路径），成功路径上
-/// 还按客户端语义验证 serverProof——两套独立算式交叉印证，而不是自己验自己。</para>
+/// 还按客户端语义验证 serverProof；双方复用协议核心，这不是独立密码学 oracle。
+/// 独立字节级 oracle 由 Python 黄金向量测试提供。</para>
 /// <para><b>限流计数的判据</b>（ADR-038 第 2 条）只在这条唯一入口被观测：
 /// 密码学校验失败 = +1；格式违规 / 超时 / 断连 / 审批结果 = 不计。</para>
 /// </remarks>
-public sealed class ControlAuthSessionTests
+public sealed partial class ControlAuthSessionTests
 {
     private static readonly Guid ServerDeviceId = Guid.Parse("11111111-2222-3333-4444-555555555555");
     private static readonly Guid TestClientDeviceId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
@@ -758,7 +759,9 @@ public sealed class ControlAuthSessionTests
         ConnectionAdmissionLimiter? pendingLimiter = null,
         SessionRegistry? registry = null,
         IAccessSecretStore? secretStore = null,
-        AuthClientProbe? probe = null)
+        AuthClientProbe? probe = null,
+        TimeProvider? timeProvider = null,
+        CancellationToken authCancellation = default)
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
         int port = GetFreePort();
@@ -768,7 +771,9 @@ public sealed class ControlAuthSessionTests
         AuthClientProbe effectiveProbe = probe ?? new AuthClientProbe();
 
         ControlAuthContext context = NewContext(
-            gate, effectiveRegistry, pendingLimiter, effectiveLimiter, options, secretStore);
+            gate, effectiveRegistry, pendingLimiter, effectiveLimiter, options, secretStore)
+            with { TimeProvider = timeProvider ?? TimeProvider.System };
+        OperationCanceledException? authCancelled = null;
 
         TaskCompletionSource<(ControlAuthResult Result, TimeSpan Elapsed, string? Fault)> outcome =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -795,13 +800,16 @@ public sealed class ControlAuthSessionTests
                 Stopwatch clock = Stopwatch.StartNew();
                 try
                 {
-                    ControlAuthResult result = await session.RunAsync(cancellationToken);
+                    using CancellationTokenSource linked =
+                        CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, authCancellation);
+                    ControlAuthResult result = await session.RunAsync(linked.Token);
                     clock.Stop();
                     outcome.TrySetResult((result, clock.Elapsed, null));
                 }
                 catch (Exception ex)
                 {
                     clock.Stop();
+                    authCancelled = ex as OperationCanceledException;
                     outcome.TrySetResult((null!, clock.Elapsed, $"{ex.GetType().Name}: {ex.Message}"));
                 }
             },
@@ -870,6 +878,10 @@ public sealed class ControlAuthSessionTests
             Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
             Assert.True(await WaitUntilAsync(() => host.AdmittedConnections == 0));
 
+            if (authCancelled is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(authCancelled).Throw();
+            }
             Assert.True(fault is null, fault);
             ControlAuthSession session = sessionBox[0]!;
             return new AuthScenario(

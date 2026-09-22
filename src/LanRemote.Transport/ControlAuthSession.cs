@@ -32,7 +32,8 @@ public sealed record ControlAuthResult(
 /// <para><b>一切失败对外的形式都相同</b>：<see cref="AuthenticationFailedFrame"/>——不区分
 /// 「密码错 / 设备码错 / 审批拒 / 被限流」；细节只进本对象的结果短码（本地）。</para>
 /// <para><b>绝对 deadline 而非可重置空闲时限</b>：机器窗口自 challenge 写出前起算、永不因对端
-/// 活动而重置；审批窗口自请求提交给审批面起算（排队等待不计入——HANDOFF §18.4）。</para>
+/// 活动而重置；审批窗口在调用审批面前起算，含同步前缀、UI 调度及人类等待。
+/// 两者均按单调时间裁决，到点即拒；取消只负责唤醒，不承诺硬中断同步本机代码。</para>
 /// <para><b>本类每次连接一个实例</b>（由 <see cref="ControlPreAuthHandoff.BeginAuthentication"/>
 /// 产出），<see cref="RunAsync"/> 只允许一次。信号处理：只有<b>停机取消</b>会向上抛
 /// <see cref="OperationCanceledException"/>（与 pre-auth 同规），其余取消都归为对端可见的拒绝。</para>
@@ -79,13 +80,16 @@ public sealed class ControlAuthSession
     /// <summary>决定无效（请求 ID 不回指 / Approved 缺权限 / 越权授予 / 未知终态）。</summary>
     public const string RejectApprovalInvalid = "auth-approval-invalid";
 
+    /// <summary>审批 pending 帧本地写出超时（尚未提交审批请求）。</summary>
+    public const string RejectApprovalPendingNotDelivered = "auth-approval-pending-not-delivered";
+
     /// <summary>审批窗口到点。</summary>
     public const string RejectApprovalTimeout = "auth-approval-timeout";
 
     /// <summary>审批期间连接断开（绝不因此发放 token——评审 #45）。</summary>
     public const string RejectApprovalDisconnected = "auth-approval-disconnected";
 
-    /// <summary><c>auth_success</c> 没能送达对端（认证不算成立：不登记、不保持）。</summary>
+    /// <summary><c>auth_success</c> 本地写出失败（不登记、不保持；写成功亦不证明对端已接收）。</summary>
     public const string RejectSuccessNotDelivered = "auth-success-not-delivered";
 
     private readonly SslStream _stream;
@@ -173,15 +177,16 @@ public sealed class ControlAuthSession
                 return await FailAsync(RejectThrottled, cancellationToken).ConfigureAwait(false);
             }
 
-            // ② 机器窗口：challenge 写出前起算的绝对 deadline，覆盖写、读与校验判定。
-            byte[] responsePayload;
-            using (CancellationTokenSource machine =
-                   CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            // ② 安全接受窗口覆盖至 proof verdict；timer 只负责唤醒，单调后置检查负责裁决。
+            AuthResponseFrame response;
+            byte[] clientTranscript;
+            bool proofMatches;
+            using (AuthenticationDeadline machine = new(
+                Context.TimeProvider, Context.Options.MachineWindow, cancellationToken))
             {
-                machine.CancelAfter(Context.Options.MachineWindow);
-
                 try
                 {
+                    CheckDeadline(machine, cancellationToken);
                     await FrameWriter.WriteFrameAsync(
                         _stream,
                         _challenge.Serialize(),
@@ -190,21 +195,74 @@ public sealed class ControlAuthSession
                         machine.Token).ConfigureAwait(false);
 
                     FrameReader reader = new(_stream);
-                    responsePayload = await reader.ReadFrameAsync(
+                    byte[] responsePayload = await reader.ReadFrameAsync(
                         TransportConstants.MaxPreAuthMessageBytes,
                         _timeouts.LengthPrefixTimeout,
                         _timeouts.PayloadTimeout,
                         machine.Token).ConfigureAwait(false);
+                    CheckDeadline(machine, cancellationToken);
+
+                    // ③ 严格解析；先检查时间再提交格式结论，垃圾帧不触碰密钥。
+                    bool parsed = AuthResponseFrame.TryParse(
+                        responsePayload, out AuthResponseFrame? candidate, out string? parseRejection);
+                    CheckDeadline(machine, cancellationToken);
+                    if (!parsed || candidate is null)
+                    {
+                        return await FailAsync(
+                            $"{RejectFrameViolation}:{parseRejection}", cancellationToken).ConfigureAwait(false);
+                    }
+                    response = candidate;
+
+                    // ④ Host 共用 loader：取消后最多遗留一项实际 store 工作，迟到成功值有清零所有者。
+                    try
+                    {
+                        AccessSecret secret = await Context.SecretLoader.LoadAsync(
+                            Context.AccessSecretStore, machine.Token).ConfigureAwait(false);
+                        accessKeyBytes = secret.AccessKeyBytes;
+                    }
+                    catch (Exception)
+                    {
+                        CheckDeadline(machine, cancellationToken);
+                        return await FailAsync(RejectKeyUnavailable, cancellationToken).ConfigureAwait(false);
+                    }
+                    CheckDeadline(machine, cancellationToken);
+
+                    // ⑤ 同步 HMAC/比较也在窗口内：最终检查之前不得写 limiter 或进入审批。
+                    clientTranscript = AuthTranscriptBuilder.BuildClientTranscript(
+                        SessionId,
+                        Context.ServerDeviceId,
+                        response.ClientDeviceId,
+                        _serverNonce,
+                        response.ClientNonce.Span,
+                        Security.ServerCertificateSha256.Span,
+                        response.RequestedPermission);
+                    byte[] expectedProof =
+                        AuthTranscriptBuilder.ComputeClientProof(accessKeyBytes, clientTranscript);
+                    try
+                    {
+                        proofMatches = CryptographicOperations.FixedTimeEquals(
+                            expectedProof, response.ClientProof.Span);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(expectedProof);
+                    }
+
+                    // proof verdict 的线性化点：到点即超时，优先于正确或错误的 MAC 结果。
+                    CheckDeadline(machine, cancellationToken);
+                    if (proofMatches)
+                    {
+                        Context.FailedAuthLimiter.RecordSuccess(Security.RemoteAddress);
+                    }
+                    else
+                    {
+                        Context.FailedAuthLimiter.RecordFailure(Security.RemoteAddress);
+                    }
                 }
                 catch (FrameProtocolException ex)
                 {
-                    // 长度违规（含 0 / 超限）：格式违规，不计数。
                     return await FailAsync(
                         $"{RejectFrameViolation}:{ex.Reason}", cancellationToken).ConfigureAwait(false);
-                }
-                catch (EndOfStreamException)
-                {
-                    return await FailAsync(RejectEof, cancellationToken).ConfigureAwait(false);
                 }
                 catch (IOException)
                 {
@@ -212,60 +270,16 @@ public sealed class ControlAuthSession
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
-                    // 机器窗口到点（写/读任一段）；停机取消在 when 处排除、向上抛。
-                    return await FailAsync(RejectTimeout, cancellationToken).ConfigureAwait(false);
-                }
-
-                // 读恰好压线完成也算超时：「response 校验完成 ≤ 窗口」是硬语义。
-                if (machine.IsCancellationRequested)
-                {
                     return await FailAsync(RejectTimeout, cancellationToken).ConfigureAwait(false);
                 }
             }
 
-            // ③ 帧级严格解析（重复键 / 未映射成员 / 尾随数据 / base64 canonical / 尺寸全在帧里判）。
-            if (!AuthResponseFrame.TryParse(
-                    responsePayload, out AuthResponseFrame? response, out string? parseRejection)
-                || response is null)
+            if (!proofMatches)
             {
-                return await FailAsync(
-                    $"{RejectFrameViolation}:{parseRejection}", cancellationToken).ConfigureAwait(false);
-            }
-
-            // ④ 读访问密钥（每会话一次；返回值是新副本，finally 里清零）。
-            try
-            {
-                AccessSecret secret = await Context.AccessSecretStore
-                    .LoadOrCreateAsync(cancellationToken).ConfigureAwait(false);
-                accessKeyBytes = secret.AccessKeyBytes;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                return await FailAsync(RejectKeyUnavailable, cancellationToken).ConfigureAwait(false);
-            }
-
-            // ⑤ 重算 + FixedTimeEquals。素材 = 本连接冻结的上下文 + challenge 时定稿的 nonce。
-            byte[] clientTranscript = AuthTranscriptBuilder.BuildClientTranscript(
-                SessionId,
-                Context.ServerDeviceId,
-                response.ClientDeviceId,
-                _serverNonce,
-                response.ClientNonce.Span,
-                Security.ServerCertificateSha256.Span,
-                response.RequestedPermission);
-
-            byte[] expectedProof =
-                AuthTranscriptBuilder.ComputeClientProof(accessKeyBytes, clientTranscript);
-
-            if (!CryptographicOperations.FixedTimeEquals(expectedProof, response.ClientProof.Span))
-            {
-                // 唯一计入限流的失败 + 规格 04 §14 的随机延时（对猜密钥降速）。
-                Context.FailedAuthLimiter.RecordFailure(Security.RemoteAddress);
+                // 已及时确定的错误 proof；延时与失败帧属于收尾，不延长安全接受窗口。
                 await Task.Delay(RandomFailureDelay(), cancellationToken).ConfigureAwait(false);
                 return await FailAsync(RejectProofMismatch, cancellationToken).ConfigureAwait(false);
             }
-
-            Context.FailedAuthLimiter.RecordSuccess(Security.RemoteAddress);
 
             // ⑥ 本机审批（v1：每个新控制连接都要批；ADR-038 第 3 条）。
             SessionPermission grantedPermission = response.RequestedPermission;
@@ -281,6 +295,11 @@ public sealed class ControlAuthSession
 
                 grantedPermission = attempt.Granted!.Value;
                 pendingRead = attempt.ReadTask;
+                // success 写出/登记若中途退出，Host 关流仍可能使挂起读 fault；观察不另开读者。
+                if (pendingRead is not null)
+                {
+                    ObserveQuietly(pendingRead);
+                }
             }
 
             // ⑦ serverProof（绑 grant 档）+ sessionToken + auth_success。
@@ -302,13 +321,17 @@ public sealed class ControlAuthSession
                     _timeouts.LengthPrefixTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return await FailAsync(RejectSuccessNotDelivered, cancellationToken).ConfigureAwait(false);
+            }
             catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException)
             {
-                // 对端没收到 success = 认证没有成立：不登记、不保持。
+                // 本地写出失败：不登记、不保持。写出成功也不等于对端已经接收/接受。
                 return await FailAsync(RejectSuccessNotDelivered, cancellationToken).ConfigureAwait(false);
             }
 
-            // ⑧ 登记 + 保持（#45：决定已转移、success 已送达，才登记 session）。
+            // ⑧ 登记 + 保持（#45：决定已转移、success 本地写出成功，才登记 session）。
             State = ControlSessionState.Authenticated;
 
             using (SessionRegistry.SessionRegistration registration = Context.SessionRegistry.Register(
@@ -371,12 +394,22 @@ public sealed class ControlAuthSession
                     _timeouts.LengthPrefixTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return new ApprovalAttempt(RejectApprovalPendingNotDelivered, null, null);
+            }
             catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException)
             {
                 return new ApprovalAttempt(RejectEof, null, null);
             }
 
             Guid requestId = Guid.NewGuid();
+            string shortCode = LocalApprovalRequest.ComputeShortCode(SessionId, response.ClientNonce.Span);
+            Task<int> clientActivity = ReadOneByteAsync(_stream, cancellationToken);
+
+            // 调用 gate 前起算；包含同步前缀与 UI 调度。UTC 仅供显示，不参与接受判据。
+            using AuthenticationDeadline approval = new(
+                Context.TimeProvider, Context.Options.ApprovalWindow, cancellationToken);
             LocalApprovalRequest request = new(
                 requestId,
                 Security.ConnectionId,
@@ -386,119 +419,73 @@ public sealed class ControlAuthSession
                 response.ClientDeviceId,
                 response.ClientName,
                 response.RequestedPermission,
-                LocalApprovalRequest.ComputeShortCode(SessionId, response.ClientNonce.Span),
-                Context.TimeProvider.GetUtcNow() + Context.Options.ApprovalWindow);
-
-            Task<int> clientActivity = ReadOneByteAsync(_stream, cancellationToken);
-
-            using CancellationTokenSource abort =
-                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-            Task<LocalApprovalDecision> decision = RequestApprovalSafeAsync(request, abort.Token);
-            Task window = Task.Delay(Context.Options.ApprovalWindow, cancellationToken);
+                shortCode,
+                Context.TimeProvider.GetUtcNow() + approval.Remaining);
+            Task<LocalApprovalDecision> decision = RequestApprovalSafeAsync(request, approval.Token);
+            Task window = Task.Delay(Timeout.InfiniteTimeSpan, approval.Token);
 
             Task<int>? handOff = null;
             try
             {
-                Task winner = await Task.WhenAny(clientActivity, decision, window).ConfigureAwait(false);
-
-                if (winner == clientActivity)
+                // WhenAny 只唤醒；多个 ready 的任务不能由数组顺序决定授权或本地短码。
+                await Task.WhenAny(clientActivity, decision, window).ConfigureAwait(false);
+                string? stop = await ApprovalStopAsync(
+                    approval, clientActivity, cancellationToken).ConfigureAwait(false);
+                if (stop is not null)
                 {
-                    // 审批期间断连 / 越界数据：终态先转移（#44），决定一律作废（#45）。
-                    try
-                    {
-                        int bytesRead = await clientActivity.ConfigureAwait(false);
-                        return new ApprovalAttempt(
-                            bytesRead == 0 ? RejectApprovalDisconnected : RejectUnexpectedData, null, null);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
-                        throw;
-                    }
-                    catch (Exception)
-                    {
-                        return new ApprovalAttempt(RejectApprovalDisconnected, null, null);
-                    }
+                    return new ApprovalAttempt(stop, null, null);
                 }
 
-                if (winner == window)
-                {
-                    return new ApprovalAttempt(RejectApprovalTimeout, null, null);
-                }
-
-                // 决定胜出：先消化它（gate 抛异常 = fail closed 当 Unavailable）。
-                LocalApprovalDecision decided;
+                LocalApprovalDecision? decided;
                 try
                 {
                     decided = await decision.ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
                 catch (Exception)
                 {
-                    return new ApprovalAttempt(RejectApprovalUnavailable, null, null);
+                    // gate 自身出错/取消，不应胜过已经发生的窗口或断连。
+                    stop = await ApprovalStopAsync(
+                        approval, clientActivity, cancellationToken).ConfigureAwait(false);
+                    return new ApprovalAttempt(stop ?? RejectApprovalUnavailable, null, null);
                 }
 
-                // #45 加固：决定到手时客户端若已经走了，这个决定不作数（断连绝不发 token）。
-                if (clientActivity.IsCompleted)
-                {
-                    try
+                string? rejection = decided is null || decided.RequestId != requestId
+                    ? RejectApprovalInvalid
+                    : decided.Outcome switch
                     {
-                        int bytesRead = await clientActivity.ConfigureAwait(false);
-                        return new ApprovalAttempt(
-                            bytesRead == 0 ? RejectApprovalDisconnected : RejectUnexpectedData, null, null);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
-                        throw;
-                    }
-                    catch (Exception)
-                    {
-                        return new ApprovalAttempt(RejectApprovalDisconnected, null, null);
-                    }
-                }
+                        LocalApprovalOutcome.Approved =>
+                            decided.GrantedPermission is { } granted
+                            && IsGrantable(granted, response.RequestedPermission)
+                                ? null : RejectApprovalInvalid,
+                        LocalApprovalOutcome.Denied => RejectApprovalDenied,
+                        LocalApprovalOutcome.TimedOut => RejectApprovalTimeout,
+                        LocalApprovalOutcome.Cancelled => RejectApprovalCancelled,
+                        LocalApprovalOutcome.Unavailable => RejectApprovalUnavailable,
+                        _ => RejectApprovalInvalid,
+                    };
 
-                // 决定校验（#37 / #38 / #39）。
-                if (decided.RequestId != requestId)
+                // 用户拍板：按状态机接受时刻，而非 UI 点击时间。取消 > 到期 > 已观测活动 > 决定。
+                stop = await ApprovalStopAsync(
+                    approval, clientActivity, cancellationToken).ConfigureAwait(false);
+                if (stop is not null || rejection is not null)
                 {
-                    return new ApprovalAttempt(RejectApprovalInvalid, null, null);
+                    return new ApprovalAttempt(stop ?? rejection, null, null);
                 }
 
-                switch (decided.Outcome)
-                {
-                    case LocalApprovalOutcome.Approved:
-                        if (decided.GrantedPermission is not { } granted
-                            || !IsGrantable(granted, response.RequestedPermission))
-                        {
-                            return new ApprovalAttempt(RejectApprovalInvalid, null, null);
-                        }
-
-                        handOff = clientActivity;
-                        return new ApprovalAttempt(null, granted, handOff);
-
-                    case LocalApprovalOutcome.Denied:
-                        return new ApprovalAttempt(RejectApprovalDenied, null, null);
-
-                    case LocalApprovalOutcome.TimedOut:
-                        return new ApprovalAttempt(RejectApprovalTimeout, null, null);
-
-                    case LocalApprovalOutcome.Cancelled:
-                        return new ApprovalAttempt(RejectApprovalCancelled, null, null);
-
-                    case LocalApprovalOutcome.Unavailable:
-                        return new ApprovalAttempt(RejectApprovalUnavailable, null, null);
-
-                    default:
-                        return new ApprovalAttempt(RejectApprovalInvalid, null, null);
-                }
+                handOff = clientActivity;
+                return new ApprovalAttempt(null, decided!.GrantedPermission, handOff);
             }
             finally
             {
-                // 离开等待区：停掉 gate 侧（best effort），
-                // 未被接管的两个任务一律「观察掉」，不让未观察异常漏出去。
-                abort.Cancel();
+                // 终态已经决定；取消只是合作式清理，不能使迟到决定反转结果。
+                // gate 的回调须快速非阻塞；回调抛错不得掩盖既定的安全结局。
+                try
+                {
+                    approval.Cancel();
+                }
+                catch (AggregateException)
+                {
+                }
                 ObserveQuietly(decision);
                 if (handOff is null)
                 {
@@ -605,6 +592,43 @@ public sealed class ControlAuthSession
             TaskScheduler.Default);
     }
 
+    private static void CheckDeadline(AuthenticationDeadline deadline, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (deadline.IsExpired)
+        {
+            throw new OperationCanceledException("认证安全接受窗口到期。", deadline.Token);
+        }
+        deadline.Token.ThrowIfCancellationRequested();
+    }
+
+    internal static async Task<string?> ApprovalStopAsync(
+        AuthenticationDeadline deadline, Task<int> clientActivity, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (deadline.IsExpired)
+        {
+            return RejectApprovalTimeout;
+        }
+        if (!clientActivity.IsCompleted)
+        {
+            return null;
+        }
+        try
+        {
+            int bytes = await clientActivity.ConfigureAwait(false);
+            return bytes == 0 ? RejectApprovalDisconnected : RejectUnexpectedData;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return RejectApprovalDisconnected;
+        }
+    }
+
     /// <summary>授予权限的合法性：<c>granted ≤ requested</c>（评审 #39；不依赖枚举序数）。</summary>
     private static bool IsGrantable(SessionPermission granted, SessionPermission requested) => granted switch
     {
@@ -627,9 +651,9 @@ public sealed class ControlAuthSession
             return min > TimeSpan.Zero ? min : TimeSpan.Zero;
         }
 
-        long minMs = (long)min.TotalMilliseconds;
-        long maxMs = (long)max.TotalMilliseconds;
-        return TimeSpan.FromMilliseconds(Random.Shared.NextInt64(minMs, maxMs + 1));
+        int minMs = (int)min.TotalMilliseconds;
+        int maxMs = (int)max.TotalMilliseconds;
+        return TimeSpan.FromMilliseconds(RandomNumberGenerator.GetInt32(minMs, maxMs + 1));
     }
 
     private static void ValidateOptions(ControlAuthOptions options)
@@ -649,7 +673,8 @@ public sealed class ControlAuthSession
             throw new ArgumentOutOfRangeException(nameof(options), options.ApprovalWindow, "审批窗口必须为正。");
         }
 
-        if (options.FailureDelayMin < TimeSpan.Zero || options.FailureDelayMax < options.FailureDelayMin)
+        if (options.FailureDelayMin < TimeSpan.Zero || options.FailureDelayMax < options.FailureDelayMin
+            || options.FailureDelayMax.TotalMilliseconds >= int.MaxValue)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(options), options.FailureDelayMax, "失败延时范围必须非负且上限 ≥ 下限。");

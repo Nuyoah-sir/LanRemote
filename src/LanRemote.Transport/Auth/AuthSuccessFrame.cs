@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LanRemote.Core.Models;
@@ -103,6 +104,9 @@ public sealed class AuthSuccessFrame
     /// <summary>32 字节会话令牌（只存在内存；断开即废弃；不写日志、不持久化）。</summary>
     public ReadOnlyMemory<byte> SessionToken => _sessionToken;
 
+    /// <summary>客户端验证失败或复制入会话后清理帧内 token，不扩展公开 API。</summary>
+    internal void ClearSessionToken() => CryptographicOperations.ZeroMemory(_sessionToken);
+
     /// <summary>视频重连窗口（毫秒）。</summary>
     public int VideoAttachExpiresInMs { get; }
 
@@ -174,29 +178,43 @@ public sealed class AuthSuccessFrame
             return false;
         }
 
-        if (!CanonicalBase64.TryDecode(payload.ServerProof, out byte[] serverProof)
-            || serverProof.Length != AuthProtocol.ProofByteLength)
+        bool validProof = CanonicalBase64.TryDecode(payload.ServerProof, out byte[] serverProof);
+        // token 不经过通用解码器的堆临时副本；仍以 round-trip 相等判定 canonical。
+        Span<byte> sessionToken = stackalloc byte[AuthProtocol.SessionTokenByteLength];
+        Span<char> canonicalToken = stackalloc char[((AuthProtocol.SessionTokenByteLength + 2) / 3) * 4];
+        try
         {
-            rejection = RejectBadServerProof;
-            return false;
-        }
+            if (!validProof || serverProof.Length != AuthProtocol.ProofByteLength)
+            {
+                rejection = RejectBadServerProof;
+                return false;
+            }
 
-        if (!CanonicalBase64.TryDecode(payload.SessionToken, out byte[] sessionToken)
-            || sessionToken.Length != AuthProtocol.SessionTokenByteLength)
+            if (!Convert.TryFromBase64String(payload.SessionToken, sessionToken, out int written)
+                || written != AuthProtocol.SessionTokenByteLength
+                || !Convert.TryToBase64Chars(sessionToken, canonicalToken, out int encoded)
+                || !payload.SessionToken.AsSpan().SequenceEqual(canonicalToken[..encoded]))
+            {
+                rejection = RejectBadSessionToken;
+                return false;
+            }
+
+            if (payload.VideoAttachExpiresInMs.Value < 1)
+            {
+                rejection = RejectBadVideoAttachExpiresInMs;
+                return false;
+            }
+
+            frame = new AuthSuccessFrame(
+                granted, serverProof, sessionToken, payload.VideoAttachExpiresInMs.Value);
+            return true;
+        }
+        finally
         {
-            rejection = RejectBadSessionToken;
-            return false;
+            CryptographicOperations.ZeroMemory(sessionToken);
+            canonicalToken.Clear();
+            CryptographicOperations.ZeroMemory(serverProof);
         }
-
-        if (payload.VideoAttachExpiresInMs.Value < 1)
-        {
-            rejection = RejectBadVideoAttachExpiresInMs;
-            return false;
-        }
-
-        frame = new AuthSuccessFrame(
-            granted, serverProof, sessionToken, payload.VideoAttachExpiresInMs.Value);
-        return true;
     }
 
     /// <summary>

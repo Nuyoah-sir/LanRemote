@@ -103,7 +103,10 @@ public sealed record LocalApprovalDecision(
 /// 在「决定 = Approved 且连接仍在」时自行生成并直接写往对端——审批面<b>永远看不到</b>
 /// sessionToken / access key / proof / transcript。</para>
 /// <para>取消令牌触发时应尽快返回（抛 <see cref="OperationCanceledException"/> 或给出终态均可）；
-/// 窗口到点后的任何决定一律作废（首个终态胜，评审 #44）。</para>
+/// 窗口到点后的任何决定一律作废；按状态机接受时刻判定，到点即超时，而非 UI 点击时刻。</para>
+/// <para>调用即受理；窗口包含 UI Dispatcher 调度和展示耗时，不存在不计时的前置队列。
+/// 本方法必须快速返回 awaitable，不得在同步前缀等人类操作或阻塞等待 Dispatcher；
+/// 取消回调同样必须快速非阻塞。普通 CTS 不能硬中断永不返回的本机同步代码。</para>
 /// <para><b>UI 不可用必须返回 <see cref="LocalApprovalOutcome.Unavailable"/></b>，
 /// 不许静默当作同意（评审 #46）。</para>
 /// </remarks>

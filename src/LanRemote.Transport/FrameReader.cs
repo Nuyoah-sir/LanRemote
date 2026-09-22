@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 
 namespace LanRemote.Transport;
 
@@ -122,8 +123,16 @@ public sealed class FrameReader
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(lengthBytes);
 
         byte[] buffer = new byte[lengthBytes];
-        await ReadExactlyAsync(buffer, timeout, cancellationToken).ConfigureAwait(false);
-        return buffer;
+        try
+        {
+            await ReadExactlyAsync(buffer, timeout, cancellationToken).ConfigureAwait(false);
+            return buffer;
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(buffer);
+            throw;
+        }
     }
 
     /// <summary>

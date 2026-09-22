@@ -229,7 +229,7 @@ public sealed class AuthResponseFrame
     /// JsonException（实测 2026-09-22）→ 走 malformed；此处的代理对判定主要保护
     /// 构造器路径（.NET 字符串可以直接携带孤立代理，而 JSON 字节流不行）。
     /// </remarks>
-    private static bool IsAcceptableClientName(string value)
+    internal static bool IsAcceptableClientName(string value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > ClientNameMaxLength)
         {

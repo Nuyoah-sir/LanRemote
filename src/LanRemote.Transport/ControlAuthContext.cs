@@ -56,6 +56,9 @@ public sealed record ControlAuthOptions
 /// </remarks>
 public sealed record ControlAuthContext
 {
+    // Host 共用；即使一个 store Task 无视取消，也不得由后续连接积累无限迟到任务。
+    internal AuthenticationSecretLoader SecretLoader { get; } = new();
+
     /// <summary>本机设备号（进 challenge 的 <c>serverDeviceId</c>，同时是 transcript 素材）。</summary>
     public required Guid ServerDeviceId { get; init; }
 
@@ -77,7 +80,7 @@ public sealed record ControlAuthContext
     /// <summary>已认证会话登记表（DoD：auth success 才能有 session）。</summary>
     public required SessionRegistry SessionRegistry { get; init; }
 
-    /// <summary>时钟（审批请求的过期时刻等；限流器的时钟在自己的构造器参数里）。</summary>
+    /// <summary>单调时间及 timer 驱动认证窗口；UTC 仅供审批显示。限流器使用自己的时钟。</summary>
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     /// <summary>值旋钮。</summary>

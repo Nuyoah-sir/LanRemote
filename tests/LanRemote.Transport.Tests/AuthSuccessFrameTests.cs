@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using LanRemote.Core.Models;
 using LanRemote.Transport.Auth;
 
@@ -255,6 +256,61 @@ public sealed class AuthSuccessFrameTests
         Rejects(Build(sessionToken: "\"" + B64(33) + "\""), AuthSuccessFrame.RejectBadSessionToken);
         Rejects(Build(sessionToken: "\"AB==\""), AuthSuccessFrame.RejectBadSessionToken);
         Rejects(Build(sessionToken: "\"\""), AuthSuccessFrame.RejectBadSessionToken);
+    }
+
+    [Fact]
+    public void Rejects_32_Byte_Session_Token_With_Noncanonical_Pad_Bits()
+    {
+        byte[] tokenBytes = new byte[32];
+        char[] encoded = Convert.ToBase64String(tokenBytes).ToCharArray();
+        Assert.Equal('A', encoded[^2]);
+        encoded[^2] = 'B';
+        string token = new(encoded);
+
+        byte[] decoded = new byte[32];
+        Assert.True(Convert.TryFromBase64String(token, decoded, out int written));
+        Assert.Equal(32, written);
+        Assert.Equal(tokenBytes, decoded);
+
+        Rejects(Build(sessionToken: JsonSerializer.Serialize(token)), AuthSuccessFrame.RejectBadSessionToken);
+    }
+
+    [Theory]
+    [InlineData(0, " ")]
+    [InlineData(8, " ")]
+    [InlineData(44, " ")]
+    [InlineData(8, "\t")]
+    [InlineData(8, "\r")]
+    [InlineData(8, "\n")]
+    public void Rejects_32_Byte_Session_Token_With_Whitespace(int index, string whitespace)
+    {
+        string token = B64(32).Insert(index, whitespace);
+
+        byte[] decoded = new byte[32];
+        Assert.True(Convert.TryFromBase64String(token, decoded, out int written));
+        Assert.Equal(32, written);
+
+        // 由 JSON 编码器转义控制字符，确保拒绝的是 token，而非 JSON 语法。
+        Rejects(Build(sessionToken: JsonSerializer.Serialize(token)), AuthSuccessFrame.RejectBadSessionToken);
+    }
+
+    [Fact]
+    public void Accepts_Canonical_32_Byte_Session_Token_With_Plus_And_Slash()
+    {
+        byte[] tokenBytes = new byte[32];
+        tokenBytes[0] = 0xFB;
+        tokenBytes[1] = 0xFF;
+        string token = Convert.ToBase64String(tokenBytes);
+        Assert.Contains("+", token);
+        Assert.Contains("/", token);
+
+        Assert.True(AuthSuccessFrame.TryParse(
+            Utf8(Build(sessionToken: JsonSerializer.Serialize(token))),
+            out AuthSuccessFrame? frame,
+            out string? rejection));
+        Assert.Null(rejection);
+        Assert.NotNull(frame);
+        Assert.Equal(tokenBytes, frame!.SessionToken.ToArray());
     }
 
     [Fact]
