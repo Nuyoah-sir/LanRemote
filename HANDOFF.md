@@ -4,13 +4,14 @@
 > 更新时间：**2026-09-22 10:25 (+08:00)**
 >
 > 本轮（**M4 · 阶段 1「transcript + HMAC proof 纯函数核心」**）**动了代码**：
-> 新增 `src/LanRemote.Security/Auth/`（`AuthProtocol` + `AuthTranscriptBuilder`）与 34 条测试
-> （Security 66→100）、入库独立黄金向量脚本 `scripts/reference/gen-auth-golden-vectors.py`、
+> 新增 `src/LanRemote.Transport/Auth/`（`AuthProtocol` + `AuthTranscriptBuilder`，ADR-039 重定位后）
+> 与 34 条测试、入库独立黄金向量脚本 `scripts/reference/gen-auth-golden-vectors.py`、
 > `docs/PROTOCOL_AND_SECURITY.md` 工作副本 §9 同步（本地修订 1）。
 >
 > 本轮的实质内容：**ADR-038 双档 transcript（client / grant）与两个 HMAC proof 落地为可测纯函数**；
 > 黄金向量由独立 Python 参考实现生成（期望值不取自被测实现，ADR-034 纪律）；变异 ×4。
-> 逐条见 §18.6。
+> **另：阶段 2 开工盘点实测 TFM 约束（NU1201），认证核心已重定位 Security → Transport
+> （ADR-039，`e7687ec`）**。逐条见 §18.6。
 >
 > 上轮（2026-09-21）：M4 阶段 0「衔接盘点与定案」（ADR-037/038 + ADR-027 落地），见 §18.5；
 > 第二轮外部评审回收见 §18.4。
@@ -25,10 +26,12 @@
 - **下一里程碑步骤：M4 阶段 2 —— 认证消息帧（JSON 严格解析）**
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0、1）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`35506b5`**（M4 阶段 1：`LanRemote.Security/Auth` 双档 transcript +
-  proof + 黄金向量脚本 + 工作副本修订；上一条代码提交 `2312e70` = M4 阶段 0）。
+- **Last code commit：`e7687ec`**（refactor：认证核心重定位 Security → Transport，ADR-039；
+  上一条代码提交 `35506b5` = M4 阶段 1 主体（双档 transcript + proof + 黄金向量）——
+  其 `Security/Auth` 路径已被本重定位取代，协议字节零变化）。
 - **Working tree at validation（M4 阶段 1）：无未提交代码**——643 PASS 跑的就是被如实提交为
-  `35506b5` 的工作树；验证后未再动代码（其后记账提交只动文档）。
+  `35506b5` 的工作树；其后 `e7687ec`（重定位）再验证同为 643 PASS；验证后未再动代码
+  （其后记账提交只动文档）。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 与 M4 阶段 0 均已改动 `src` / `tests`**——M3 两机验收的旧物料（zip `f81d194c…`，由
@@ -1944,16 +1947,20 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 ### 18.6 阶段 1 执行记录（2026-09-22）—— 双档 transcript + HMAC proof 纯函数核心
 
 **状态：完成**（提交 `35506b5`，6 files，+1113/−11；步骤 5–8 全落地）。
+**同日重定位 `e7687ec`**（ADR-039）：阶段 2 开工盘点发现 TFM 硬约束（Transport net10.0 无法引用
+Security net10.0-windows7.0——NU1201 本机实测），认证核心由 Security 搬至 Transport，见下。
 §18.5 D 节遗留：「工作副本同步 ADR-038」**已完成**；「两机验收重跑」仍挂账（物料需重打）。
 
-**产出与落点**
+**产出与落点**（路径为重定位后；重定位为纯搬移，协议字节与测试语义零变化）
 
-- `src/LanRemote.Security/Auth/AuthProtocol.cs` —— 协议词汇表单一事实源：
+- `src/LanRemote.Transport/Auth/AuthProtocol.cs` —— 协议词汇表单一事实源
+  （原 `Security/Auth`，ADR-039 重定位）：
   两个域串（`LANREMOTE-AUTH-V1` / `LANREMOTE-GRANT-V1`）、`server\0` 前缀、5 个帧 type、
   16 个 JSON 字段名、4 个尺寸（nonce/proof/token/cert 均 32B）、两个时限初值
   （认证 10s / 审批 60s，provisional，待数值实验回写）、权限词（`view`/`control`）
   + `EncodePermission`（未定义枚举值抛异常——防将来扩展枚举时静默误编码）。
-- `src/LanRemote.Security/Auth/AuthTranscriptBuilder.cs` —— 纯函数核心：
+- `src/LanRemote.Transport/Auth/AuthTranscriptBuilder.cs` —— 纯函数核心
+  （原 `Security/Auth`，ADR-039 重定位）：
   `BuildClientTranscript` / `BuildGrantTranscript` / `ComputeClientProof` / `ComputeServerProof`。
   输入全部强类型（`Guid` / `ReadOnlySpan<byte>` / 枚举）、**不接收 string**（规范形式只由本类
   输出，从类型上消灭「对端编码差异（hex 大小写 / 非规范 base64 / uuid 格式）进 transcript」
@@ -1962,9 +1969,10 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
   hmac/hashlib/base64/uuid）；输出 3 个黄金向量（control/control、view/view、
   requested=view+granted=control）+ granted 篡改对照向量 + 可直接粘贴的 C# 常量块
   （NUL 用 `\u0000` 转义——C# 的 `\0` 后跟数字会被解析为八进制转义，是实测踩过的坑）。
-- 测试 +34（Security 66→100）：`AuthProtocolTests` 8 条字面量锁定；
+- 测试 +34：`AuthProtocolTests` 8 条字面量锁定；
   `AuthTranscriptBuilderTests` 26 条 case（黄金向量逐字节/hex、client 档 8 段 / grant 档 3 段
   NUL 分割、域分隔、字段敏感性、granted 篡改必致 serverProof 验证失败、前缀参与 MAC、参数校验）。
+  落点随重定位迁移（Security.Tests 66→100→66、Transport.Tests 192→226）。
 - `docs/PROTOCOL_AND_SECURITY.md` 工作副本 §9 同步 —— 头部「本地修订记录」+【本地修订 1】
   （双档 transcript + serverProof 绑 grant 档；原文保留对照）；该文件自此进入「随里程碑修订」模式。
 
@@ -1978,7 +1986,8 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 - M4「移除 serverNonce 长度校验」→ **精确 3 红**（theory 全 case，零误伤）。
 
 **全量验证**：Debug `dotnet build` **0 警告 0 错误**；`dotnet test` **643 PASS / 0 FAIL**
-（Protocol 223 + Transport 192 + Core 125 + Security 100 + Integration 3）。
+（Protocol 223 + Transport 192 + Core 125 + Security 100 + Integration 3；重定位后分布 =
+Transport **226** / Security **66**，总数不变）。
 
 **下一站 = 阶段 2（认证消息帧 JSON 严格解析）**：4 类帧 + canonical base64 校验/解析；
 照 `HelloFrame` 严格模式（重复字段 / 未知字段 / 大小写 / 深度全写死 + 逐项测试）。

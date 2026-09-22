@@ -46,11 +46,13 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | **M4** | **进行中：阶段 0、1 完成（2026-09-22，`35506b5`）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：**双档 transcript + HMAC proof 纯函数核心** + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（**643 PASS**）。下一站 = 阶段 2（认证帧 JSON 严格解析）。6 阶段 21 步见 HANDOFF §18 |
 | M5~M11 | 未开始 |
 
-M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**。
+M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）。
 远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **helper-selector 陷阱**（源码级定论）：`git-credential-helper-selector` 每次被调必弹 GUI（无静默委托、无桌面即挂起、`--help` 也弹并写配置），「`<no helper>`+Always」= 把 `credential.helper` 写成空串（清链）。**已全局修复（2026-09-21）**：`selected = manager` + 链「空值+`manager`」（repo 级同配双保险）；机器级 fill rc=0、trace 只见 GCM；**勿裸跑 selector**。此后每轮收尾 `git push origin main`。
 
 ## 实测事实（别再猜）
 
+- **TFM 依赖方向（2026-09-22 实测）**：**net10.0 项目不能引用 net10.0-windows 项目**（NU1201）——
+  无 Windows API 依赖的纯逻辑（如认证协议核心）必须放 net10.0 层（Transport）否则传输层无法消费；Security（net10.0-windows）只留 DPAPI/证书/密钥存储。ADR-039
 - **证书私钥（ADR-029/030）**：SslStream 服务端必须 `DefaultKeySet`；`EphemeralKeySet` 9/9 失败（`does not support ephemeral keys` ← `0x8009030E`）；`PersistKeySet` 留磁盘副本。`CreateSelfSigned()` 直出私钥也是 ephemeral → 必须「导出 PFX → Default 重导入」。污染陷阱：同进程先 Persist 再 Ephemeral 会碰巧成功 → 结论须新进程。**判 TLS 失败永远抓服务端异常**（客户端只有 EOF）
 - **.NET 10 默认值**：`AllowDuplicateProperties`=True 且后者覆盖；`MaxDepth` 属性值=0（=内置 64）；客户端 `AllowTlsResume/AllowRenegotiation`=True，服务端 Renegotiation=**False**（不对称）；`EnabledSslProtocols=None` 须显式写；校验回调参数是 `X509Certificate` 基类 → 用 `GetRawCertData()`
 - **发现**：probe 回应目标 = `remote.Address:45872`（非源端口）；sender 必须显式 `SetSocketOption(MulticastInterface, 网络序 4 字节)`
