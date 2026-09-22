@@ -1,37 +1,35 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-22 10:25 (+08:00)**
+> 更新时间：**2026-09-22 10:48 (+08:00)**
 >
-> 本轮（**M4 · 阶段 1「transcript + HMAC proof 纯函数核心」**）**动了代码**：
-> 新增 `src/LanRemote.Transport/Auth/`（`AuthProtocol` + `AuthTranscriptBuilder`，ADR-039 重定位后）
-> 与 34 条测试、入库独立黄金向量脚本 `scripts/reference/gen-auth-golden-vectors.py`、
-> `docs/PROTOCOL_AND_SECURITY.md` 工作副本 §9 同步（本地修订 1）。
+> 本轮（**M4 · 阶段 2「认证消息帧（JSON 严格解析）」**）**动了代码**：
+> 新增 `src/LanRemote.Transport/Auth/` 5 个帧类（challenge / response / success /
+> approval_pending + 计划外 `AuthenticationFailedFrame`）+ 3 个 canonical 编码类
+> （base64 / HEX / GUID）+ `AuthJson` 类型提示预读 + 8 个测试文件；
+> 提交 `21a8829`（18 files，+3031）；全量 **877 PASS / 0 FAIL**（Transport 226→460，+234）。
+> 变异验证 ×4，其中 M3 当场抓到一条假测试（手抄 base64 坏字面量）并修复；
+> 合同级决定已立 **ADR-040**。逐条见 §18.7。
 >
-> 本轮的实质内容：**ADR-038 双档 transcript（client / grant）与两个 HMAC proof 落地为可测纯函数**；
-> 黄金向量由独立 Python 参考实现生成（期望值不取自被测实现，ADR-034 纪律）；变异 ×4。
-> **另：阶段 2 开工盘点实测 TFM 约束（NU1201），认证核心已重定位 Security → Transport
-> （ADR-039，`e7687ec`）**。逐条见 §18.6。
->
-> 上轮（2026-09-21）：M4 阶段 0「衔接盘点与定案」（ADR-037/038 + ADR-027 落地），见 §18.5；
-> 第二轮外部评审回收见 §18.4。
+> 上轮（2026-09-22）：M4 阶段 1「transcript + HMAC proof 纯函数核心」+ 同日重定位
+> Security → Transport（ADR-039），见 §18.6；更早：阶段 0「衔接盘点与定案」
+> （ADR-037/038 + ADR-027 落地）见 §18.5，第二轮外部评审回收见 §18.4。
 
 ---
 
 ## 1. 当前状态
 
-- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0、1 完成（2026-09-22；
-  阶段 1 = 双档 transcript + HMAC proof 纯函数核心 + 独立黄金向量；单机全量验证 643 PASS；
-  执行记录见 §18.5 / §18.6）**
-- **下一里程碑步骤：M4 阶段 2 —— 认证消息帧（JSON 严格解析）**
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0、1）
+- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0、1、2 完成（2026-09-22；
+  阶段 2 = 5 个认证消息帧 + canonical base64/HEX/GUID + 严格 JSON 解析（ADR-040）；
+  单机全量验证 877 PASS；执行记录见 §18.5 / §18.6 / §18.7）**
+- **下一里程碑步骤：M4 阶段 3 —— 服务端认证状态机（步骤 13–17）**
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0、1、2）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`e7687ec`**（refactor：认证核心重定位 Security → Transport，ADR-039；
-  上一条代码提交 `35506b5` = M4 阶段 1 主体（双档 transcript + proof + 黄金向量）——
-  其 `Security/Auth` 路径已被本重定位取代，协议字节零变化）。
-- **Working tree at validation（M4 阶段 1）：无未提交代码**——643 PASS 跑的就是被如实提交为
-  `35506b5` 的工作树；其后 `e7687ec`（重定位）再验证同为 643 PASS；验证后未再动代码
-  （其后记账提交只动文档）。
+- **Last code commit：`21a8829`**（feat：M4 阶段 2——认证消息帧；上一条代码提交 `e7687ec`
+  = 认证核心重定位 Security → Transport，ADR-039；再上一条 `35506b5` = M4 阶段 1 主体）。
+- **Working tree at validation（M4 阶段 2）：无未提交代码**——877 PASS 跑的就是被如实提交为
+  `21a8829` 的工作树（含变异验证 ×4 全部恢复后的干净树：`grep TEMP-MUTATION` 零命中 +
+  `git diff` 只含目标改动）；验证后未再动代码（其后记账提交只动文档）。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 与 M4 阶段 0 均已改动 `src` / `tests`**——M3 两机验收的旧物料（zip `f81d194c…`，由
@@ -1727,8 +1725,10 @@ Private（B 机为 `already Private`）。类别还原逻辑自 v3 起存在（�
 ## 18. 下一步 —— M4（Access Key Challenge Auth）· 计划与执行
 
 **状态：进行中。**阶段 0（衔接盘点与定案）**已完成（2026-09-21）**，含 ADR-027 落地件；
-阶段 1（transcript + HMAC 纯函数核心）**已完成（2026-09-22）**。
-执行记录见 §18.5（阶段 0）/ §18.6（阶段 1），下一步为阶段 2（认证消息帧 JSON 严格解析）。
+阶段 1（transcript + HMAC 纯函数核心）**已完成（2026-09-22）**；
+阶段 2（认证消息帧 JSON 严格解析）**已完成（2026-09-22）**。
+执行记录见 §18.5（阶段 0）/ §18.6（阶段 1）/ §18.7（阶段 2），下一步为阶段 3
+（服务端认证状态机，步骤 13–17）。
 （M3 已全链闭环：24 步 + 两机验收 PASS + 两机 lab 还原；仓库已推 GitHub。）
 本计划按 `LanRemote_Implementation_Package/04_PROTOCOL_AND_SECURITY.md` §9/§14/§15 +
 `07_MILESTONES_AND_TASKS.md` M4 编制；阶段 0 的盘点结论已落为 ADR-037/038（`docs/DECISIONS.md`）。
@@ -1785,15 +1785,18 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
    modified cert fingerprint / modified permission（改任一字段必改 proof）；
    另加：黄金向量逐字节（3 向量 + granted 篡改对照）、双档 NUL 分割（8/3 段）、参数校验。
 
-**阶段 2 —— 认证消息帧（JSON 严格解析）**
+**阶段 2 —— 认证消息帧（JSON 严格解析）** ✅ 完成（2026-09-22，执行记录见 §18.7）
 
-9. `AuthChallengeFrame`（→client）：`sessionId` / `serverDeviceId` / `serverNonce`(b64 32B) /
-   `certSha256`(HEX) / `expiresInMs`。
-10. `AuthResponseFrame`（→server）：`clientDeviceId` / `clientName` / `clientNonce` /
-    `requestedPermission` / `clientProof`(b64)。
-11. `AuthSuccessFrame` + `ApprovalPendingFrame`（→client）：`grantedPermission` /
-    `serverProof` / `sessionToken` / `videoAttachExpiresInMs`。
-12. `base64 canonical` 定义与测试（填充 / 字母表 / 长度校验——两端必须字节一致）。
+9. ✅ `AuthChallengeFrame`（→client）：`sessionId` / `serverDeviceId` / `serverNonce`(b64 32B) /
+   `certSha256`(HEX) / `expiresInMs`——另含 `type` 共 7 字段；拒绝码族 `challenge-*`。
+10. ✅ `AuthResponseFrame`（→server）：`clientDeviceId` / `clientName` / `clientNonce` /
+    `requestedPermission` / `clientProof`(b64)——`clientName` 硬化（非空 / ≤64 /
+    无控制字符 / UTF-16 良构；ADR-040 第 6 条）。
+11. ✅ `AuthSuccessFrame` + `ApprovalPendingFrame`（→client）：`grantedPermission` /
+    `serverProof` / `sessionToken` / `videoAttachExpiresInMs`——**另加计划外
+    `AuthenticationFailedFrame`**（阶段 3/4 公共前置件；ADR-040 第 5 条，记录在案）。
+12. ✅ `base64 canonical` 定义与测试——**判定式 = round-trip 逐字符相等**；
+    另有 canonical HEX / canonical GUID 同规则、跨帧 wrong-type 分类（ADR-040 第 1/3 条）。
 
 **阶段 3 —— 服务端认证状态机**
 
@@ -1991,3 +1994,80 @@ Transport **226** / Security **66**，总数不变）。
 
 **下一站 = 阶段 2（认证消息帧 JSON 严格解析）**：4 类帧 + canonical base64 校验/解析；
 照 `HelloFrame` 严格模式（重复字段 / 未知字段 / 大小写 / 深度全写死 + 逐项测试）。
+
+### 18.7 阶段 2 执行记录（2026-09-22）—— 认证消息帧（JSON 严格解析）
+
+**状态：完成**（提交 `21a8829`，18 files，+3031；§18.2 步骤 9–12 全落地，另加 1 个计划外帧）。
+
+**产出与落点**
+
+- **帧类 ×5**（`src/LanRemote.Transport/Auth/`；API 形态 = `TryParse(ReadOnlySpan<byte> utf8,
+  out XFrame? frame, out string? rejection)` + `Serialize()`；纯标志帧 `ApprovalPendingFrame` /
+  `AuthenticationFailedFrame` 用 static class + `TryParse(ReadOnlySpan<byte>, out string?)`）：
+  - `AuthChallengeFrame`（步骤 9）：`type`/`protocol`/`sessionId`/`serverDeviceId`/
+    `serverNonce`/`certSha256`/`expiresInMs`；拒绝码族 `challenge-*`（10 个短码）。
+  - `AuthResponseFrame`（步骤 10）：`clientDeviceId`/`clientName`/`clientNonce`/
+    `requestedPermission`/`clientProof` + `type`；`clientName` 硬化（非空 / ≤64 / 无控制字符 /
+    UTF-16 良构——名字最终出现在被控端本机审批面）。
+  - `AuthSuccessFrame`（步骤 11）：`grantedPermission`/`serverProof`/`sessionToken`/
+    `videoAttachExpiresInMs` + `type`；`grantedPermission` 必须 `view`/`control`。
+  - `ApprovalPendingFrame`（步骤 11）：唯一字段 `type`；序列化恰为
+    `{"type":"approval_pending"}`（字节稳定测试锁定）。
+  - `AuthenticationFailedFrame`（**计划外补充，已记录在案**）：语义为空、永不携带原因码——
+    认证失败唯一对外形式（阶段 3/4 公共前置件，避免届时手写第二套 JSON 解析面）。
+- **canonical 编码 ×3**（步骤 12）：`CanonicalBase64` / `CanonicalHex` / `CanonicalGuid`——
+  判定式统一 =「宽松 decode → 重新 encode → Ordinal 比较」（round-trip 逐字符相等）。
+- **`AuthJson` 增类型提示预读**（可选参数 `expectedType`/`wrongTypeCode` + `TryReadTypeHint`：
+  扫根对象第一层 `type` 字符串，嵌套用 `TrySkip` 跳过）——跨帧载荷（结构合法、类型是别的帧）
+  报 wrong-type 而非 malformed；主解析仍是唯一权威，提示不影响接受与否。
+- **测试 +234**：3 个 canonical 测试文件（往返扫掠 1..96 覆盖 padding 余数 / 大写字面量 /
+  `Accepts_Every_ToHexString_Output…` / D 格式收窄）+ 5 个帧测试文件（结构 = 基线字面量 +
+  `Build(...)` 变体构造器 + `Patch(from,to)` + `Rejects(json, expected)` 断言器；逐项覆盖：
+  重复/未知字段、大小写、注释、尾逗号、尾随数据、非法 UTF-8/BOM、null=missing、跨帧交叉拒绝
+  （真实序列化字节互喂全 wrong-type）、构造器 fail-fast、输入缓冲复制、拒绝短码不含输入）。
+
+**实测事实（本阶段新增，全部实锤）**
+
+- `Utf8JsonReader.GetString()` 对非法 UTF-8 抛 `InvalidOperationException`（内层
+  `DecoderFallbackException`），**不是** `JsonException`（`JsonSerializer.Deserialize` 才会包成
+  JsonException）→ `TryReadTypeHint` 必须两类都捕。
+- `System.Text.Json` 解码孤立代理转义 `\uD800` 时**直接抛 `JsonException`** → 归 malformed，
+  到不了 bad-name（测试预期按实测修正并留注释；`IsAcceptableClientName` 的代理判定保留，
+  保护构造器路径）。
+- `Guid.TryParseExact("D")` 除容忍大写外**还容忍前后空白**——round-trip 是唯一收窄者
+  （M2 变异意外收获：canonical GUID 的空白用例跟着红）。
+- `"AA++"` / `"AA//"` 是**合法** canonical base64（`+`/`/` 属标准字母表）——写测试时先入
+  为主误判为非法、被实测纠正（拒绝组换成 `AA--`/`AA__`）。
+
+**设计微决策（记录在案；合同级内容已 ADR-040 化）**
+
+- 帧内判定顺序：type 缺失 → type 不等（wrong-type）→ 其余字段存在性（missing）→ 逐字段判值；
+  null 值按 missing 报。
+- `expiresInMs` / `videoAttachExpiresInMs` 只做「正值」判定——上界不在帧层发明，
+  由消费方绝对 deadline 兜底。
+- 构造器 fail-fast：长度 / 非正数 / 未定义枚举（`_ = AuthProtocol.EncodePermission(...)`）
+  立即抛；输入数组 `ToArray()` 复制防外部突变。
+- `AuthProtocol.TryDecodePermission` 补齐解析方向（`EncodePermission` 的逆；大小写精确）。
+
+**变异验证（4 次）** —— 恢复后均以 `git diff` + `grep TEMP-MUTATION` 确认干净：
+
+- M1「`AllowDuplicateProperties=true`」→ **5 红**精确（3 条 `Rejects_Duplicate_Fields` +
+  2 条无载荷帧重复字段）；
+- M2「`CanonicalGuid` round-trip 失效」→ **6 红**（3 条 bad-id + 3 条 canonical 收窄用例）；
+- M3「challenge `serverNonce` 长度判定摘除」→ **首轮 0 红** → 当场抓到一条**假测试**：
+  「31 字节」手抄字面量实为 45 字符（excess padding，根本不是合法 base64），测试从未触到
+  长度判定、被别的拒绝路径救活；修复 = 测试加 `B64(int)` helper（BCL `Convert.ToBase64String`
+  构造 16/31/33 字节邻界值，不再手抄长串），**重放 M3 → 精确 1 红**
+  （`Rejects_Bad_Server_Nonce`）；同款坏字面量在 response / success 两个测试文件同步修掉；
+- M4「success `serverProof` 长度判定摘除」→ **精确 1 红**（`Rejects_Bad_Server_Proof`——
+  验证修复后的 success 邻界用例同为真测试）。
+
+**全量验证**：Debug `dotnet build` **0 警告 0 错误**；`dotnet test` **877 PASS / 0 FAIL**
+（Protocol 223 + Transport 460 + Core 125 + Security 66 + Integration 3；
+Transport 226→460 = +234）。
+
+**下一站 = 阶段 3（服务端认证状态机，步骤 13–17）**：challenge 生成（绝对 deadline）/
+验证链（重算 + `FixedTimeEquals`，失败一律 generic `authentication_failed`）/
+failed auth limiter（按 remote IP）/ local approval + `approval_pending`（v1 = 每个新连接
+都批，ADR-038）/ sessionToken + `SessionRegistry`。衔接层（ADR-037 的
+`ControlPreAuthHandoff`）随之落地，门禁测试改写与实现同批（写了才有 → 能测）。

@@ -1,8 +1,8 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR 工作副本 `docs/DECISIONS.md`（010~038；037=衔接层 / 038=认证协议，均 2026-09-21 定案）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
-> 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；本文件 ~6.8K 字符 = 安全。
+> ADR 工作副本 `docs/DECISIONS.md`（010~040；037=衔接层 / 038=认证协议 / 039=认证核心层次 / 040=canonical 判定式与帧校验合同）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
+> 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；本文件 ~8.2K 字符 = 安全（2026-09-22）。
 > 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
 ## 定位与硬约束
@@ -43,10 +43,10 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
-| **M4** | **进行中：阶段 0、1 完成（2026-09-22，`35506b5`）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：**双档 transcript + HMAC proof 纯函数核心** + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（**643 PASS**）。下一站 = 阶段 2（认证帧 JSON 严格解析）。6 阶段 21 步见 HANDOFF §18 |
+| **M4** | **进行中：阶段 0、1、2 完成（2026-09-22）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：双档 transcript + HMAC proof 纯函数核心 + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（643 PASS）；阶段 2（**`21a8829`**）：**5 个认证帧 + canonical base64/HEX/GUID + 严格 JSON 解析**（ADR-040；Transport 226→460，**877 PASS**；变异 ×4，M3 抓到一条假测试并修复）。下一站 = 阶段 3（服务端认证状态机）。6 阶段 21 步见 HANDOFF §18 |
 | M5~M11 | 未开始 |
 
-M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）。
+M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**。
 远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **helper-selector 陷阱**（源码级定论）：`git-credential-helper-selector` 每次被调必弹 GUI（无静默委托、无桌面即挂起、`--help` 也弹并写配置），「`<no helper>`+Always」= 把 `credential.helper` 写成空串（清链）。**已全局修复（2026-09-21）**：`selected = manager` + 链「空值+`manager`」（repo 级同配双保险）；机器级 fill rc=0、trace 只见 GCM；**勿裸跑 selector**。此后每轮收尾 `git push origin main`。
 
 ## 实测事实（别再猜）
@@ -55,6 +55,7 @@ M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`
   无 Windows API 依赖的纯逻辑（如认证协议核心）必须放 net10.0 层（Transport）否则传输层无法消费；Security（net10.0-windows）只留 DPAPI/证书/密钥存储。ADR-039
 - **证书私钥（ADR-029/030）**：SslStream 服务端必须 `DefaultKeySet`；`EphemeralKeySet` 9/9 失败（`does not support ephemeral keys` ← `0x8009030E`）；`PersistKeySet` 留磁盘副本。`CreateSelfSigned()` 直出私钥也是 ephemeral → 必须「导出 PFX → Default 重导入」。污染陷阱：同进程先 Persist 再 Ephemeral 会碰巧成功 → 结论须新进程。**判 TLS 失败永远抓服务端异常**（客户端只有 EOF）
 - **.NET 10 默认值**：`AllowDuplicateProperties`=True 且后者覆盖；`MaxDepth` 属性值=0（=内置 64）；客户端 `AllowTlsResume/AllowRenegotiation`=True，服务端 Renegotiation=**False**（不对称）；`EnabledSslProtocols=None` 须显式写；校验回调参数是 `X509Certificate` 基类 → 用 `GetRawCertData()`
+- **认证帧解析（M4 阶段 2 实测）**：`Utf8JsonReader.GetString()` 对非法 UTF-8 抛 `InvalidOperationException`（**非** JsonException——`JsonSerializer.Deserialize` 才包成 JsonException）→ catch 必须两类都捕；孤立代理转义 `\uD800` 直接 JsonException → 归 malformed；`Guid.TryParseExact("D")` 容忍大写**和前后空白**（canonical 靠 round-trip 收窄）；`"AA++"`/`"AA//"` 是**合法** canonical base64（`+`/`/` 属标准字母表）
 - **发现**：probe 回应目标 = `remote.Address:45872`（非源端口）；sender 必须显式 `SetSocketOption(MulticastInterface, 网络序 4 字节)`
 - **Windows**：一张网卡 DHCP/静态不能共存；`netsh` 退出码不可信（`Get-NetIPInterface` 复核）；选网卡排除 VMnet 等虚拟；PS 5.1 `($x|%{...} -join ', ')` 是绑定陷阱；`172.100.x.x` **不是** RFC1918（按数值判，172 段只到 172.31）
 - **提权**：`ShellExecuteExW("runas")`+`WaitForSingleObject`+取退出码（UAC 拒绝=`ERROR_CANCELLED`1223）；主进程永不提权（ADR-035：窄域 helper + 固定动词 + TOCTOU 重校验）
@@ -79,6 +80,7 @@ accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 
 - 帧读取器「失败后恢复」场景：**消费掉的字节无法退回**——半前缀超时后再读必然错位；恢复性用例只能建在 **0 字节失败**上（B19 定案）
 - `dotnet test` 全量数总数用 `| grep -E "已通过!|失败!"`：`tail -N` 会截掉**首个**项目结果行（Protocol.Tests 曾被整行吞掉，574→601 的「差值」据此而来）
 - **黄金向量黄金律**：期望值必须来自被测实现之外的**独立第二实现**（`scripts/reference/gen-auth-golden-vectors.py`，纯标准库 Python）；NUL 字面量一律写 `\u0000`——C# 字符串 **`\0` 后跟数字会被解析成八进制转义**（uuid 串以数字开头时必踩，实测）；变异验证专抓「只断言常量关系、不触实现」的假测试（M3 变异实测抓到一条）
+- **测试字面量纪律**：长 base64 **一律 `Convert.ToBase64String` 现造**（`B64(int)` helper），手抄必错——「31 字节」手抄串实为 45 字符（excess padding，非法 base64），测试被别的拒绝路径救活 = 假测试（M4 阶段 2 变异验证第二次抓到同类，邻界值必须走编码器构造）
 
 ## 网络 / lab
 
