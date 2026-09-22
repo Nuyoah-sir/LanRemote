@@ -150,4 +150,26 @@ public static class AuthProtocol
             permission,
             "未定义的 SessionPermission 值，无法编码为线上串。"),
     };
+
+    /// <summary>
+    /// 把线上串解析为权限枚举（帧解析用；大小写精确匹配 <c>view</c> / <c>control</c>）。
+    /// </summary>
+    /// <param name="value">线上串。</param>
+    /// <param name="permission">解析结果；失败时为 <see cref="SessionPermission.ViewOnly"/>（默认值）。</param>
+    /// <returns>是否为合法权限串。</returns>
+    public static bool TryDecodePermission(string? value, out SessionPermission permission)
+    {
+        switch (value)
+        {
+            case PermissionView:
+                permission = SessionPermission.ViewOnly;
+                return true;
+            case PermissionControl:
+                permission = SessionPermission.Control;
+                return true;
+            default:
+                permission = default;
+                return false;
+        }
+    }
 }
