@@ -1,5 +1,13 @@
 # 协议与安全规格
 
+> **本地修订记录**。本副本是规格包 `LanRemote_Implementation_Package/04_PROTOCOL_AND_SECURITY.md`
+> 的本地工作副本（规格包只读、不回写）。随里程碑落地同步修订；**与原文冲突时以
+> `docs/DECISIONS.md` 的 ADR 为准**。修订点以 `【本地修订 N】` 标记，原文保留以便对照。
+>
+> - 【本地修订 1】2026-09-21，依据 ADR-038 第 1 条（§9 认证）：transcript 拆为
+>   ClientAuthTranscript / ServerGrantTranscript **双档**；`serverProof` 绑定 grant 档
+>   （原文的单 transcript 双 proof 形态作废）。
+
 ## 1. 威胁模型
 
 考虑：
@@ -203,22 +211,25 @@ Client 生成 32-byte `clientNonce`。
 
 Canonical transcript 必须用**固定字段顺序的二进制/UTF8 构造函数**，不要直接对任意 JSON 字符串做 HMAC，因为空格/字段顺序会不同。
 
-建议：
+> 【本地修订 1】以下**双档** transcript 为定案形态（ADR-038 第 1 条）；字节级实现见
+> `src/LanRemote.Security/Auth/AuthTranscriptBuilder.cs`，独立黄金向量见
+> `scripts/reference/gen-auth-golden-vectors.py`。
 
 ```text
-LANREMOTE-AUTH-V1\0
-sessionId\0
-serverDeviceId\0
-clientDeviceId\0
-serverNonce(base64 canonical)\0
-clientNonce(base64 canonical)\0
-certSha256(uppercase hex)\0
-requestedPermission(view|control)
+ClientAuthTranscript =
+  LANREMOTE-AUTH-V1\0
+  sessionId\0
+  serverDeviceId\0
+  clientDeviceId\0
+  serverNonce(base64 canonical)\0
+  clientNonce(base64 canonical)\0
+  certSha256(uppercase hex)\0
+  requestedPermission(view|control)          ← 末尾字段，无尾随 \0
 ```
 
 Client：
 ```text
-clientProof = HMAC-SHA256(accessKeyBytes, transcript)
+clientProof = HMAC-SHA256(accessKeyBytes, ClientAuthTranscript)
 ```
 
 发送：
@@ -253,9 +264,18 @@ Server：
 本机同意后：
 
 ```text
-serverProof = HMAC-SHA256(accessKeyBytes, UTF8("server\0") || transcript)
+ServerGrantTranscript =
+  LANREMOTE-GRANT-V1\0
+  SHA256(ClientAuthTranscript 的 UTF-8 字节)的 uppercase hex\0
+  grantedPermission
+
+serverProof = HMAC-SHA256(accessKeyBytes, "server\0" || ServerGrantTranscript)
 sessionToken = random 32 bytes
 ```
+
+> 【本地修订 1】`serverProof` 由「绑 `transcript`」改为「绑 ServerGrantTranscript」：
+> `grantedPermission` 只进 grant 档；客户端验证前用**自己那份** transcript 与收到的 granted
+> 重建 grant 档——**granted 被中途篡改即验证失败**（ADR-038 第 1 条）。
 
 发送：
 ```json
