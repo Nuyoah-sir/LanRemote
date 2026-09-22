@@ -904,3 +904,60 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 跨帧交叉拒绝（真实序列化字节互喂）+ 变异 ×4；其中 M3 当场抓到并修复一条
 「手抄 base64 坏字面量」造成的**假测试**（测试改用 BCL 编码器构造邻界值）。
 **实施时机**：已完成（提交 `21a8829`；HANDOFF §18.7；Transport 226→460，全量 877 PASS）。
+
+---
+
+### ADR-041 — 认证状态机的合同级决定（M4 阶段 3 落地）：登记时点、密钥触碰时点、窗口后置校验、限流语义、审批单读者
+**日期**：2026-09-22（M4 阶段 3）
+**Decision**：
+
+1. **登记的精确时点 = 「`auth_success` 字节写出成功」**：`SessionRegistry.Register` 只在
+   success 帧经 `FrameWriter` 写出且未抛异常之后调用；写失败（IOException / EndOfStream /
+   ObjectDisposed）→ `auth-success-not-delivered` → **不登记、不保持、认证不成立**。
+   这是 DoD「auth success 才能有 session」的时序化可执行形式（与 ADR-038 第 5 条配套：
+   注册入口 internal + 只有从 `Authenticated` 状态可达的路径调用它）。
+2. **访问密钥的触碰时点 = response 帧通过严格解析之后**：challenge 生成、限流拒绝、
+   帧级格式违规全程**不触碰** `IAccessSecretStore`；密钥整个 `RunAsync` 只加载一次、
+   `finally` 清零。理由：未认证对端不得用任意垃圾帧驱使 DPAPI / 密钥路径工作
+   （攻击面最小化，「格式合规才配见秘密」）。
+3. **机器窗口的后置校验**：读完 response 后**立即**检查窗口令牌 `IsCancellationRequested`
+   ——「response 校验完成 ≤ MachineWindow」是硬语义（读恰好压线完成也算超时）。
+   没有它，窗口实际边界会漂移成「窗口 + 解析耗时」。审批窗口同规理解：
+   自请求提交给审批面起算（ADR-038 第 4 条），排队等待不计入。
+4. **限流实现语义（ADR-038 第 2 条的落地细化）**：
+   ① **封禁到点即放行**（`IsBlocked` 不因窗口内保留的 ≥5 条旧记录继续拒）；到期后
+   **任一**新失败若窗口内累计仍 ≥5，立即再封 60 s——净效果：持续攻击被压到
+   「每 60 s 一次尝试」节奏，直到旧记录滑出 10 分钟窗；
+   ② **成功清空该 IP 全部记录（含封禁）**（`RecordSuccess` 直接移除条目）；
+   ③ 条目懒清理（只在 `IsBlocked` / `RecordFailure` 触达时回收；同子网地址空间有界）；
+   ④ 限流是**只读前置**：被罚 IP 连 challenge 都不发，且「被拒」本身不写任何计数。
+5. **审批三路竞速与单读者复用**：审批阶段 = 「决定 / 客户端活动（1 字节读）/ 窗口」三路
+   竞速；「客户端活动」这路读同时承担**断连侦测**与**成功后的保持读**——决定胜出时该
+   任务原样交接（handoff）给 `HoldUntilDisconnectAsync`，**全程只有一个读者**消费流
+   （审批期间断连 / 越界数据 >0 字节，与窗口到点、迟到决定同规：首个终态胜、其余作废）。
+6. **审批决定的校验式**：`Approved` 必须携带 `granted` 且通过 `IsGrantable`——
+   降级（control → view）永远可授 / 升级（view → control）仅当请求为 control /
+   未定义枚举拒（**不依赖枚举序数**）；请求 ID 不回指、缺权限、越权、未知终态 →
+   统一 `auth-approval-invalid`。5 个显式终态（Approved / Denied / TimedOut / Cancelled /
+   Unavailable）→ 5 个本地拒绝码一对一；**无 bool、无「没有 handler = 同意」**
+   （UI 不可用必须 Unavailable，fail closed）。
+7. **短关联码（本地显示面策略，非规格常量）**：
+   `SHA256("LANREMOTE-APPROVAL-CODE-V1" ‖ \0 ‖ sessionId ‖ clientNonce)` 前 3 字节大写 hex
+   （6 字符）。输入两端各知且 clientNonce 已进 proof 绑定；**仅作人工关联、不构成认证**——
+   任何展示与「自称」字段（clientDeviceId / clientName，discovery 数据未认证）同等对待。
+
+**Context**：阶段 3 是 ADR-037（衔接）+ ADR-038（协议定案）+ ADR-040（帧）三层决定在
+服务端状态机的汇合落地；本 ADR 固化实现中**超出三层既有文本**的语义决定——每一条都
+直接映射一个具体失败模式：「写了 success 但对端没收到却登记了 session」/「垃圾帧触发密钥
+路径」/「窗口因解析耗时漂移」/「把 60 s 封禁误读成 10 min 锁死或反之」/「审批期两个读者
+抢一条流」/「越权授予」/「短码被当成认证凭据」。
+**Consequence**：M5 video attach 校验复用 `SessionRegistry.TryGetSessionToken`（internal）；
+`ControlAuthOptions` 是**测试缩放形态**（全部时限可调）——产品默认值单点定义在
+`AuthProtocol`，不得被测试缩放误导；阶段 4 客户端须实现对称的两端验证
+（serverProof 独立重算 + 展示短码）。
+**可逆性**：未上线（无外部对端）——除第 3 条（放宽 = 弱化 deadline 语义）与第 6 条
+（fail closed 形态）外均可演进；一经两机验收冻结。
+**验证**：25 条 `ControlAuthSessionTests`（真实回环 TLS + 真实 TransportHost 全链）+
+变异 ×4（M1 于提交后重放核实 = 4 红精确：错钥 / 篡改权限 / 篡改指纹 / 失败延时边界）+
+全量 902 PASS / 0 FAIL。
+**实施时机**：已完成（提交 `760e950`；HANDOFF §18.8；Transport 460→485，全量 902 PASS）。
