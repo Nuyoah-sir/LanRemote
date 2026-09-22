@@ -24,6 +24,9 @@ LanRemote-source.zip
 ## 两机验收用的便携版二进制包（体积大，不入库）
 LanRemote-*.zip
 
+## 本机诊断与交付证据（含原始日志/源码快照，不作为源码入库）
+outputs/
+
 ## 测试
 TestResults/
 *.trx

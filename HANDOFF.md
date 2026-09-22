@@ -1,9 +1,17 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-22 11:36 (+08:00)**
+> 更新时间：**2026-09-22（阶段 4 Transport 实现与验证收口）**
 >
-> 本轮（**M4 · 阶段 3「服务端认证状态机」**）**动了代码**：
+> **当前状态：服务端两条时限缺陷已修复；客户端完整认证已落地并提交 `bc02a0c`。**
+> Debug / Release 全量各 **1036 PASS / 0 FAIL / 0 SKIP**，构建均 0 警告 / 0 错误。
+> 服务端 5 项防线及客户端 9 项防线均真实变异验证并重放，全部恢复；现行合同为 ADR-042/043。
+> **尚未完成：步骤 19 的验收器 UI 展示、阶段 5 实际接线与两机演练。**
+> 验收器密钥人工交付方式、批准前双端短码核对范围待用户确认；既定最小审批面无需重问。
+> 产品 App、权威规格、网络和防火墙均未改动。执行证据与下一步见 §18.10。
+> §18.9 保留旧反例历史，不再是当前停点；原证据 ZIP 是诊断基线，不含本次修复。
+>
+> 上轮（**M4 · 阶段 3「服务端认证状态机」**）**动了代码**：
 > 新建 7 个产品文件（`ConnectionSecurityContext` / `ControlAuthContext` /
 > `ControlAuthSession` / `ControlPreAuthHandoff` / `FailedAuthLimiter` /
 > `LocalApprovalGate` / `SessionRegistry`）+ 认证测试 `ControlAuthSessionTests.cs`
@@ -21,19 +29,12 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0、1、2、3 完成（2026-09-22；
-  阶段 3 = 服务端认证状态机 + 衔接层落地（ADR-037 可执行形式 + ADR-041 合同级决定）；
-  单机全量验证 902 PASS；执行记录见 §18.5 / §18.6 / §18.7 / §18.8）**
-- **下一里程碑步骤：M4 阶段 4 —— 客户端侧（步骤 18–20：认证流程 / 失败处理 / 客户端 e2e）**
+- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0–3 完成；阶段 3 时限修复与阶段 4 Transport 实现、测试、变异完成（2026-09-22）。** 步骤 18/20 完成；步骤 19 的断开/不发输入/固定文案已实现，验收器展示尚未接线，不宣称整个 M4 完成。
+- **下一步：阶段 5 验收器真实认证接线。先确认密钥人工交付及批准前短码核对范围；审批接受时刻、最小审批面已定不重问。当前无需转发旧评审、无需调整网络。**
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0、1、2、3）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`760e950`**（feat：M4 阶段 3——服务端认证状态机；上一条代码提交
-  `21a8829` = M4 阶段 2 认证消息帧；再上一条 `e7687ec` = 认证核心重定位
-  Security → Transport，ADR-039）。
-- **Working tree at validation（M4 阶段 3）：无未提交代码**——902 PASS 跑的就是被如实提交为
-  `760e950` 的工作树（含变异验证 ×4 全部恢复后的干净树：`grep TEMP-MUTATION` 零命中 +
-  `git diff` 只含目标改动；另于提交后对 M1 变异做过一次重放核实（4 红精确）、随即
-  `git checkout` 还原并重建确认）；验证后未再动代码（其后记账提交只动文档）。
+- **Last code commit：`bc02a0c`**（服务端接受截止修复 + 高层客户端认证及永久回归；22 files，+4290/−185；前一代码提交 `760e950` 为阶段 3 基线）。
+- **Working tree at validation：Debug/Release 各 1036 PASS 验证的是随后提交为 `bc02a0c` 的代码/测试树**，包含首轮客户端变异发现的 clock 观察点修正；所有产品变异已恢复。提交后 `git diff --exit-code -- src tests tools` 为零；验证后仅记账/证据整理，未再改代码。客户端第二轮开始与结束的 src/tests 181 文件 SHA-256 全一致；具体边界见 §18.10。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -1818,14 +1819,14 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 17. ✅ `sessionToken`（32 随机字节）+ `SessionRegistry`（**success 字节写出成功**才注册
     ——ADR-041 第 1 条；DoD 的可执行形式）。
 
-**阶段 4 —— 客户端侧**
+**阶段 4 —— 客户端侧：Transport 实现/验证完成，验收器展示待阶段 5 接线（§18.10）**
 
-18. 客户端认证流程：hello → challenge → clientNonce → transcript（**绑 presentedPin**）→
-    response → success → 验证 serverProof。
-19. 失败处理：serverProof 验证失败 → 立即断开 + UI 文案「远端身份验证失败，可能是错误密码或
-    伪造设备广播」+ 不发送输入。
-20. 客户端 e2e（真 TLS 双端）：correct key success；wrong key `authentication_failed`；
-    serverProof 篡改必拒。
+18. [完成] 客户端认证流程：hello → challenge → clientNonce → transcript（**绑 presentedPin**）→
+    response → success → 验证 serverProof；高层入口独占中间连接，成功才返回已认证会话。
+19. [Transport 完成 / UI 待接线] serverProof 验证失败 → 立即断开 + 固定文案「远端身份验证失败，可能是错误密码或
+    伪造设备广播」+ 不发送输入；文案由认证异常提供，尚未声称真实窗口已展示。
+20. [完成] 客户端 e2e（真 TLS 双端）：correct key success；wrong key `authentication_failed`；
+    serverProof 篡改必拒；独立 UTF-8/HMAC 对端及权限/身份/时限/秘密副本测试已覆盖。
 
 **阶段 5 —— 收口**
 
@@ -2126,7 +2127,7 @@ failed auth limiter（按 remote IP）/ local approval + `approval_pending`（v1
   - 交接 exactly-once ×2：`BeginAuthentication_Is_Exactly_Once_Per_Handoff`（detached 流）+
     `Auth_Session_Cannot_Be_Run_Twice`（第二次必抛「只允许跑一次」）。
   - 成功全链 ×1：帧序列**恰为** `[auth_challenge, approval_pending, auth_success]`；客户端
-    **独立**重算 proof / 验证 serverProof（两套独立算式交叉印证）；登记摘要逐字段；token 与
+    重算 proof / 验证 serverProof（更正：该旧 probe 复用了产品构造器，不是独立密码学 oracle；阶段4另补独立 UTF-8/HMAC 对端）；登记摘要逐字段；token 与
     下发逐字节相同；保持探针；断开后注销清零。
   - 失败面 ×6：错钥（计数 = 1）/ 篡改 permission / 篡改指纹（签名页 ≠ 报文页构造）/
     帧违规（零长度前缀 → `auth-frame:length-zero`，不计）/ 断连 EOF（不计）/ 密钥存储失败
@@ -2177,3 +2178,89 @@ transcript **绑 presentedPin** → response → success → **验证 serverProo
 不发送输入）；客户端 e2e（真 TLS 双端：correct key success / wrong key generic
 `authentication_failed` / serverProof 篡改必拒）。落点估计：`TlsClientConnector` 侧接线 +
 `AuthTranscriptBuilder` 客户端语义复用（**独立重算**，勿共享服务端算式）。
+
+### 18.9 阶段 4 开工复核：时限合同反例与外部评审停点（2026-09-22，历史）
+
+> 本节是修复前历史快照；评审已回收、用户已拍板、服务端修复和客户端实现已完成，当前进度以 §18.10 为准。下述「未修复/待转发」不再是当前要求。
+
+**当时结论：阶段 3 历史测试保持绿色，但两条缺失覆盖的时限合同已被本机真实 TLS 反例证伪；产品修复未实施，阶段 4客户端尚未编码。** 按用户常驻指令的外部模型通道暂停，待用户转发材料并贴回评审。此处不是阶段完成记账，不回填阶段4为完成。
+
+**代码事实**（基线 `760e950`）：
+
+- `ControlAuthSession.cs:178–224` 的 machine CTS 只包住challenge写、response读和读后取消检查；严格解析、`LoadOrCreateAsync(cancellationToken)`及HMAC比较在外，无完成时限后置判断。ADR-041 §3/此前“覆盖校验全程”的解释不成立。
+- `ControlAuthSession.cs:397–398` 先调用gate后创建审批Delay；同步前缀耗时未计入实际Delay。决定分支复核断连和权限，但接受批准前没有截止时间检查。
+- “过期不接受”与“到点强制停止同步DPAPI/gate执行”是两个不同合同，不能混用；完整修复待评审，不通过改大provisional数值掩盖。
+
+**实测方法与结果**：临时给 `ControlAuthSessionTests.cs` 加两条诊断用例，走真实回环TLS、真实TransportHost及完整pre-auth→auth状态机；仅store/gate注入耗时。没有改网络或访问实际用户秘密文件。
+
+| 诊断 | 窗口 | 首轮 | 重放 | 两轮结果 |
+| --- | --- | --- | --- | --- |
+| `Diagnostic_Machine_Window_Must_Include_Key_Load_And_Proof` | 700ms | keyLoad 2111ms | 2113ms | Completed=True；serverProofValid=True；连接保持时registry=1；进入审批 |
+| `Diagnostic_Approval_Window_Must_Include_Synchronous_Gate_Call` | 600ms | gate同步1803ms | 1807ms | Completed=True；serverProofValid=True；连接保持时registry=1 |
+
+两轮各 **2 FAIL**，均精确失败于“应拒绝，但Completed=True”；前置条件和客户端无异常断言已通过。帧序列均为challenge→pending→success。诊断验证的是时限，不是独立密码学oracle；没有断言生产DPAPI自然发生这些延迟，也没有运行真实WPF审批面。诊断patch第一条要求慢store完成，仅用于证明当前反例；永久回归需兼容修复后的提前合作取消。
+
+**恢复与验证**：
+
+- 反例已保存 `outputs/m4-deadline-review/deadline-counterexamples.patch`，临时测试从源码删除恢复；`git diff --exit-code -- src tests tools`通过；`git apply --check`确认补丁可重放。
+- 恢复后重新Debug build：**0警告/0错误**；全量原有 **902 PASS/0 FAIL/0 SKIP**，分项223+485+125+66+3。未跑Release、两机或数值实验。
+- **Last code commit：`760e950`（未改变）。Working tree at validation：src/tests/tools与该代码基线一致；诊断patch及证据独立保留，验证后仅更新文档/记忆/评审材料。** 原有902全绿只表示恢复成功，不能作为两条缺陷已修复的证据。
+- 本轮未提交/推送；评审材料和当前补记保留在工作区，待后续收口。不要把未提交文档误认为丢失的代码实现。
+
+**交付/下一步（当时记录）**：用户转发 `outputs/m4-deadline-review/M4_AUTH_DEADLINE_REVIEW_PROMPT.md`，可附同目录 `M4_AUTH_DEADLINE_EVIDENCE.zip`（相关源码、原始日志、patch、哈希清单）。回收后逐条核对前提；先修服务端截止/取消/迟到结果所有权并补永久回归，再实现客户端presentedPin绑定、serverProof门禁和真实TLS e2e，最后阶段5验收器。仍遵守不改产品UI、双击即GUI、不静默改网。
+
+### 18.10 服务端修复与阶段 4 Transport 收口（2026-09-22）
+
+**状态**：代码提交 `bc02a0c`；步骤 18/20 完成，步骤 19 的库层失败处理完成、验收器展示待阶段 5。不是完整 M4 或两机 DoD 通过。外部评审已回收，用户明确选择「按状态机接受时刻」；现行决定 ADR-042/043，取代 ADR-041 的旧时限解释。
+
+**服务端修复**
+
+- `AuthenticationDeadline` 使用单调时间，`elapsed >= budget` 拒绝；timer/token 负责合作式唤醒，timer 未派发不延长接受窗口；统一隔离 timer、父取消和显式取消中的回调异常。
+- `AuthenticationSecretLoader` 按认证 context 共用，最多一项未终结的实际 store 工作；取消等待后 late owner 先清零迟到 key 再归还准入，观察 fault/cancel。不每连接另起 Task.Run，不宣称硬中断同步 DPAPI。
+- machine 自 challenge 写前覆盖至 MAC 后最终检查；最后检查之前不操作 limiter、不进入审批。及时错误 proof 才计失败，抖动改用 RandomNumberGenerator，默认数值不变。
+- gate 调用前起独立审批窗口，同步前缀/Dispatcher/展示/人类等待都计入；`caller取消 > 截止 > 已观察活动 > 决定`，决定校验后再次复核；保持单读者并观察交接读 fault。
+- store 自发取消归 key-unavailable；gate fault 与停机竞速保留 caller 取消；pending/success 本地写超时有明确拒绝码。本地 success 写出成功不是对端交付确认，写预算独立于已结束的审批窗口。
+
+**客户端及永久回归**
+
+- `ControlClientConnector.ConnectAndAuthenticateAsync(...)` 内部独占 TLS→hello→认证全链；challenge 的 device/pin 与冻结目标/实际出示证书对齐；client transcript 绑定实际 presentedPin；grant 与 serverProof 独立门禁，允许 Control→ViewOnly，不允许越权。
+- 只有验证完成才返回 `AuthenticatedControlSession`；公开面只有身份、权限、sessionId、shortCode 与 Dispose，无裸流/token/输入接口。serverProof 失败固定文案为「远端身份验证失败，可能是错误密码或伪造设备广播」。失败/取消关闭连接。
+- key 在首次 await 前复制，finally 清私有副本；会话拥有独立 token 并在释放时清零。`AuthSuccessFrame` 严格 canonical token 使用栈临时缓冲，`FrameReader` 失败时清未交出的 payload 数组。
+- 客户端 machine 从 hello 本地写完起算；challenge 提示只收窄；一次合法 pending 接受后开始独立 approval；重复 pending 拒绝，prefix/payload 均受外层余量约束。解析、MAC 和会话构造后均做单调后置检查。
+- 服务端新增 68 例（970 基线），客户端/帧与读失败清理再增 66 例，合计相对 902 增 134；Transport 485→619。测试混合真实回环 TLS、独立 HMAC 对端、可控 clock、纯判定器、替身 I/O；不混称为两机或真实 Dispatcher 验收。
+
+**真实变异验证**
+
+- 服务端最终五项：MAC 最后检查 2红/2绿；`>=` 边界 1红；审批末次检查 1红/1绿；迟到 key 清零 1红；准入保留 1红。每项构建成功，三个源文件恢复哈希一致，随后重新构建测试。
+- 客户端首轮 01–09、重放 11–19，各九项：serverProof（4红）、实际 grant 绑定（2红）、overgrant（2红）、challenge device（1红）、实际 pin（1红）、MAC 后 deadline（2红）、重复 pending（1红）、token canonical（7红）、失败 payload 清零（4红）。每轮总计 24红/16绿，逐项恢复 40/40 绿；是执行次数，不是去重测试数。
+- 首轮发现并修正测试 clock 观察点：到期事件放在权限/MAC 前采样之后，本次返回旧采样；删被测 MAC 后检查也不能删掉到期事件。正确 proof 的两例仍由会话构造后 deadline 兜底挡住，属于纵深防御，不冒称单点独立覆盖。测试依赖具名采样阶段，未来插入取时点须复核。
+- 客户端重放前后整个 src/tests 的 181 个文件集及 SHA-256 一致；临时 device 变异触发过 1 条空性警告，恢复及最终构建均无警告。没有把编译错误当命中。
+
+**恢复后的最终全量验证（本机实跑）**
+
+| 项目 | Debug PASS | Release PASS |
+| --- | ---: | ---: |
+| Core | 125 | 125 |
+| Protocol | 223 | 223 |
+| Security | 66 | 66 |
+| Integration | 3 | 3 |
+| Transport | 619 | 619 |
+| 合计 | **1036** | **1036** |
+
+两种配置 build 均 **0警告/0错误**；test 均 **0失败/0跳过**。日志为 `outputs/m4-deadline-review/final-{debug,release}-{build,tests}.log`。`git diff --check` 通过；src/tests 无临时变异标记；主助手重新计算三产品文件 SHA 与重放清单一致。
+
+**Last code commit：`bc02a0c`。Working tree at validation：上述验证对应此提交的完整代码/测试树；验证后仅文档/本地证据整理，未改产品或测试。** 所有日志/原始诊断与压缩包保留本机 outputs，不当源码入库；新交付 `M4_STAGE4_VALIDATION.txt` 与 `M4_STAGE4_VALIDATION_EVIDENCE.zip`，区别于旧诊断 ZIP。
+
+**明确未证明或未完成**
+
+1. 普通 CTS 不保证中断永不返回的同步 store/gate/取消回调；异常隔离不是阻塞隔离。有界 loader 只限该 context 的 store，不扩大到任意本机工作。
+2. DTO 的不可变 Base64 string、JSON/FrameWriter/TLS 内部副本不在显式清零保证内；不能声称全进程无秘密残留。
+3. 客户端只消费首个终帧，未来重复 success 属后续协议消费者；批准前短码目前无公开过程通知，不能假装现有成功返回值支持它。
+4. 验收器 tools、本体 App 和权威规格未改；未跑真实 WPF Dispatcher、GUI/两机验收或数值定案实验；网络、防火墙、真实用户密钥未作操作。
+
+**阶段 5 的精确续作点**
+
+- 已定可直接做：真实 `DpapiAccessSecretStore` 复用现有 vault；Host 级共享认证 context；消费 handoff 并 await auth；已有最小审批字段/按钮、异步 Dispatcher 和请求 ID 绑定；client success 改走高层入口。旧 pin-mismatch/timeout/slow-dribble 保留原低层语义。
+- 成功证据改为客户端已验证会话 + Host 结果的 sessionId 配对，不能继续以 hello 后 EOF/PreAuthenticated 判成功；不公开 token/流，不把认证异常误分为 TLS 握手失败。
+- 待用户确认：仅验收器「本机 key 显式查看 + 对端 key 遮挡输入、不落盘」是否采用；本轮是否要求批准前双端显示/比较短码（需要最小非秘密过程通知 API）。不重问已定的最小审批面及接受时刻。
+- headless 无审批面不得自动批准；缺目标真实 deviceId/key 不得降级伪成功。现有“停止监听=中止作废”保持，不静默变成正常通过按钮。
