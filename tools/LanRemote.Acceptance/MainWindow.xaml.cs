@@ -1,117 +1,178 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
+using LanRemote.Core.Models;
 using LanRemote.Discovery;
+using LanRemote.Security.Secrets;
+using LanRemote.Transport;
 
 namespace LanRemote.Acceptance;
 
-/// <summary>
-/// 验收器主窗口。
-/// </summary>
-/// <remarks>
-/// <para><b>为什么要有这个窗口</b>：本项目是桌面软件，M2 的两机验收就是两台机器开界面跑的
-/// （HANDOFF §9.1：「用户在 B 机界面确认」「B 点刷新」），ADR-024/025/026 也定了
-/// 「终端用户永远不需要打开 PowerShell」。控制台 exe 双击只会打一行用法然后退出，
-/// 等于把验收推回终端，与这两条都冲突。</para>
-/// <para>因此本程序是 <c>WinExe</c> + WPF：<b>双击就是一个窗口</b>，不需要任何脚本。
-/// 所有输出走 <see cref="AcceptanceLog"/>（UI + 磁盘各一份），
-/// 「复制全部日志」把证据一次性带走。</para>
-/// <para><b>每次点开始都开一轮新的运行</b>：新一轮 = 新的 Run ID + 新的不可变日志文件。
-/// 于是「这一次到底测了什么」有确定边界，不会和上一次混在同一个文件里。
-/// UI 日志区是累积的（方便一次拷走），但每轮的开头都会打出自己的 Run ID 与文件名。</para>
-/// </remarks>
+/// <summary>WinExe 双击入口；UI 只拉取快照，角色和密钥工作均有可回收的任务。</summary>
 public partial class MainWindow : Window
 {
+    private const int HostWindowSeconds = 180;
+    private const int LogBatchSize = 200;
+    private const int UiLogCharacterLimit = 160_000;
     private readonly string _logDirectory = AcceptanceLog.DefaultDirectory;
-
-    /// <summary>
-    /// 进程级事实（窗口渲染完成这类「一次进程只有一次」的事）的落盘点。
-    /// </summary>
-    /// <remarks>
-    /// <para><b>为什么不写进本轮运行文件</b>：本轮文件是围着「一次验收运行」建的，
-    /// 而渲染发生在任何运行之前，一次进程只发生一次——两者生命周期不同，
-    /// 硬塞进某一轮会让「这一轮到底测了什么」的边界变模糊。</para>
-    /// <para><b>名字沿用 <c>gui.log</c></b>：HANDOFF 与外部评审 prompt 都是按这个名字找它的。
-    /// （它一度只剩文档——<c>AcceptanceLog</c> 在 f080581 改成 per-run 文件之后，
-    /// 「渲染完成」这行就只进 UI 不落盘了，于是「窗口没崩」这个证据反而带不走。）
-    /// 构造时清空、每行追加：一台机器一次启动对应一份，不会和历史混起来。</para>
-    /// </remarks>
     private readonly AcceptanceLog _processLog = new(AcceptanceLog.DefaultDirectory, "gui.log");
-
+    private readonly List<LogCursor> _logs = new();
+    private readonly DispatcherTimer _uiTimer;
+    private int _nextLog;
     private AcceptanceRun? _run;
+    private RunState? _activeRun;
     private CancellationTokenSource? _runCts;
-
-    /// <summary>本机当前能不能参与验收（自检结论）。</summary>
+    private Task<AcceptanceOutcome>? _runTask;
+    private Task? _runCancellationTask;
+    private Task? _busyTask;
     private bool _ready;
-
-    /// <summary>窗口正忙：自检或准备动作在进行中。</summary>
     private bool _busy;
+    private bool _faulted;
+    private bool _closing;
+    private bool _allowClose;
+    private long _closeStarted;
 
     public MainWindow()
     {
         InitializeComponent();
-
+        _logs.Add(new LogCursor(_processLog));
+        _uiTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(100),
+        };
+        _uiTimer.Tick += OnUiTick;
         Loaded += OnLoaded;
-
-        // 渲染完成 = WPF 排版/字体缓存真的跑通了。
-        // 这一行是「窗口没崩」的证据，不是装饰：
-        // WinExe 没有控制台，若 Measure 阶段抛异常，用户只会看到窗口一闪就没了。
         ContentRendered += OnContentRendered;
+        Deactivated += OnDeactivated;
+        Closing += OnClosing;
+        Closed += OnClosed;
+        UpdateButtons();
+        _uiTimer.Start();
     }
 
     private void OnContentRendered(object? sender, EventArgs e)
     {
         ContentRendered -= OnContentRendered;
-
-        string line = $"[GUI] 窗口渲染完成。 ActualWidth={ActualWidth} ActualHeight={ActualHeight}";
-        AppendLine(line);
-        _processLog.WriteLine(line);
+        _processLog.WriteLine($"[GUI] M4 窗口渲染完成。ActualWidth={ActualWidth} ActualHeight={ActualHeight}");
     }
 
-    // -----------------------------------------------------------------------
-    // 运行生命周期
-    // -----------------------------------------------------------------------
-    /// <summary>开一轮新的运行：新 Run ID、新不可变日志文件。</summary>
+    private bool CanStart => !_busy && !_closing && !_faulted && _activeRun is null && _runTask is null && _keyTask is null;
+
     private AcceptanceRun BeginRun(string role)
     {
-        if (_run is not null)
-        {
-            _run.Log.LineWritten -= OnLineWritten;
-        }
-
         _run = AcceptanceRun.Create(_logDirectory, role);
-        _run.Log.LineWritten += OnLineWritten;
-
-        // 日志行可能来自任意后台线程（accept 循环、discovery、TLS 回调），
-        // 所以每次回调都要回到 UI 线程再追加。
-        LogPathText.Text = "本轮日志：" + (_run.Log.FilePath ?? "(落不了盘，只有 UI 里这一份)");
+        _logs.Add(new LogCursor(_run.Log));
+        LogPathText.Text = "本轮日志：" + (_run.Log.FilePath ?? "未落盘；证据无效，内存日志仍可复制");
         return _run;
     }
 
-    private void OnLineWritten(string line) =>
-        Dispatcher.BeginInvoke(new Action<string>(AppendLine), line);
-
-    private void AppendLine(string line)
+    private void OnUiTick(object? sender, EventArgs e)
     {
-        LogBox.AppendText(line + Environment.NewLine);
-        LogBox.ScrollToEnd();
+        try
+        {
+            RefreshAuthentication();
+            PullLogs();
+            UpdateButtons();
+        }
+        catch (Exception) { HandleDispatcherFault(); }
+        finally
+        {
+            // 渲染/日志失败不能跳过回收；任务是否结束不以日志游标是否追平来判定。
+            ReapCompletedTasks();
+        }
+        try
+        {
+            if (_closing)
+            {
+                if (_activeRun is null && _runTask is null && _keyTask is null && !_busy)
+                {
+                    _allowClose = true;
+                    Close();
+                }
+                else if (Stopwatch.GetElapsedTime(_closeStarted) >= TimeSpan.FromSeconds(8))
+                {
+                    ShowBanner("关闭等待已超过 8 秒；任务仍未收回，窗口保持禁用。不强杀、不宣称完成，收回后自动关闭。",
+                        Brushes.MistyRose, Brushes.DarkRed);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            HandleDispatcherFault();
+        }
+    }
+
+    private void ReapCompletedTasks()
+    {
+        if (_keyTask is { IsCompleted: true } keyTask)
+        {
+            _keyTask = null;
+            try { keyTask.GetAwaiter().GetResult(); }
+            catch (Exception) { HandleDispatcherFault(); }
+        }
+        if (_busyTask is { IsCompleted: true } busyTask)
+        {
+            _busyTask = null;
+            _busy = false;
+            try { busyTask.GetAwaiter().GetResult(); }
+            catch (Exception) { HandleDispatcherFault(); }
+        }
+        if (_runTask is { IsCompleted: true } && _keyTask is null
+            && (_runCancellationTask is null || _runCancellationTask.IsCompleted))
+        {
+            try { FinishRole(); }
+            catch (Exception) { HandleDispatcherFault(); }
+        }
+    }
+
+    private void PullLogs()
+    {
+        int remaining = LogBatchSize;
+        StringBuilder batch = new();
+        // 所有旧 run 都保留游标，换轮不会丢掉未显示的行；每 tick 总量有限。
+        for (int visited = 0; visited < _logs.Count && remaining > 0; visited++)
+        {
+            LogCursor cursor = _logs[_nextLog];
+            _nextLog = (_nextLog + 1) % _logs.Count;
+            IReadOnlyList<string> lines = cursor.Log.ReadFrom(cursor.Offset, remaining);
+            cursor.Offset += lines.Count;
+            remaining -= lines.Count;
+            foreach (string line in lines)
+            {
+                batch.AppendLine(line);
+            }
+        }
+        if (batch.Length > 0)
+        {
+            LogBox.AppendText(batch.ToString());
+            if (LogBox.Text.Length > UiLogCharacterLimit)
+            {
+                LogBox.Text = LogBox.Text[^UiLogCharacterLimit..];
+            }
+            LogBox.ScrollToEnd();
+        }
+        if (_run?.Log.FileUnavailable == true)
+        {
+            LogPathText.Text = "本轮磁盘日志不可用，证据无效；可复制完整内存日志（不是仅界面可见部分）。";
+        }
     }
 
     private void ShowResult(AcceptanceOutcome outcome, string extra)
     {
-        (Brush background, Brush foreground) = outcome switch
+        ResultBanner.Background = outcome switch
         {
-            AcceptanceOutcome.Pass =>
-                (new SolidColorBrush(Color.FromRgb(0xE6, 0xF4, 0xEA)), Brushes.DarkGreen),
-            AcceptanceOutcome.PreconditionUnmet =>
-                (new SolidColorBrush(Color.FromRgb(0xFF, 0xF6, 0xE0)), Brushes.DarkOrange),
-            _ => (new SolidColorBrush(Color.FromRgb(0xFD, 0xEC, 0xEA)), Brushes.DarkRed),
+            AcceptanceOutcome.Pass => Brushes.Honeydew,
+            AcceptanceOutcome.PreconditionUnmet => Brushes.Cornsilk,
+            _ => Brushes.MistyRose,
         };
-
-        ResultBanner.Background = background;
         ResultBanner.Visibility = Visibility.Visible;
-        ResultBannerText.Foreground = foreground;
+        ResultBannerText.Foreground = outcome == AcceptanceOutcome.Pass ? Brushes.DarkGreen
+            : outcome == AcceptanceOutcome.PreconditionUnmet ? Brushes.DarkOrange : Brushes.DarkRed;
         ResultBannerText.Text = $"本轮结论：{outcome.Describe()}（{outcome.Code()}）。{extra}";
     }
 
@@ -122,421 +183,434 @@ public partial class MainWindow : Window
         RoleBannerText.Text = text;
     }
 
-    // -----------------------------------------------------------------------
-    // 自检
-    // -----------------------------------------------------------------------
-    private async void OnLoaded(object sender, RoutedEventArgs e) => await RunSelfCheckAsync();
-
-    private async void SelfCheckButton_Click(object sender, RoutedEventArgs e)
+    private void UpdateButtons()
     {
-        await RunBusyAsync(RunSelfCheckAsync);
+        bool idle = CanStart;
+        HostButton.IsEnabled = idle && _ready;
+        ClientButton.IsEnabled = idle && _ready;
+        PeerCodeBox.IsEnabled = idle;
+        PeerKeyBox.IsEnabled = idle;
+        PermissionBox.IsEnabled = idle;
+        SelfCheckButton.IsEnabled = idle;
+        PrepareAButton.IsEnabled = idle;
+        PrepareBButton.IsEnabled = idle;
+        UndoPrepareButton.IsEnabled = idle;
+        bool running = !_closing && !_faulted && _activeRun is { IsStopped: false } && _runTask is { IsCompleted: false };
+        StopHostButton.IsEnabled = running && _activeRun!.IsHost;
+        StopClientButton.IsEnabled = running && !_activeRun!.IsHost;
+        ShowKeyButton.IsEnabled = CanViewHostKey() && _keyTask is null && !_keyConfirming;
+        HideKeyButton.IsEnabled = _keyWork is not null || HostKeyText.Text.Length > 0;
     }
 
-    /// <summary>跑一次环境自检，并按结论刷新整个上半屏。</summary>
-    private async Task RunSelfCheckAsync()
+    private void OnLoaded(object sender, RoutedEventArgs e) => StartBusy(RunSelfCheckAsync);
+    private void SelfCheckButton_Click(object sender, RoutedEventArgs e) => StartBusy(RunSelfCheckAsync);
+
+    private void StartBusy(Func<Task> work)
     {
-        AcceptanceRun run = BeginRun("info");
-
-        try
-        {
-            InfoRole.InfoResult info = await InfoRole.RunAsync(run, CancellationToken.None);
-
-            DeviceCodeText.Text = info.DeviceCode;
-            CertPinText.Text = info.CertSha256;
-            ListenText.Text = info.ListenAddresses.Count == 0
-                ? "(无合格 RFC1918 网卡)"
-                : string.Join(", ", info.ListenAddresses);
-
-            _ready = info.Ready;
-            ShowReadyState();
-        }
-        catch (Exception ex)
-        {
-            ReadyText.Text = "自检失败：" + ex.Message;
-            ReadyText.Foreground = Brushes.DarkRed;
-            run.Log.WriteLine("[FATAL] 自检失败：" + ex);
-            _ready = false;
-
-            SetRoleButtonsEnabled(false);
-        }
+        if (!CanStart) { return; }
+        _busy = true;
+        // 先建立可回收任务，再做可能抛出的 UI 更新，避免留下永远为 true 的 busy。
+        _busyTask = RunBusyAsync(work);
+        PeerKeyBox.Clear();
+        UpdateButtons();
     }
 
-    /// <summary>
-    /// 把「能不能参与验收」讲清楚，<b>并且给出出路</b>。
-    /// </summary>
-    /// <remarks>
-    /// 早先这里写的是「请先用管理员 PowerShell 跑 set-lab-ip.ps1」——
-    /// 那是把用户推回终端，与「双击就是一个窗口」的形态约定直接冲突。
-    /// 现在这条出路就是下面那个按钮，文案只说按钮。
-    /// </remarks>
-    private void ShowReadyState()
-    {
-        if (_ready)
-        {
-            ReadyText.Text = "可以参与两机验收";
-            ReadyText.Foreground = Brushes.DarkGreen;
-        }
-        else
-        {
-            ReadyText.Text = "不能参与：本机还没有 192.168.1.0/24 的私有地址。"
-                + "点下面的「准备为 A 机 / B 机」一键配好（会弹一次 UAC），配完自动重新自检。";
-            ReadyText.Foreground = Brushes.DarkRed;
-        }
-
-        SetRoleButtonsEnabled(!_busy);
-        SetLabButtonsEnabled(!_busy);
-    }
-
-    private void SetRoleButtonsEnabled(bool enabled)
-    {
-        // 还要看自检结论：没准备好的机器不该能点「开始监听」——
-        // 点了只会得到「监听 0 个地址」，然后被读成产品缺陷。
-        HostButton.IsEnabled = enabled && _ready;
-        ClientButton.IsEnabled = enabled && _ready;
-    }
-
-    private void SetLabButtonsEnabled(bool enabled)
-    {
-        SelfCheckButton.IsEnabled = enabled;
-        PrepareAButton.IsEnabled = enabled;
-        PrepareBButton.IsEnabled = enabled;
-        UndoPrepareButton.IsEnabled = enabled;
-    }
-
-    /// <summary>在一个「窗口正忙」的窗口期里跑一段工作，期间禁用所有会改状态的动作。</summary>
     private async Task RunBusyAsync(Func<Task> work)
     {
-        if (_busy || _runCts is not null)
-        {
-            return;
-        }
-
-        _busy = true;
-        SetRoleButtonsEnabled(false);
-        SetLabButtonsEnabled(false);
-
         try
         {
             await work();
         }
-        finally
+        catch (Exception)
         {
-            _busy = false;
-            SetRoleButtonsEnabled(true);
-            SetLabButtonsEnabled(true);
+            ReportFault(_run, "窗口自检或 lab 工作");
+            _ready = false;
+            ShowResult(_run?.Settle(AcceptanceOutcome.HarnessError) ?? AcceptanceOutcome.HarnessError,
+                "工作异常；异常正文未输出。请检查日志与实际环境。");
+        }
+        // _busy 由定时器在任务回收后解除；关窗期间绝不取消提升操作。
+    }
+
+    private async Task RunSelfCheckAsync()
+    {
+        AcceptanceRun run = BeginRun("info");
+        try
+        {
+            InfoRole.InfoResult info = await Task.Run(() => InfoRole.RunAsync(run, CancellationToken.None));
+            AcceptanceOutcome outcome = run.Complete(info.Ready ? AcceptanceOutcome.Pass : AcceptanceOutcome.PreconditionUnmet,
+                "本机环境自检已收尾；同子网与对端可达性仍须两机核验。");
+            DeviceCodeText.Text = info.DeviceCode;
+            CertPinText.Text = info.CertSha256;
+            ListenText.Text = info.ListenAddresses.Count == 0 ? "(无合格 RFC1918 网卡)" : string.Join(", ", info.ListenAddresses);
+            _ready = info.Ready && outcome == AcceptanceOutcome.Pass && !_faulted;
+            ReadyText.Text = _ready ? "本机存在合格 RFC1918 地址；请确认对端位于同一子网。"
+                : "本机尚未就绪：请检查合格 RFC1918 网卡或自检故障。不限于 192.168.1.0/24；lab 按钮仅为可选配置。";
+            ReadyText.Foreground = _ready ? Brushes.DarkGreen : Brushes.DarkRed;
+        }
+        catch (Exception)
+        {
+            ReportFault(run, "MainWindow 自检");
+            _ready = false;
+            ReadyText.Text = "自检失败；异常正文未输出，请检查日志。";
+            ReadyText.Foreground = Brushes.DarkRed;
+            ShowResult(run.Settle(run.Complete(AcceptanceOutcome.HarnessError, "自检异常，资源收尾后结算。")), "本机尚未就绪。");
         }
     }
 
-    // -----------------------------------------------------------------------
-    // 一键准备本机 lab 网段
-    // -----------------------------------------------------------------------
-    private async void PrepareAButton_Click(object sender, RoutedEventArgs e) =>
-        await PrepareLabAsync(LabAction.ApplyA);
+    private void PrepareAButton_Click(object sender, RoutedEventArgs e) => PrepareLab(LabAction.ApplyA);
+    private void PrepareBButton_Click(object sender, RoutedEventArgs e) => PrepareLab(LabAction.ApplyB);
+    private void UndoPrepareButton_Click(object sender, RoutedEventArgs e) => PrepareLab(LabAction.Undo);
 
-    private async void PrepareBButton_Click(object sender, RoutedEventArgs e) =>
-        await PrepareLabAsync(LabAction.ApplyB);
-
-    private async void UndoPrepareButton_Click(object sender, RoutedEventArgs e) =>
-        await PrepareLabAsync(LabAction.Undo);
-
-    /// <summary>
-    /// 一键准备：显式确认 → 请管理员权限 → 等提升实例跑完 → 自动重新自检。
-    /// </summary>
-    /// <remarks>
-    /// <para><b>「一键」不等于「静默」</b>。按下去先有一个说清楚要改什么的确认框，
-    /// 再由系统弹 UAC；只有两处都点同意了才会动本机网络配置。
-    /// 静默改网络是这台机器上真出过事故的事（跑 M2 时断过网），
-    /// 所以 ADR-024/025/026 与 ADR-035 都把「显式触发」写成硬约束。</para>
-    /// <para><b>按钮与 <c>--headless prepare-lab</c> 走同一段代码</b>
-    /// （<see cref="LabSetupRole.PrepareAsync"/>）：窗口这条路多出来的只有确认框。
-    /// 判断逻辑放在这一层，就没法在命令行里复现——那种差异本工具最不想要。</para>
-    /// </remarks>
-    private async Task PrepareLabAsync(LabAction action)
+    private void PrepareLab(LabAction action)
     {
-        if (_busy || _runCts is not null)
-        {
-            return;
-        }
-
+        if (!CanStart) { return; }
         bool undo = action == LabAction.Undo;
-
         string question = undo
-            ? "撤销会把本机退回原状：\n\n" +
-              "  • 删掉 lab 地址（192.168.1.10 / 192.168.1.20）\n" +
-              "  • 删掉两条入站规则（UDP 45872、TCP 45873）\n" +
-              "  • 把网卡交还给 DHCP（或它原来的静态配置）\n\n" +
-              "需要管理员权限，会弹一次 UAC。继续吗？"
+            ? "撤销会删除 lab 地址与两条入站规则，并恢复网卡原有 DHCP 或静态配置。\n\n会改变网络配置，可能短暂断网，需要管理员权限并弹出 UAC。继续吗？"
             : "把本机准备成「" + action.Describe() + "」——" + action.Address() + "：\n\n" +
-              "  • 给上网这块网卡再加一个 192.168.1.x 地址（原来的地址保留，不会断网）\n" +
-              "  • 网络配置文件设为「专用」\n" +
-              "  • 放行入站 UDP 45872（发现）与 TCP 45873（控制）\n\n" +
-              "需要管理员权限，会弹一次 UAC。做完随时可以点「撤销准备」退回原状。\n\n" +
-              "继续吗？";
-
-        MessageBoxResult answer = MessageBox.Show(
-            question,
-            undo ? "撤销 lab 网络设置" : action.Describe(),
-            MessageBoxButton.OKCancel,
-            undo ? MessageBoxImage.Warning : MessageBoxImage.Question);
-
-        if (answer != MessageBoxResult.OK)
+              "给上网网卡增加 192.168.1.x 地址、网络配置文件设为「专用」、放行 UDP 45872 与 TCP 45873。\n\n" +
+              "会改变网络配置，可能短暂断网，需要管理员权限并弹出 UAC。完成后可按原流程撤销。继续吗？";
+        if (MessageBox.Show(this, question, undo ? "撤销 lab 网络设置" : action.Describe(),
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
         {
-            AppendLine("[UI] 用户取消了「" + action.Describe() + "」，本机没有任何更改。");
+            _processLog.WriteLine("[UI] 用户取消 lab 确认；未启动配置动作。");
             return;
         }
-
-        await RunBusyAsync(async () =>
+        StartBusy(async () =>
         {
             AcceptanceRun run = BeginRun(action.Verb());
-
-            ShowBanner(
-                "正在准备本机…… 若弹出 UAC 请点「是」。提升实例是另一个进程，它的日志会实时出现在下面。",
-                new SolidColorBrush(Color.FromRgb(0xFF, 0xF6, 0xE0)), Brushes.DarkOrange);
-
+            ShowBanner("正在执行已确认的 lab 动作；若弹出 UAC 请核对。期间不允许关窗或中途取消提升动作。",
+                Brushes.Cornsilk, Brushes.DarkOrange);
             try
             {
-                AcceptanceOutcome outcome = await LabSetupRole.PrepareAsync(run, action, CancellationToken.None);
-
-                ShowResult(outcome, outcome switch
-                {
-                    AcceptanceOutcome.Pass => "本机已就绪，接着按对端那台机器的角色开始验收。",
-                    AcceptanceOutcome.PreconditionUnmet =>
-                        "本机没有任何更改（多半是 UAC 没同意）。随时可以再点一次。",
-                    _ => "看日志里的 [LAB] 那几行：提升实例与脚本的原话都在上面。",
-                });
+                AcceptanceOutcome outcome = await Task.Run(() => LabSetupRole.PrepareAsync(run, action, CancellationToken.None));
+                ShowResult(run.Settle(outcome), "请核对 [LAB] 日志及实际网络状态；未完成交接不表示配置未改变。");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                run.Log.WriteLine("[FATAL] 准备动作崩溃：" + ex);
-                run.ReportBackgroundFault("MainWindow 准备 lab", ex);
-                ShowResult(AcceptanceOutcome.HarnessError, "准备动作抛出未预期异常，见日志。");
+                ReportFault(run, "MainWindow 准备 lab");
+                ShowResult(run.Settle(run.Complete(AcceptanceOutcome.HarnessError, "lab 调用异常；不能断言提升实例已经结束。")),
+                    "请核对实际网络状态，不要把异常视为未做任何更改。");
             }
-
-            // 无论成败都重新自检：面板上的地址与状态必须反映这台机器<b>现在</b>的样子，
-            // 而不是「刚才那一步的意图」。
-            await RunSelfCheckAsync();
+            if (!_faulted) { await RunSelfCheckAsync(); }
         });
     }
 
-    // -----------------------------------------------------------------------
-    // 被控端
-    // -----------------------------------------------------------------------
-    private async void HostButton_Click(object sender, RoutedEventArgs e)
+    private void HostButton_Click(object sender, RoutedEventArgs e)
     {
-        AcceptanceRun run = BeginRun("host");
-
-        CancellationTokenSource cts = new();
-        _runCts = cts;
-
-        // 角色锁：选定被控端后，控制端那组到停机为止都不能再用。
-        // 同一台机器既当被控端又当控制端，会让「对端」的语义消失，
-        // 测出来的东西无法解释。
-        LockRole(lockedToHost: true);
-
+        if (!CanStart || !_ready) { return; }
         try
         {
-            AcceptanceOutcome outcome = await HostRole.RunAsync(
-                run, HostRole.RunUntilCancelled, cts.Token);
-
-            ShowResult(outcome, outcome == AcceptanceOutcome.Pass
-                ? "把这一整段日志拷走，它就是被控端的证据；控制端日志要能对上这里的汇总行。"
-                : "看日志末尾的 [HOST][SUMMARY] 与 [RESULT]。");
+            PeerKeyBox.Clear();
+            RunState state = StartRole(isHost: true);
+            _runTask = Task.Run(() => RunRoleWorkerAsync(state, () => HostRole.RunAsync(
+                state.Run, HostWindowSeconds, state.Cts.Token, state.Inbox, state.PublishContext, state.Stop)));
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            run.Log.WriteLine("[FATAL] 被控端崩溃：" + ex);
-            ShowResult(AcceptanceOutcome.HarnessError, "被控端抛出未预期异常，见日志。");
+            HandleDispatcherFault();
+        }
+    }
+
+    private void ClientButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CanStart || !_ready) { return; }
+        byte[] key = Array.Empty<byte>();
+        bool transferred = false;
+        try
+        {
+            // Password 只取一次，先 Clear 再解析；字符串及 WPF 副本无法承诺擦净。
+            string input;
+            try { input = PeerKeyBox.Password; }
+            finally { PeerKeyBox.Clear(); }
+            bool valid;
+            try { valid = SecretGenerator.TryDecodeAccessKey(input, out key); }
+            finally { input = string.Empty; }
+            string peerCode = PeerCodeBox.Text.Trim();
+            if (!valid || peerCode.Length == 0 || IsSelf(peerCode))
+            {
+                MessageBox.Show(this, "请填写有效的对端访问密钥和非本机设备码。密钥输入已清空，本次未连接。",
+                    "检查对端输入", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            SessionPermission permission = PermissionBox.SelectedIndex == 0 ? SessionPermission.ViewOnly : SessionPermission.Control;
+            RunState state = StartRole(isHost: false);
+            byte[] ownedKey = key;
+            // 不给 Task.Run 调度令牌：即使立即取消，委托也必须进入 finally 清零。
+            _runTask = Task.Run(async () =>
+            {
+                try
+                {
+                    return await RunRoleWorkerAsync(state, () => ClientRole.RunAllAsync(
+                        state.Run, ClientRole.MandatoryScenarios, peerCode, null, null,
+                        DiscoveryConstants.ExpectedTransportPort, state.Cts.Token,
+                        ownedKey, permission, state.PublishPending)).ConfigureAwait(false);
+                }
+                finally { CryptographicOperations.ZeroMemory(ownedKey); }
+            });
+            transferred = true;
+        }
+        catch (Exception)
+        {
+            HandleDispatcherFault();
         }
         finally
         {
-            UnlockRoles();
-            _runCts = null;
+            if (!transferred) { CryptographicOperations.ZeroMemory(key); }
         }
     }
 
-    private void StopHostButton_Click(object sender, RoutedEventArgs e)
+    private RunState StartRole(bool isHost)
     {
-        _run?.Log.WriteLine("[UI] 用户点了「停止监听」。");
-        StopHostButton.IsEnabled = false;
-
-        // 停机会强行关掉 socket，而「连接被关闭」正是若干场景的通过条件。
-        // 不整轮作废，就等于用一次按停操作伪造出通过。
-        _run?.MarkOperatorAbort("UI 停止监听");
-        _runCts?.Cancel();
+        HideHostKey();
+        AcceptanceRun run = BeginRun(isHost ? "host" : "client");
+        _runCts = new CancellationTokenSource();
+        RunState state = new(run, _runCts, isHost);
+        _activeRun = state;
+        ApprovalList.ItemsSource = null;
+        ClientPendingText.Text = string.Empty;
+        ApprovalStatusText.Text = "无待批请求。已提交不等于已授权；短码仅作人工关联。";
+        ResultBanner.Visibility = Visibility.Collapsed;
+        ShowBanner(isHost
+            ? "HOST —— 启动后监听 180 秒，到时正常结算；提前停止会作废本轮。"
+            : "CLIENT —— 正在依次跑四个场景。pending 不代表认证成功，M4 还需两机证据核对。",
+            Brushes.AliceBlue, Brushes.DarkBlue);
+        UpdateButtons();
+        return state;
     }
 
-    // -----------------------------------------------------------------------
-    // 控制端
-    // -----------------------------------------------------------------------
-    private async void ClientButton_Click(object sender, RoutedEventArgs e)
+    private static async Task<AcceptanceOutcome> RunRoleWorkerAsync(RunState state, Func<Task<AcceptanceOutcome>> role)
     {
-        string peerCode = PeerCodeBox.Text.Trim();
-
-        if (peerCode.Length == 0)
-        {
-            MessageBox.Show(
-                "请填写对端（被控端）的设备码，形如 M5WC-14GX。\n" +
-                "它显示在对方窗口顶部的「设备码」一栏。",
-                "缺少对端设备码", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        if (IsSelf(peerCode))
-        {
-            MessageBox.Show(
-                "对端设备码就是本机自己。\n\n" +
-                "两机验收必须一台当被控端、另一台当控制端；" +
-                "填自己的设备码会让「同一子网校验」「pinning」全部失去意义。",
-                "对端不能是本机", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        AcceptanceRun run = BeginRun("client");
-
-        CancellationTokenSource cts = new();
-        _runCts = cts;
-
-        LockRole(lockedToHost: false);
-
+        AcceptanceOutcome outcome;
         try
         {
-            run.Log.WriteLine("[CLIENT] 对端设备码 = " + peerCode);
-
-            AcceptanceOutcome outcome = await ClientRole.RunAllAsync(
-                run,
-                ClientRole.MandatoryScenarios,
-                peerCode,
-                address: null,
-                pinHex: null,
-                DiscoveryConstants.ExpectedTransportPort,
-                cts.Token);
-
-            ShowResult(outcome, outcome == AcceptanceOutcome.Pass
-                ? "控制端自己只给到 PASS-CLIENT；里程碑是否通过，要拿被控端汇总行核 " +
-                  "日志末尾的「两机交叉核对」。"
-                : "看日志末尾的 [CLIENT][RESULT] 与「两机交叉核对」。");
+            outcome = await role().ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (state.Cts.IsCancellationRequested)
         {
-            run.Log.WriteLine("[FATAL] 控制端崩溃：" + ex);
-            run.ReportBackgroundFault("MainWindow 控制端", ex);
-            ShowResult(AcceptanceOutcome.HarnessError, "控制端抛出未预期异常，见日志。");
+            outcome = AcceptanceOutcome.InvalidRun;
+        }
+        catch (Exception)
+        {
+            ReportFault(state.Run, "MainWindow 角色任务");
+            outcome = AcceptanceOutcome.HarnessError;
         }
         finally
         {
-            UnlockRoles();
+            try { state.Stop(); }
+            catch (Exception) { ReportFault(state.Run, "MainWindow 角色状态停止"); }
+        }
+        // 正常路径角色已在自己的 finally 后 Complete；这里只为意外逃逸补结算，幂等不写第二个 footer。
+        return state.Run.Complete(outcome, "角色调用已返回；意外退出时不能给出通过证据。");
+    }
+
+    private void FinishRole()
+    {
+        RunState state = _activeRun!;
+        AcceptanceOutcome returned = AcceptanceOutcome.HarnessError;
+        try
+        {
+            try { _runCancellationTask?.GetAwaiter().GetResult(); }
+            catch (Exception) { ReportFault(state.Run, "MainWindow 取消回调收尾"); }
+            try { returned = _runTask!.GetAwaiter().GetResult(); }
+            catch (Exception)
+            {
+                ReportFault(state.Run, "MainWindow 角色回收");
+                returned = state.Run.Complete(AcceptanceOutcome.HarnessError, "角色任务异常，已收回。");
+            }
+        }
+        finally
+        {
+            // 所有需要 join 的任务都已结束；先摘除拥有权，任何 UI/日志异常都不会卡住下一次回收。
+            _activeRun = null;
+            _runTask = null;
+            _runCancellationTask = null;
+            CancellationTokenSource? cts = _runCts;
             _runCts = null;
+            try { state.Dispose(); }
+            catch (Exception) { ReportFault(state.Run, "MainWindow 状态释放"); }
+            finally { cts?.Dispose(); }
+        }
+        HideHostKey();
+        ApprovalList.ItemsSource = null;
+        ClientPendingText.Text = string.Empty;
+        AcceptanceOutcome settled = state.Run.Settle(returned);
+        if (settled != returned)
+        {
+            state.Run.Log.WriteLine($"[UI][RESULT][CORRECTION] outcome={settled.Code()} // 角色结算后发生故障或中止，原结论无效。");
+        }
+        ShowResult(settled, state.AuthenticationFailure ?? (state.IsHost
+            ? "请配对控制端日志，核对 Host registry 实测及自然注销；不是只看连接条数。"
+            : "控制端本地观测不等于 M4 通过；请核对 [CLIENT][RESULT] 与两机交叉核对清单。"));
+        HostWindowText.Text = "本轮任务已收回；下次开始会建立独立的 180 秒监听窗口与审批收件箱。";
+        if (!_closing && !_faulted)
+        {
+            ShowBanner("本轮已收尾。再次开始会创建新的 Run ID、日志与审批收件箱。", Brushes.WhiteSmoke, Brushes.DimGray);
         }
     }
 
-    private void StopClientButton_Click(object sender, RoutedEventArgs e)
-    {
-        _run?.Log.WriteLine("[UI] 用户点了「中止」。");
-        StopClientButton.IsEnabled = false;
+    private void StopHostButton_Click(object sender, RoutedEventArgs e) => StopCurrentRun("UI 提前停止监听");
+    private void StopClientButton_Click(object sender, RoutedEventArgs e) => StopCurrentRun("UI 中止控制端");
 
-        // 同被控端：中止会让 socket 被强行关掉，而「被关掉」是若干场景的通过条件。
-        _run?.MarkOperatorAbort("UI 中止");
-        _runCts?.Cancel();
+    private void StopCurrentRun(string source)
+    {
+        RequestRunStop(source);
+        HideHostKey();
+        PeerKeyBox.Clear();
+        ApprovalList.ItemsSource = null;
+        ClientPendingText.Text = string.Empty;
+        ShowBanner("已停止接收审批并请求取消；本轮作废，正在等待角色与密钥任务清理。", Brushes.Cornsilk, Brushes.DarkOrange);
+        UpdateButtons();
     }
 
-    /// <summary>本机设备码是否等于用户填的对端设备码。</summary>
+    private void RequestRunStop(string source)
+    {
+        RunState? state = _activeRun;
+        try { state?.Stop(); }
+        catch (Exception) { ReportFault(state?.Run, "MainWindow 状态停止"); }
+        _keyRequestValid = false;
+        ++_keyGeneration;
+        _keyWork?.RequestStop();
+        if (state is null || _runTask?.IsCompleted == true) { return; }
+        try
+        {
+            if (!state.Run.AbortedByOperator) { state.Run.MarkOperatorAbort(source); }
+        }
+        catch (Exception) { ReportFault(state.Run, "MainWindow 中止记账"); }
+        finally
+        {
+            // CancelAsync 的任务也属于本轮，回收后才 Dispose CTS，不同步等待任何回调。
+            try { _runCancellationTask ??= state.Cts.CancelAsync(); }
+            catch (Exception) { ReportFault(state.Run, "MainWindow 请求取消"); }
+        }
+    }
+
+    internal void HandleDispatcherFault()
+    {
+        // 先做不触碰控件的停止与回收准备；展示失败不得打断这一段或递归抛错。
+        bool first = !_faulted;
+        _faulted = true;
+        _ready = false;
+        if (!_closing)
+        {
+            _closing = true;
+            _closeStarted = Stopwatch.GetTimestamp();
+        }
+        AcceptanceRun? faultRun = _activeRun is { } active && _runTask?.IsCompleted != true
+            ? active.Run : _busy ? _run : null;
+        if (first) { ReportFault(faultRun, "MainWindow Dispatcher"); }
+        RequestRunStop("UI 故障作废");
+        if (_activeRun is { } state && _runTask is null)
+        {
+            // 即使 Complete 的日志订阅方抛错，也已有可回收的任务，不会留下孤立 activeRun。
+            _runTask = Task.Run(() => state.Run.Complete(AcceptanceOutcome.HarnessError, "角色尚未启动，界面发生故障。"));
+        }
+        try
+        {
+            HideHostKey();
+            PeerKeyBox.Clear();
+            ApprovalList.ItemsSource = null;
+            ClientPendingText.Text = string.Empty;
+            ShowResult(faultRun?.Settle(AcceptanceOutcome.HarnessError) ?? AcceptanceOutcome.HarnessError,
+                "界面发生故障，正在收回当前任务后关闭；不改写已经完成的历史结论。");
+            IsEnabled = false;
+            UpdateButtons();
+        }
+        catch (Exception)
+        {
+            // 渲染已经损坏时只保留消息泵和任务回收机会，不再次更新同一控件。
+        }
+    }
+
+    private static void ReportFault(AcceptanceRun? run, string source)
+    {
+        try
+        {
+            run?.ReportBackgroundFault(source, new InvalidOperationException("发生未预期故障；异常正文及内部异常未输出，避免秘密进入日志。"));
+        }
+        catch (Exception)
+        {
+            // ReportBackgroundFault 先登记故障；日志订阅方异常不能阻断其它清理。
+        }
+    }
+
+    private void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_allowClose) { return; }
+        if (_busy)
+        {
+            e.Cancel = true;
+            HideHostKey();
+            PeerKeyBox.Clear();
+            ShowBanner("自检或 lab 动作尚未收尾，已阻止关窗；不会中途终止提升动作，请结束后再关闭。", Brushes.Cornsilk, Brushes.DarkOrange);
+            return;
+        }
+        if (_runTask is not null || _keyTask is not null || _activeRun is not null)
+        {
+            e.Cancel = true;
+            if (!_closing)
+            {
+                _closing = true;
+                _closeStarted = Stopwatch.GetTimestamp();
+                StopCurrentRun("关闭窗口");
+                IsEnabled = false;
+            }
+            return;
+        }
+        HideHostKey();
+        PeerKeyBox.Clear();
+    }
+
+    private void OnDeactivated(object? sender, EventArgs e) => HideHostKey();
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        _uiTimer.Stop();
+        HideHostKey();
+        PeerKeyBox.Clear();
+    }
+
     private bool IsSelf(string peerCode)
     {
-        string self = DeviceCodeText.Text;
-
-        if (string.IsNullOrWhiteSpace(self) || self.StartsWith("检测", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        static string Normalize(string value) =>
-            value.Replace("-", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
-
-        return string.Equals(Normalize(self), Normalize(peerCode), StringComparison.Ordinal);
+        static string Normalize(string value) => value.Replace("-", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+        return string.Equals(Normalize(DeviceCodeText.Text), Normalize(peerCode), StringComparison.Ordinal);
     }
 
-    // -----------------------------------------------------------------------
-    // 角色锁
-    // -----------------------------------------------------------------------
-    private void LockRole(bool lockedToHost)
-    {
-        HostButton.IsEnabled = false;
-        ClientButton.IsEnabled = false;
-        PeerCodeBox.IsEnabled = false;
-
-        // 跑验收的过程中不许准备网络：改地址会把正在监听/正在连的 socket 换掉，
-        // 结果是一批无法解释的证据。
-        SetLabButtonsEnabled(false);
-
-        if (lockedToHost)
-        {
-            StopHostButton.IsEnabled = true;
-            ShowBanner("HOST —— 让这台机器继续监听，不要点别的。被控端本轮的日志就是这里的证据。",
-                new SolidColorBrush(Color.FromRgb(0xE3, 0xF2, 0xFD)), Brushes.DarkBlue);
-        }
-        else
-        {
-            StopClientButton.IsEnabled = true;
-            ShowBanner("CLIENT —— 这台机器在跑测试。四个场景会自动依次跑完，中途别切角色。",
-                new SolidColorBrush(Color.FromRgb(0xE6, 0xF4, 0xEA)), Brushes.DarkGreen);
-        }
-
-        ResultBanner.Visibility = Visibility.Collapsed;
-    }
-
-    private void UnlockRoles()
-    {
-        // 用 SetRoleButtonsEnabled 而不是直接赋值：角色按钮还要看自检结论，
-        // 「上一轮跑完了」不等于「本机现在能参与验收」。
-        SetRoleButtonsEnabled(true);
-        SetLabButtonsEnabled(true);
-        PeerCodeBox.IsEnabled = true;
-        StopHostButton.IsEnabled = false;
-        StopClientButton.IsEnabled = false;
-
-        ShowBanner("本轮结束。要换角色请直接点另一组；换角色会开一轮新的运行（新 Run ID、新日志文件）。",
-            new SolidColorBrush(Color.FromRgb(0xEE, 0xEE, 0xEE)), Brushes.DimGray);
-    }
-
-    // -----------------------------------------------------------------------
-    // 日志工具
-    // -----------------------------------------------------------------------
     private void CopyLog_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            Clipboard.SetText(LogBox.Text);
-            MessageBox.Show(
-                "已把整段日志复制到剪贴板。\n\n" +
-                "两机验收要两份：这一份，加上对端那台机器的。",
-                "复制完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            // 完整来源不含 HostKeyText/PasswordBox，也不依赖界面截断或尚未拉取的日志。
+            Clipboard.SetText(string.Join(Environment.NewLine, _logs.Select(cursor => cursor.Log.All)));
+            MessageBox.Show(this, "已复制进程及所有运行的完整日志。两机验收还需要对端日志。", "复制完成",
+                MessageBoxButton.OK, MessageBoxImage.Information);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            MessageBox.Show("复制失败：" + ex.Message + "\n\n可以直接打开日志目录取文件。",
-                "复制失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, "复制失败，可以打开日志目录取文件。", "复制失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
     {
-        string? path = Directory.Exists(_logDirectory) ? _logDirectory : null;
-
-        if (path is null)
-        {
-            MessageBox.Show("日志目录还不存在。", "打开日志目录",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
         try
         {
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            if (!Directory.Exists(_logDirectory))
+            {
+                MessageBox.Show(this, "日志目录还不存在。", "打开日志目录", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            Process.Start(new ProcessStartInfo(_logDirectory) { UseShellExecute = true });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            MessageBox.Show("打开失败：" + ex.Message, "打开日志目录",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, "无法打开日志目录；异常正文未输出。", "打开日志目录", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    private sealed class LogCursor(AcceptanceLog log)
+    {
+        public AcceptanceLog Log { get; } = log;
+        public int Offset { get; set; }
     }
 }

@@ -188,6 +188,20 @@ public sealed class ControlClientConnector
             timeoutRejection = "client-approval-timeout";
             using ClientAuthWindow approvalWindow = new(
                 clock, options.ApprovalWindow, cancellationToken, timeoutRejection, pendingAcceptedAt);
+            _ = approvalWindow.GetRemaining();
+            try
+            {
+                options.ApprovalPending?.Invoke(new ControlClientApprovalPending(
+                    sessionId, shortCode, pendingAcceptedAt, options.ApprovalWindow));
+            }
+            catch (Exception)
+            {
+                // 取消/到期优先于本地通知故障；不泄漏任意回调异常中的敏感数据。
+                _ = approvalWindow.GetRemaining();
+                throw new ControlClientAuthenticationException(
+                    "client-approval-notification-failed", "无法显示远端审批等待状态，请重试。");
+            }
+            _ = approvalWindow.GetRemaining();
             (success, _) = await ReadReplyAsync(
                 reader, approvalWindow, timeouts, allowPending: false, approval: true).ConfigureAwait(false);
             return VerifyAndCreateSession(

@@ -116,5 +116,19 @@ public sealed class AcceptanceLog
     public string? FilePath => _filePath;
 
     /// <summary>磁盘日志是否不可用（此时只剩 UI 里那一份）。</summary>
-    public bool FileUnavailable => _filePath is null;
+    public bool FileUnavailable
+    {
+        get { lock (_gate) { return _filePath is null || _fileFailed; } }
+    }
+
+    /// <summary>UI 定时拉取有限批次，不为每行堆积 Dispatcher 操作。</summary>
+    public IReadOnlyList<string> ReadFrom(int offset, int limit = 200)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        lock (_gate)
+        {
+            return _lines.Skip(offset).Take(limit).ToArray();
+        }
+    }
 }

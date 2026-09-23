@@ -13,6 +13,15 @@ public sealed record ControlClientAuthOptions
     public TimeSpan ApprovalWindow { get; init; } =
         TimeSpan.FromMilliseconds(AuthProtocol.ApprovalWindowMilliseconds);
 
+    /// <summary>首个合法 pending 被接受后的一次非秘密通知；未验证 serverProof，不表示已认证。</summary>
+    /// <remarks>
+    /// 在认证执行线程同步调用，必须快速返回（只更新有界内存状态，不等待 Dispatcher、磁盘或用户）。
+    /// 耗时计入原审批窗口，不续期；回调前后复核取消与单调截止。抛异常则以固定本地错误关闭连接，
+    /// 不传播回调消息或 inner exception。普通取消无法硬中断永不返回的本机回调。
+    /// 无 pending 的直接 success、错误帧及重复 pending 不触发新通知。
+    /// </remarks>
+    public Action<ControlClientApprovalPending>? ApprovalPending { get; init; }
+
     internal void Validate()
     {
         ValidateWindow(MachineWindow, nameof(MachineWindow));

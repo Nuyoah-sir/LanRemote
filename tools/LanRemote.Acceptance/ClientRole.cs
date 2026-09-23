@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -11,14 +12,12 @@ using Microsoft.Extensions.Logging;
 namespace LanRemote.Acceptance;
 
 /// <summary>
-/// 控制端角色：发现 → 冻结快照 → TLS → 按场景说话，并对<b>自己的观测</b>给出结论。
+/// 控制端角色：发现 → 冻结快照 → 双向认证 / 低层专项，并对<b>自己的观测</b>给出结论。
 /// </summary>
 /// <remarks>
-/// <para><b>控制端不宣告里程碑结论</b>（外部评审第 2、3 条）。理由是被测对象的核心行为
-/// ——「hello 被接受」——在 M3 里<b>对控制端不可观测</b>：M3 的终态就是关闭连接，
-/// 之后没有任何回帧，所以「被接受」和「被拒绝后关闭」在控制端看起来完全一样。
-/// 因此这里只输出 <c>clientOutcome=PASS-CLIENT</c> 与 <c>hostEvidence=REQUIRED</c>，
-/// 由两机日志的交叉核对（见 <see cref="WriteCrossCheck"/>）来定案。</para>
+/// <para><b>控制端不宣告 M4 里程碑完成</b>：success 只在高层连接器验证 serverProof 后成立，
+/// 持有会话五秒仅证明本地对象保有，不证明远端 registry 持续在线或已注销。
+/// 必须按 SessionId 交叉核对 Host 的实测采样与注销证据（见 <see cref="WriteCrossCheck"/>）。</para>
 /// <para><b>判定必须键在「原因」上，不能键在「失败了」上</b>（评审第 4 条）。
 /// <c>pin-mismatch</c> 场景原先把「任何不是 TCP 连不上的握手失败」都算通过，
 /// 于是被同子网闸门拒绝、被准入限额拒绝、甚至对端根本不是 LanRemote，
@@ -34,7 +33,7 @@ namespace LanRemote.Acceptance;
 /// </remarks>
 internal static class ClientRole
 {
-    /// <summary>场景：一切正常，hello 应当被接受。</summary>
+    /// <summary>场景：完成双向认证，持有已验证会话五秒，再同步释放。</summary>
     public const string ScenarioSuccess = "success";
 
     /// <summary>场景：指纹差一位，握手必须被 pinning 拒绝。</summary>
@@ -50,6 +49,7 @@ internal static class ClientRole
     public const string ScenarioCrossSubnet = "cross-subnet";
 
     private static readonly TimeSpan DiscoverBudget = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SessionHoldDuration = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// 全部已知的 pinning 拒绝短码。
@@ -71,62 +71,87 @@ internal static class ClientRole
         PeerCertificateValidator.RejectionExpired,
     };
 
-    /// <summary>
-    /// 跑单个场景。返回的结局<b>已并入运行级因素</b>（中止 / 后台故障）。
-    /// </summary>
-    /// <returns>符合 <see cref="AcceptanceOutcome"/> 语义的结局；枚举值即退出码。</returns>
-    /// <remarks>
-    /// <b>不写 RUN/BUILD/ENV/ID 头</b>——那些是每轮一次的事实，由 <see cref="RunAllAsync"/>
-    /// 在场景循环之前写。曾经写在这里，于是 <c>--all</c> 把同一段 20 行头部印了 4 遍：
-    /// 同一个 <c>runId</c> 声称了四次「本轮开始」，读者会以为跑了四轮（本机实测所见）。
-    /// </remarks>
-    private static async Task<AcceptanceOutcome> RunAsync(
+    /// <summary>逐场景独立上下文；全部资源释放后才返回观测，调用方负责输出及整轮结算。</summary>
+    private static async Task<ScenarioOutcome> RunAsync(
         AcceptanceRun run,
         string scenario,
         string? deviceCode,
         string? address,
         string? pinHex,
         int port,
-        bool writeHeader,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> accessKey,
+        SessionPermission requestedPermission,
+        Action<ControlClientApprovalPending>? approvalPending)
     {
-        await using AcceptanceContext context = new(LogLevel.Warning, run.Log.WriteLine);
-        await context.InitializeAsync(cancellationToken);
-
-        if (writeHeader)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (scenario == ScenarioSuccess && ValidateSuccessConfiguration(
+                accessKey.Length, requestedPermission, address, pinHex) is string unmet)
         {
-            run.WriteHeader(AcceptanceProfile.Timeouts);
+            // 不加载本机密钥，不扩充 argv；无有效输入时也不启动发现或发起连接。
+            return TargetResolution.Failed(unmet, AcceptanceOutcome.PreconditionUnmet).Failure!;
+        }
+
+        AcceptanceContext? context = null;
+        ScenarioOutcome outcome;
+        bool cleanupFault = false;
+        try
+        {
+            context = new AcceptanceContext(LogLevel.Warning, run.Log.WriteLine);
+            await context.InitializeAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            // 每个上下文记录实际加载的身份，整轮 RUN/BUILD/ENV 头仍只写一次。
             run.WriteIdentity(context.Identity, context.Certificate, context.ListenAddresses());
+            TargetResolution resolution = await ResolveTargetAsync(
+                run, context, scenario, deviceCode, address, pinHex, port, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            outcome = resolution.Target is null
+                ? resolution.Failure!
+                : await ExecuteAsync(run, context, scenario, resolution.Target, cancellationToken,
+                    accessKey, requestedPermission, approvalPending).ConfigureAwait(false);
         }
-
-        run.Log.WriteLine($"[CLIENT] scenario    = {scenario}");
-
-        TargetResolution resolution = await ResolveTargetAsync(
-            run, context, scenario, deviceCode, address, pinHex, port, cancellationToken);
-
-        if (resolution.Target is null)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            ScenarioOutcome failure = resolution.Failure! with { Scenario = scenario };
-            LastScenarioOutcome = failure;
-            WriteOutcome(run, scenario, failure);
-
-            // 同成功路径：不结算，交给调用方。前置条件不满足也是「场景结论」，不是结算。
-            return failure.Outcome;
+            // 交给 run owner 标记 operator abort；不能当作 TLS 拒绝或对端关闭。
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ReportFault(run, "Client 场景执行", ex);
+            outcome = UnobservedFailure(AcceptanceOutcome.HarnessError, "控制端场景执行异常，连接观测不完整。");
+        }
+        finally
+        {
+            if (context is not null)
+            {
+                try
+                {
+                    await context.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    cleanupFault = true;
+                    ReportFault(run, "Client Discovery/context 释放", ex);
+                }
+            }
         }
 
-        ScenarioOutcome outcome = await ExecuteAsync(run, scenario, resolution.Target, cancellationToken);
-        outcome = outcome with { Scenario = scenario };
-        LastScenarioOutcome = outcome;
-        WriteOutcome(run, scenario, outcome);
-
-        // 这里刻意<b>不</b>结算：调用方还要把多场景合并后再结算。
-        // 结算必须发生在合并之后，否则「整轮被毒化」会被场景级的 PASS 盖掉。
-        return outcome.Outcome;
+        cancellationToken.ThrowIfCancellationRequested();
+        return cleanupFault
+            ? outcome with
+            {
+                Outcome = AcceptanceOutcome.HarnessError,
+                Detail = outcome.Detail + " 资源清理失败，不能给 PASS。",
+            }
+            : outcome;
     }
 
-    /// <summary>
-    /// 依次跑多个场景，打印交叉核对清单，返回<b>已结算</b>的整轮结局。
-    /// </summary>
+    /// <summary>依次跑多个场景；资源清理、交叉核对后统一 Complete，GUI/headless 共用。</summary>
+    /// <remarks>
+    /// approvalPending 仅转发给 UI 的有界内存写入；不在回调中写同步日志或等待 Dispatcher。
+    /// pending 不是认证成功；UI 在本方法成功、失败或取消收尾后负责清理等待状态。
+    /// accessKey 由调用方保管和清零，客户端不日志、不持久化，也不从命令行取得密钥。
+    /// </remarks>
     public static async Task<AcceptanceOutcome> RunAllAsync(
         AcceptanceRun run,
         IReadOnlyList<string> scenarios,
@@ -134,53 +159,122 @@ internal static class ClientRole
         string? address,
         string? pinHex,
         int port,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> accessKey = default,
+        SessionPermission requestedPermission = SessionPermission.Control,
+        Action<ControlClientApprovalPending>? approvalPending = null)
     {
         List<ScenarioOutcome> outcomes = new();
-
-        foreach (string scenario in scenarios)
+        AcceptanceOutcome loopOutcome = AcceptanceOutcome.Pass;
+        string? activeScenario = null;
+        string detail = "控制端本地观测完成；M4 仍须配对 Host 的 registry 实测证据。";
+        try
         {
-            if (cancellationToken.IsCancellationRequested)
+            run.WriteHeader(AcceptanceProfile.Timeouts);
+            foreach (string scenario in scenarios)
             {
-                run.MarkOperatorAbort("控制端场景循环");
-                break;
+                cancellationToken.ThrowIfCancellationRequested();
+                activeScenario = scenario;
+                run.Log.WriteLine(string.Empty);
+                run.Log.WriteLine("---------------- 场景 " + scenario + " ----------------");
+                run.Log.WriteLine($"[CLIENT] scenario    = {scenario}");
+
+                ScenarioOutcome outcome = await RunAsync(
+                    run, scenario, deviceCode, address, pinHex, port, cancellationToken,
+                    accessKey, requestedPermission, approvalPending).ConfigureAwait(false);
+                outcome = outcome with { Scenario = scenario };
+                outcomes.Add(outcome);
+                activeScenario = null;
+                WriteOutcome(run, scenario, outcome);
+                run.Log.WriteLine($"---------------- 场景 {scenario} 结束：{outcome.Outcome.Code()}（{outcome.Outcome.Describe()}）----------------");
             }
-
-            run.Log.WriteLine(string.Empty);
-            run.Log.WriteLine("---------------- 场景 " + scenario + " ----------------");
-
-            // 逐场景单独建上下文：一条连接的失败不该污染下一条的场景状态，
-            // 也保证每个场景的日志块边界清楚（评审第 8 条）。
-            AcceptanceOutcome outcome = await RunAsync(
-                run,
-                scenario,
-                deviceCode,
-                address,
-                pinHex,
-                port,
-                // 头部只由第一个场景写一次。用 outcomes.Count 而不是 bool 变量：
-                // 前者是「已经跑完几个场景」的直接读数，不可能和循环进度失配。
-                writeHeader: outcomes.Count == 0,
-                cancellationToken);
-
-            outcomes.Add(LastScenarioOutcome!);
-            run.Log.WriteLine($"---------------- 场景 {scenario} 结束：{outcome.Code()}（{outcome.Describe()}）----------------");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            loopOutcome = AcceptanceOutcome.InvalidRun;
+            detail = "控制端运行被操作员取消，未完成的观测不能作为通过证据。";
+        }
+        catch (Exception ex)
+        {
+            loopOutcome = AcceptanceOutcome.HarnessError;
+            detail = "控制端场景循环或日志回调异常，观测不完整。";
+            ReportFault(run, "Client 场景循环", ex);
         }
 
-        AcceptanceOutcome combined = outcomes.Select(item => item.Outcome).Combine();
-        WriteCrossCheck(run, outcomes, scenarios);
+        try
+        {
+            if (activeScenario is not null)
+            {
+                ScenarioOutcome incomplete = UnobservedFailure(loopOutcome, detail) with { Scenario = activeScenario };
+                outcomes.Add(incomplete);
+                WriteOutcome(run, activeScenario, incomplete);
+            }
+            WriteCrossCheck(run, outcomes, scenarios);
+        }
+        catch (Exception ex)
+        {
+            loopOutcome = AcceptanceOutcome.HarnessError;
+            detail += " 交叉核对清单输出失败。";
+            ReportFault(run, "Client 证据汇总", ex);
+        }
 
-        return run.Settle(combined);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                run.MarkOperatorAbort("控制端场景循环或资源收尾");
+            }
+            catch (Exception ex)
+            {
+                ReportFault(run, "Client 中止日志", ex);
+            }
+        }
+        if (scenarios.Count == 0 && loopOutcome == AcceptanceOutcome.Pass)
+        {
+            loopOutcome = AcceptanceOutcome.PreconditionUnmet;
+            detail = "没有请求任何客户端场景。";
+        }
+        detail += " 场景结果：" + (outcomes.Count == 0 ? "未完成任何场景"
+            : string.Join("，", outcomes.Select(item => $"{item.Scenario}={item.Outcome.Code()}"))) + "。";
+        AcceptanceOutcome combined = outcomes.Select(item => item.Outcome).Append(loopOutcome).Combine();
+        return run.Complete(combined, detail);
     }
 
-    /// <summary>
-    /// 最近一次 <see cref="RunAsync"/> 的详细结果，供 <see cref="RunAllAsync"/> 汇总。
-    /// </summary>
-    /// <remarks>
-    /// 用字段而不是改签名，是为了让 <see cref="RunAsync"/> 保持「返回退出码」这个
-    /// 与 headless / UI 都方便的接口。两个方法都不并发，这是安全的。
-    /// </remarks>
-    private static ScenarioOutcome? LastScenarioOutcome;
+    internal static string? ValidateSuccessConfiguration(
+        int accessKeyLength, SessionPermission requestedPermission, string? address, string? pinHex)
+    {
+        if (accessKeyLength != AccessSecret.AccessKeyByteLength)
+        {
+            return "success 需要 UI 提供有效的 16 字节访问密钥；缺失或长度无效，本次不连接。";
+        }
+        if (!string.IsNullOrWhiteSpace(address) && !string.IsNullOrWhiteSpace(pinHex))
+        {
+            return "success 不支持 --address/--pin 直连的占位 DeviceId；必须从发现记录冻结真实 DeviceId，不能关闭身份核对。";
+        }
+        if (requestedPermission is not (SessionPermission.Control or SessionPermission.ViewOnly))
+        {
+            return "success 请求权限必须是 Control 或 ViewOnly。";
+        }
+        return null;
+    }
+
+    private static ScenarioOutcome UnobservedFailure(AcceptanceOutcome outcome, string detail) =>
+        new(outcome, detail, Fields(("connection", "UNOBSERVED")),
+            "(连接阶段观测不完整，不能推断 Host 行数)", ReachedWire: false, ConnectionObservationUnknown: true);
+
+    private static void ReportFault(AcceptanceRun run, string source, Exception exception)
+    {
+        try
+        {
+            // UI 回调可能接触密钥；不把任意异常正文、堆栈或 inner exception 传给日志。
+            run.ReportBackgroundFault(source,
+                new InvalidOperationException($"{exception.GetType().Name}（异常正文未输出，避免秘密进入日志）"));
+        }
+        catch (Exception)
+        {
+            // 故障已先记账；日志订阅方抛异常不能阻断其它资源释放及尾部结算。
+        }
+    }
 
     // -----------------------------------------------------------------------
     // 目标解析
@@ -279,10 +373,21 @@ internal static class ClientRole
     // -----------------------------------------------------------------------
     private static async Task<ScenarioOutcome> ExecuteAsync(
         AcceptanceRun run,
+        AcceptanceContext context,
         string scenario,
         ConnectionTarget target,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> accessKey,
+        SessionPermission requestedPermission,
+        Action<ControlClientApprovalPending>? approvalPending)
     {
+        // 高层自己建立且独占 TLS；必须先分流，不能先建低层连接再做第二次认证连接。
+        if (scenario == ScenarioSuccess)
+        {
+            return await RunSuccessAsync(run, context, target, accessKey, requestedPermission,
+                approvalPending, cancellationToken).ConfigureAwait(false);
+        }
+
         TlsClientConnector connector = new();
 
         TlsConnection connection;
@@ -293,6 +398,7 @@ internal static class ClientRole
         }
         catch (Exception ex)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return ClassifyHandshakeFailure(run, scenario, ex);
         }
 
@@ -319,7 +425,6 @@ internal static class ClientRole
 
             return scenario switch
             {
-                ScenarioSuccess => await RunSuccessAsync(run, connection, clock, cancellationToken),
                 ScenarioTimeout => await RunTimeoutAsync(run, connection, clock, cancellationToken),
                 ScenarioSlowDribble => await RunSlowDribbleAsync(run, connection, clock, cancellationToken),
                 _ => new ScenarioOutcome(
@@ -335,67 +440,124 @@ internal static class ClientRole
         }
     }
 
-    /// <summary><c>success</c>：发合法 hello，期望被接受后连按干净关闭。</summary>
+    /// <summary><c>success</c>：只接受高层已验证会话，不读取内部 Stream/Token。</summary>
     private static async Task<ScenarioOutcome> RunSuccessAsync(
         AcceptanceRun run,
-        TlsConnection connection,
-        Stopwatch clock,
+        AcceptanceContext context,
+        ConnectionTarget target,
+        ReadOnlyMemory<byte> accessKey,
+        SessionPermission requestedPermission,
+        Action<ControlClientApprovalPending>? approvalPending,
         CancellationToken cancellationToken)
     {
-        await FrameWriter.WriteHelloAsync(
-            connection.Stream, AcceptanceProfile.Timeouts.HelloTimeout, cancellationToken);
-
-        run.Log.WriteLine($"[CLIENT] hello sent  = t={clock.ElapsedMilliseconds} ms");
-
-        CloseObservation close = await WaitForPeerCloseAsync(connection, cancellationToken);
-        long closedAt = clock.ElapsedMilliseconds;
-
-        run.Log.WriteLine($"[CLIENT] peerClosed  = {close.Kind} t={closedAt} ms // {close.Detail}");
-
-        // 「hello 被接受」对控制端不可观测，能观测的只有「对端没等时限就收尾了」。
-        // 合法 hello 下服务端读到即走完流程（毫秒级）；若它没认这个 hello，
-        // 收尾时刻必然贴着长度前缀时限。这就是这条断言的全部依据，别再往强里宣称。
-        bool fastEnough = closedAt <= (long)AcceptanceProfile.SuccessCloseMax.TotalMilliseconds;
-        bool cleanEof = close.Kind == EofKind;
-        bool pass = close.Closed && cleanEof && fastEnough;
-
-        // 逐条列出「哪里不符合」，而不是命中的第一个。
-        // 实测发现两种失败会同时发生（对端不读 hello 时既不是有序 EOF、也更晚），
-        // 只报第一条会让人以为只是收尾方式的问题。
-        List<string> problems = new();
-        if (!close.Closed)
+        if (target.DeviceId == UnverifiedPeerId)
         {
-            problems.Add($"对端没有收尾（{close.Kind}）——{close.Detail}");
+            return TargetResolution.Failed("success 的目标仍为占位 DeviceId，无法验证远端身份。",
+                AcceptanceOutcome.PreconditionUnmet).Failure!;
         }
 
-        if (close.Closed && !cleanEof)
+        ControlClientAuthOptions options = new()
         {
-            problems.Add($"收尾方式不是有序 EOF，而是 {close.Kind}" +
-                         "（M3 终态应当发 close_notify 后关闭）");
+            // 认证窗口内只执行 UI 提供的有界内存更新，不包装同步日志或 Dispatcher 等待。
+            ApprovalPending = approvalPending,
+        };
+        run.Log.WriteLine($"[CLIENT][AUTH] clientDeviceId={context.Identity.DeviceId} " +
+            $"requestedPermission={requestedPermission} machineWindowMs={options.MachineWindow.TotalMilliseconds:0} " +
+            $"approvalWindowMs={options.ApprovalWindow.TotalMilliseconds:0}");
+        AuthenticatedControlSession session;
+        try
+        {
+            session = await new ControlClientConnector().ConnectAndAuthenticateAsync(
+                target, context.Identity.DeviceId, context.Identity.DeviceName, accessKey, requestedPermission,
+                options, AcceptanceProfile.Timeouts, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ScenarioOutcome failure = ClassifyAuthenticationFailure(ex, cancellationToken);
+            if (failure.Outcome == AcceptanceOutcome.HarnessError)
+            {
+                ReportFault(run, "Client 高层连接", ex);
+            }
+            return failure;
         }
 
-        if (!fastEnough)
+        ScenarioOutcome outcome;
+        using (session)
         {
-            problems.Add($"收尾时刻 {closedAt} ms 超过上界 " +
-                         $"{AcceptanceProfile.SuccessCloseMax.TotalMilliseconds:0} ms" +
-                         "——像是等到了长度前缀时限才关，hello 很可能根本没被接受");
+            // 返回会话已经蕴含 serverProof、冻结身份及降权校验通过；pending 绝不能走到这里。
+            cancellationToken.ThrowIfCancellationRequested();
+            string expected = Convert.ToHexString(session.Identity.ExpectedCertSha256.Span);
+            string presented = Convert.ToHexString(session.Identity.PresentedCertSha256.Span);
+            run.Log.WriteLine($"[CLIENT][AUTH] serverProof=verified sessionId={session.SessionId} " +
+                $"grant={session.GrantedPermission}");
+            run.Log.WriteLine($"[CLIENT] expectedPin = {expected}");
+            run.Log.WriteLine($"[CLIENT] presentedPin= {presented}");
+            run.Log.WriteLine($"[CLIENT] pinsMatch   = {session.Identity.PinsMatch} (由高层认证成功蕴含)");
+            // 高层身份不暴露本地端口，不能为凑四元组而伪造端点或再次建连。
+            run.Log.WriteLine($"[CLIENT][CORRELATE] sessionId={session.SessionId} peerDeviceId={target.DeviceId} " +
+                $"peerHost={target.RemoteAddress}:{target.Port} presentedPin={presented} grant={session.GrantedPermission}");
+            run.Log.WriteLine("[CLIENT][HOLD] localObjectHoldTargetMs=5000 hostRegistry=UNOBSERVED");
+            Stopwatch hold = Stopwatch.StartNew();
+            TimeSpan remaining = SessionHoldDuration;
+            do
+            {
+                await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
+                remaining = SessionHoldDuration - hold.Elapsed;
+            }
+            while (remaining > TimeSpan.Zero);
+            cancellationToken.ThrowIfCancellationRequested();
+            long heldMs = hold.ElapsedMilliseconds;
+            run.Log.WriteLine($"[CLIENT][HOLD] sessionId={session.SessionId} localObjectHeldMs={heldMs} " +
+                "// 仅证明本地对象保有，不证明 Host registry 持续在线");
+            outcome = new ScenarioOutcome(
+                AcceptanceOutcome.Pass,
+                "serverProof 已通过；本地持有已验证会话至少五秒后同步释放。Host 保持及注销仍须按 SessionId 实测核对。",
+                Fields(("serverProof", "verified"), ("sessionId", session.SessionId.ToString()),
+                    ("expectedPin", expected), ("presentedPin", presented),
+                    ("grant", session.GrantedPermission.ToString()), ("localObjectHeldMs", heldMs.ToString()),
+                    ("sessionDisposed", "True"), ("hostRegistry", "UNOBSERVED")),
+                HostExpectation: $"sessionId={session.SessionId} authenticated=True evidence=PASS " +
+                    "deregisteredAtRunEnd=True hostForcedClose=False terminal=authenticated-ended-unregistered",
+                ReachedWire: true);
         }
+        // using 的同步 Dispose 成功以后才返回 PASS；异常由外层记账，不能被观测结论盖住。
+        run.Log.WriteLine($"[CLIENT][DISPOSE] sessionId={session.SessionId} synchronous=True completed=True");
+        return outcome;
+    }
 
-        string detail = problems.Count == 0
-            ? $"已发 hello、对端在 {closedAt} ms 有序 EOF 收尾（早于时限 " +
-              $"{AcceptanceProfile.Timeouts.LengthPrefixTimeout.TotalMilliseconds:0} ms）"
-            : string.Join("；", problems);
-
-        return new ScenarioOutcome(
-            pass ? AcceptanceOutcome.Pass : AcceptanceOutcome.Fail,
-            detail,
-            Fields(
-                ("peerClosed", close.Kind),
-                ("closedAtMs", closedAt.ToString()),
-                ("successCloseMaxMs", AcceptanceProfile.SuccessCloseMax.TotalMilliseconds.ToString("0")),
-                ("cleanEof", cleanEof.ToString())),
-            HostExpectation: "outcome=PreAuthenticated rejection=-",
-            ReachedWire: true);
+    /// <summary>高层认证失败先于 TLS 异常分类；只输出产品固定展示文案和非秘密拒绝短码。</summary>
+    internal static ScenarioOutcome ClassifyAuthenticationFailure(Exception exception, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // 该异常继承 AuthenticationException，顺序颠倒会把错误密码误判成 TLS 失败。
+        if (exception is ControlClientAuthenticationException auth)
+        {
+            return new ScenarioOutcome(AcceptanceOutcome.Fail, auth.DisplayMessage,
+                Fields(("stage", "authentication"), ("rejection", auth.Rejection)),
+                "(认证未通过；Host 的拒绝/会话证据需交叉核对，客户端未获得已验证会话)", ReachedWire: true);
+        }
+        if (exception is AuthenticationException)
+        {
+            string code = FindRejectionCode(exception.Message) ?? "(none)";
+            return new ScenarioOutcome(AcceptanceOutcome.Fail, "success 在 TLS 身份验证阶段失败，未进入已验证会话。",
+                Fields(("stage", "tls"), ("rejection", code)),
+                "(TLS 失败；Host 可能有 pre-auth-eof 行，但不得出现已认证会话)",
+                ReachedWire: true, TlsStageRejection: true);
+        }
+        if (HasSocketError(exception, SocketError.ConnectionRefused, SocketError.HostUnreachable,
+                SocketError.NetworkUnreachable, SocketError.NetworkDown, SocketError.TimedOut,
+                SocketError.AddressNotAvailable))
+        {
+            return new ScenarioOutcome(AcceptanceOutcome.PreconditionUnmet,
+                "TCP 层未连接，无法进行双向认证。", Fields(("stage", "tcp")),
+                "(对端不会看到这条连接)", ReachedWire: false);
+        }
+        if (exception is IOException or SocketException or TimeoutException or OperationCanceledException)
+        {
+            // TLS 连接超时也可能是非 caller 的 OCE；无确定阶段证据，不伪造已建连数量。
+            return UnobservedFailure(AcceptanceOutcome.Fail, "连接中断或超过本地预算，未获得已验证会话。");
+        }
+        return UnobservedFailure(AcceptanceOutcome.HarnessError, "高层连接调用异常，未获得已验证会话。");
     }
 
     /// <summary><c>timeout</c>：一个字节都不发，期望服务端在绝对时限附近切断。</summary>
@@ -630,7 +792,7 @@ internal static class ClientRole
                 // 于是照样进会话处理器、读到 EOF 给出 rejection=pre-auth-eof（本机环回实测）；
                 // TLS 1.2 下服务端握手直接失败、才真的不留行。两种都正常，所以只给可证伪的约束。
                 HostExpectation: "(TLS 阶段被拒；被控端可能留一行 rejection=pre-auth-eof（TLS 1.3），" +
-                                 "也可能完全无行（TLS 1.2）——但绝不能是 outcome=PreAuthenticated)",
+                                 "也可能完全无行（TLS 1.2）——但绝不能是 returnedState=Authenticated)",
                 ReachedWire: true,
                 TlsStageRejection: true);
         }
@@ -653,7 +815,7 @@ internal static class ClientRole
             AcceptanceOutcome.Fail,
             $"本该握手成功，却在 TLS 阶段失败（异常={type}，短码={code ?? "未识别"}）",
             Fields(("handshake", type), ("rejection", code ?? "(none)")),
-            HostExpectation: "outcome=PreAuthenticated rejection=-",
+            HostExpectation: "(TLS 未完成；按实际拒绝阶段核对，不能计为已认证会话)",
             ReachedWire: true,
             // 这里也必须标上。曾经漏标，于是交叉核对把「TLS 就没成功」的场景算成
             // 「必然进入会话处理器」，给出的下界比真相大——一个会让人去找不存在的行的错数。
@@ -711,7 +873,7 @@ internal static class ClientRole
     /// 所以这里只能说「有序 EOF」，<b>不能</b>说「对端发了 close_notify」。</para>
     /// <para><b>取消必须先于通用异常捕获</b>：原先 <c>catch (Exception)</c> 会把
     /// <c>OperationCanceledException</c> 也归成 <c>reset</c>，而 <c>reset</c> 在
-    /// <c>success</c>／<c>timeout</c> 里都算「对端关闭了」——于是操作员一点中止，
+    /// 低层超时专项里会算「对端关闭了」——于是操作员一点中止，
     /// 场景就 PASS。这正是评审第 13 条担心的事，必须用独立的 <c>local-cancelled</c> 掐掉。</para>
     /// </remarks>
     private static async Task<CloseObservation> WaitForPeerCloseAsync(
@@ -732,7 +894,7 @@ internal static class ClientRole
                 : new CloseObservation(
                     false,
                     "unexpected-data",
-                    $"hello 之后对端还发了 {read} 字节——M3 终态不该有后续数据");
+                    $"未发完整 hello 就收到对端 {read} 字节——低层超时专项不应收到后续数据");
         }
         catch (TimeoutException)
         {
@@ -762,7 +924,7 @@ internal static class ClientRole
 
         run.Log.WriteLine(
             $"[CLIENT][RESULT] scenario={scenario} clientOutcome={outcome.Outcome.Code()} {fields} " +
-            $"hostEvidence={(outcome.ReachedWire ? "REQUIRED" : "N/A")} " +
+            $"hostEvidence={(outcome.ReachedWire || outcome.ConnectionObservationUnknown ? "REQUIRED" : "N/A")} " +
             $"hostExpect=\"{outcome.HostExpectation}\" // {outcome.Detail}");
     }
 
@@ -786,107 +948,71 @@ internal static class ClientRole
         IReadOnlyList<string> scenarios)
     {
         int issued = outcomes.Count(item => item.ReachedWire);
-
-        // ①②③ 是「通过时应有的样子」，所以按 PASS 计数。
-        int expectPreAuthenticated = outcomes.Count(
-            item => item.Outcome == AcceptanceOutcome.Pass &&
-                    item.Scenario == ScenarioSuccess);
-
+        int unknown = outcomes.Count(item => item.ConnectionObservationUnknown);
+        int notIssued = outcomes.Count(item => !item.ReachedWire && !item.ConnectionObservationUnknown);
+        int expectAuthenticated = outcomes.Count(
+            item => item.Outcome == AcceptanceOutcome.Pass && item.Scenario == ScenarioSuccess);
         int expectPreAuthTimeout = outcomes.Count(
             item => item.Outcome == AcceptanceOutcome.Pass &&
                     item.Scenario is ScenarioTimeout or ScenarioSlowDribble);
 
-        bool anyFailures = outcomes.Any(item => item.Outcome != AcceptanceOutcome.Pass);
-
-        // ④ 的区间**只依赖「连接走到了哪一步」**，不依赖场景通过与否——
-        // 否则场景一失败，区间自己就跟着漂，读者会以为区间是实测值。
-        //
-        // 每条上过线的连接对「被控端进入会话处理器的行数」的贡献：
-        //   完成了 TLS（TlsStageRejection=false） → 必然 1 行；
-        //   死在 TLS（TlsStageRejection=true）    → 0 或 1 行（TLS 1.3 幽灵行；TLS 1.2 下 0 行）；
-        //   cross-subnet                          → 恒 0 行（死在同子网闸门，压根不到 TLS）。
-        int definitelyEntersHandler = outcomes.Count(
-            item => item.ReachedWire && !item.TlsStageRejection &&
-                    item.Scenario != ScenarioCrossSubnet);
-
-        int mayEnterHandler = outcomes.Count(
-            item => item.ReachedWire && item.TlsStageRejection &&
-                    item.Scenario != ScenarioCrossSubnet);
-
-        int lower = definitelyEntersHandler;
-        int upper = definitelyEntersHandler + mayEnterHandler;
-
+        // 区间只依赖连接阶段，不依赖 PASS；TLS 1.3 下证书拒绝仍可能进入 Host handler。
+        int lower = outcomes.Count(item => item.ReachedWire && !item.TlsStageRejection);
+        int upper = lower + outcomes.Count(item => item.ReachedWire && item.TlsStageRejection &&
+            item.Scenario != ScenarioCrossSubnet);
         List<string> lines = new()
         {
-            $"控制端本次共建立 TCP+TLS 连接：{issued} 条" +
-            $"（场景 {scenarios.Count} 个，前置条件不满足的 {scenarios.Count - issued} 个没上过线）",
+            $"场景 {scenarios.Count} 个：确定上过线 {issued} 个（不等于 TLS 成功），" +
+            $"确定未建连 {notIssued} 个，连接阶段未知 {unknown} 个，未执行 {scenarios.Count - outcomes.Count} 个。",
             string.Empty,
-            "被控端逐条应当出现（可机器判定）：",
+            "被控端逐条核对（认证、registry 采样及终态不是同一条日志）：",
         };
-
-        foreach (string scenario in scenarios)
+        for (int index = 0; index < scenarios.Count; index++)
         {
-            ScenarioOutcome? item = outcomes.FirstOrDefault(candidate => candidate.Scenario == scenario);
-            lines.Add(item is null
-                ? $"  {scenario,-14} -> （未执行）"
-                : $"  {scenario,-14} -> {item.HostExpectation}");
+            lines.Add(index < outcomes.Count
+                ? $"  {scenarios[index],-14} -> {outcomes[index].HostExpectation}"
+                : $"  {scenarios[index],-14} -> （未执行）");
         }
 
-        lines.Add(string.Empty);
-        // 括号里的「为什么是这个数」必须跟着实际场景走。写死「timeout 与 slow-dribble 各一条」
-        // 在只跑单个场景时会变成假说明——而假说明比没有说明更坏，它会被当成核对依据。
         string preAuthTimeoutWhy = string.Join(" + ",
             outcomes.Where(item => item.Outcome == AcceptanceOutcome.Pass &&
                                    item.Scenario is ScenarioTimeout or ScenarioSlowDribble)
                     .Select(item => item.Scenario));
-
-        lines.Add("被控端汇总行必须同时满足下面四条：");
-        lines.Add($"  ① outcome=PreAuthenticated 的行恰好 {expectPreAuthenticated} 条（只有 success 该走到这）");
-        lines.Add($"  ② rejection=pre-auth-timeout 的行恰好 {expectPreAuthTimeout} 条" +
-                  (preAuthTimeoutWhy.Length > 0 ? $"（{preAuthTimeoutWhy}）" : string.Empty));
-        lines.Add("  ③ 其余任何一行都不得是 PreAuthenticated，也不得是 pre-auth-timeout");
-        lines.Add($"  ④ connectionsEnteringSessionHandler 落在 {lower}..{upper}（区间原因见下）");
-        lines.Add($"  ⑤ listenersStoppedCleanly=True 且 activeAtStop=0");
-
-        if (anyFailures)
+        lines.Add(string.Empty);
+        lines.Add("通过场景的 Host 证据要求（仅对本轮配对连接核对，不把客户端期望当成 Host 实测）：");
+        lines.Add($"  ① {expectAuthenticated} 个 success 必须各按 SessionId 找到 [HOST][SESSION] authenticated=True，");
+        lines.Add("     evidence=PASS、deregisteredAtRunEnd=True、hostForcedClose=False；");
+        lines.Add("     [HOST][RESULT] terminal=authenticated-ended-unregistered，不能只看 pre-auth 成功。");
+        lines.Add($"  ② rejection=pre-auth-timeout 应有 {expectPreAuthTimeout} 条" +
+            (preAuthTimeoutWhy.Length > 0 ? $"（{preAuthTimeoutWhy}）" : string.Empty));
+        lines.Add("  ③ 其余通过的低层拒绝专项不得出现已认证会话；失败场景按其实际阶段逐条核对。");
+        lines.Add(unknown == 0
+            ? $"  ④ [HOST][BUCKETS] sessionHandled 应落在 {lower}..{upper}（仅限本轮连接、无其它流量）。"
+            : "  ④ 存在连接阶段未知的场景，不能给出整轮 sessionHandled 确定区间。");
+        lines.Add("  ⑤ Host partitionOk=True、handlerFaults=0、cleanupFault=False、firstStopAllFinishedWithinBudget=True，");
+        lines.Add("     activeHandlers=0、activeRegistry=0、pendingApprovals=0；最终为 0 不替代保持期间的正采样。");
+        if (outcomes.Any(item => item.Outcome != AcceptanceOutcome.Pass) || outcomes.Count != scenarios.Count)
         {
-            lines.Add(string.Empty);
-            lines.Add("⚠ 本轮有场景未通过：①②③ 里的数字是「全都通过时**本该**是多少」，不是实测值。");
-            lines.Add("  它们只能用来核对**通过了的**那些场景；未通过场景由上面逐条的 clientOutcome 定案，");
-            lines.Add("  不要拿这几条去反推「到底跑没跑到」。");
+            lines.Add("本轮有未通过或未执行场景：①②③ 只约束已通过场景；④ 按已知连接阶段计数，不能反推未知场景。");
         }
 
-        // 跨子网的期望与「通过与否」无关：只要它上了线，就必须一行都不留——
-        // 同子网闸门在 TLS 之前就关掉了连接，服务端静默。所以这里按「上过线」计数。
-        int crossSubnetOnWire = outcomes.Count(
-            item => item.ReachedWire && item.Scenario == ScenarioCrossSubnet);
-
+        int crossSubnetOnWire = outcomes.Count(item => item.ReachedWire && item.Scenario == ScenarioCrossSubnet);
         if (crossSubnetOnWire > 0)
         {
-            lines.Add(string.Empty);
-            lines.Add($"另有 {crossSubnetOnWire} 个跨子网场景预期**一行都不留**" +
-                      "（死在同子网闸门，TransportHost 静默）；这一条不因该场景 Pass/Fail 而变。");
+            lines.Add($"另有 {crossSubnetOnWire} 个跨子网场景预期不进入 Host handler（同子网闸门拒绝），仍须两端核对。");
         }
-
         lines.Add(string.Empty);
-        lines.Add("配对方法（不要靠计数相等来配对）：本机日志里每个场景的 [CLIENT][CORRELATE] 行有");
-        lines.Add("  local=<本机IP>:<临时端口>，被控端有 peer=<同一个端点>。用这对数字**唯一配对**一条连接。");
-        lines.Add("  仅当 local 显示 unavailable（socket 已拆）时才退回按时间顺序配，并在记录里注明。");
+        lines.Add("配对方法（不能只靠计数相等）：");
+        lines.Add("  success 使用 [CLIENT][CORRELATE] sessionId 配对 Host 的 AUTH-BEGIN/SESSION/RESULT，");
+        lines.Add("  再用 Host connectionId 对齐 registry 实测；高层 session 不提供本地端口，不伪造四元组。");
+        lines.Add("  五秒持有只证明客户端对象保有，Host 必须独立满足其保持跨度、采样间隔及非强制注销判据。");
+        lines.Add("  低层专项仍用 local=<本机IP>:<临时端口> + peerHost=<对端IP>:<端口>，");
+        lines.Add("  与 Host peer=<同一本机端点> 配对；local=unavailable 才退回时间顺序，并注明不确定性。");
         lines.Add(string.Empty);
-        lines.Add("★ 区间 ④ 的取值取决于一个实测事实，不要猜：");
-        lines.Add("  客户端拒绝服务端证书时发的是 TLS alert。TLS 1.3 下服务端在收到该 alert 之前");
-        lines.Add("  就已经认为握手完成，于是这条连接照样进入会话处理器，读到 EOF 后给出");
-        lines.Add("  rejection=pre-auth-eof（本机环回实测值）；TLS 1.2 下服务端握手会直接失败、不留行。");
-        lines.Add("  两种都属于正常，但**绝不能**出现 outcome=PreAuthenticated。");
-        lines.Add(string.Empty);
-        lines.Add("被控端其余盲区：同子网拒绝 / 准入拒绝 / TLS 失败全部静默 return（HANDOFF §14.12），");
-        lines.Add("本进程观测不到，日志里一律标 UNOBSERVABLE，不填 0。");
-
+        lines.Add("TLS 1.3 证书拒绝可能在 Host 留 rejection=pre-auth-eof；TLS 1.2 可能无行，均不得是已认证会话。");
+        lines.Add("Host 同子网拒绝 / 准入拒绝 / TLS 失败不进入 handler，属于 UNOBSERVABLE，不能填 0。");
         run.WriteBlock("两机交叉核对（把这台和被控端的日志放一起看）", lines);
-
-        run.Log.WriteLine(
-            "[VERDICT] M3 = PENDING-HOST-EVIDENCE // 控制端的观测不足以单独判定里程碑通过，" +
-            "必须与被控端日志的汇总行对齐");
+        run.Log.WriteLine("[VERDICT] M4 = PENDING-HOST-EVIDENCE // 客户端本地认证与对象保有不足以单端宣布里程碑完成");
     }
 
     private static IReadOnlyList<KeyValuePair<string, string>> Fields(params (string Key, string Value)[] pairs) =>
@@ -980,16 +1106,16 @@ internal static class ClientRole
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            // 只有本地发现预算到期是 UNMET；调用方取消必须交给 run owner。
         }
 
         return null;
     }
 
     /// <summary>
-    /// 直连场景（<c>--address/--pin</c>）里对端的 deviceId 未经验证，这里填一个占位值——
-    /// 它不参与任何安全判定，pin 与同子网校验都在它之外。
+    /// 低层直连专项的占位 DeviceId；success 必须使用发现冻结的真实身份，拒绝此占位值。
     /// </summary>
     private static readonly Guid UnverifiedPeerId =
         Guid.Parse("00000000-0000-0000-0000-000000000001");
@@ -1028,16 +1154,18 @@ internal static class ClientRole
     /// <param name="Fields">机器可读字段。</param>
     /// <param name="HostExpectation">被控端日志里应当出现的对应行。</param>
     /// <param name="ReachedWire">是否真的把连接发出去过（否则谈不上被测）。</param>
-    /// <param name="TlsStageRejection">是否死在 TLS 之前/之中（不会进被控端会话处理器）。</param>
-    private sealed record ScenarioOutcome(
+    /// <param name="TlsStageRejection">是否死在 TLS 之前/之中（TLS 1.3 下仍可能进入会话处理器）。</param>
+    /// <param name="ConnectionObservationUnknown">连接阶段观测是否缺失，不能按未建连或已建连计数。</param>
+    internal sealed record ScenarioOutcome(
         AcceptanceOutcome Outcome,
         string Detail,
         IReadOnlyList<KeyValuePair<string, string>> Fields,
         string HostExpectation,
         bool ReachedWire,
-        bool TlsStageRejection = false)
+        bool TlsStageRejection = false,
+        bool ConnectionObservationUnknown = false)
     {
-        /// <summary>场景名；由 <see cref="WriteCrossCheck"/> 回填。</summary>
+        /// <summary>场景名；由 <see cref="RunAllAsync"/> 回填。</summary>
         public string Scenario { get; init; } = string.Empty;
     }
 

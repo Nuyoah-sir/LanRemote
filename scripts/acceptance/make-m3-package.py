@@ -1,10 +1,16 @@
-"""Package the M3 two-machine acceptance harness into a portable zip.
+"""Package the current M4 WPF acceptance harness into a portable zip.
+
+The historical script filename is retained; current binaries must NOT be
+labelled M3 or shipped with the old fast-EOF success criteria.
 
 Usage:
-    python scripts/acceptance/make-m3-package.py
+    python scripts/acceptance/make-m3-package.py --manual <M4-manual.txt> --output-dir <existing-dir>
 
 Produces:
-    LanRemote-<version>-m3-acceptance-win-x64.zip   (in the repo root)
+    LanRemote-<version>-m4-acceptance-win-x64.zip
+
+The rationale below describes the original M3 tool; M4 now exercises complete
+authentication, approval, and session hold/release as well.
 
 WHY THIS IS A SEPARATE SCRIPT FROM make-package.py
     make-package.py publishes LanRemote.App (the WPF client). That package is
@@ -41,6 +47,7 @@ set-lab-ip.ps1 stays a script on purpose: it needs elevation and it touches the
 machine's network configuration, which must never happen silently.
 """
 
+import argparse
 import os
 import re
 import shutil
@@ -104,6 +111,25 @@ def publish() -> None:
 
 
 def main() -> None:
+    global PUBLISH_DIR, DOC_SOURCE
+    parser = argparse.ArgumentParser(description="Build the self-contained WPF acceptance package.")
+    parser.add_argument("--milestone", choices=("m4",), default="m4")
+    parser.add_argument("--manual", help="Explicit acceptance manual for the selected milestone")
+    parser.add_argument("--output-dir", default=REPO_ROOT)
+    args = parser.parse_args()
+    if args.milestone == "m4" and not args.manual:
+        parser.error("m4 requires --manual; never ship the historical M3 EOF criteria as M4 instructions")
+    if args.milestone == "m4" and os.environ.get("LANREMOTE_M3_SKIP_PUBLISH") == "1":
+        parser.error("m4 must publish fresh binaries; skipping publish is only for historical M3 repacking")
+    if args.milestone != "m3":
+        PUBLISH_DIR = os.path.join(REPO_ROOT, "artifacts", args.milestone + "-acceptance")
+    if args.manual:
+        DOC_SOURCE = os.path.abspath(args.manual)
+    output_dir = os.path.abspath(args.output_dir)
+    if not os.path.isdir(output_dir):
+        parser.error("output directory must already exist")
+    if not os.path.isfile(DOC_SOURCE):
+        parser.error("acceptance manual not found")
     version = read_version()
 
     if os.environ.get("LANREMOTE_M3_SKIP_PUBLISH") != "1":
@@ -115,7 +141,8 @@ def main() -> None:
     if not os.path.isfile(DOC_SOURCE):
         raise SystemExit(f"manual not found: {DOC_SOURCE}")
 
-    shutil.copyfile(DOC_SOURCE, os.path.join(PUBLISH_DIR, "START-HERE.md"))
+    manual_name = "START-HERE" + os.path.splitext(DOC_SOURCE)[1]
+    shutil.copyfile(DOC_SOURCE, os.path.join(PUBLISH_DIR, manual_name))
     for name in HELPERS:
         source = os.path.join(SCRIPTS_DIR, name)
         if not os.path.isfile(source):
@@ -136,9 +163,7 @@ def main() -> None:
             with open(target, "wb") as handle:
                 handle.write(b"\xef\xbb\xbf" + raw)
 
-    zip_path = os.path.join(REPO_ROOT, f"LanRemote-{version}-m3-acceptance-win-x64.zip")
-    if os.path.exists(zip_path):
-        os.remove(zip_path)
+    zip_path = os.path.join(output_dir, f"LanRemote-{version}-{args.milestone}-acceptance-win-x64.zip")
 
     file_count = 0
     total_bytes = 0

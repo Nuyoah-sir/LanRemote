@@ -14,7 +14,7 @@ namespace LanRemote.Acceptance;
 /// <see cref="HostRole"/> / <see cref="ClientRole"/>。</para>
 /// <para><b>异常处理有硬性要求</b>：<c>WinExe</c> 没有控制台，未捕获异常只会让窗口
 /// 无声消失，用户既不知道发生了什么，也拿不到任何证据。所以任何逃逸到这里的异常
-/// 都必须先落到磁盘上的 crash 文件，再弹出来——验收的价值全在证据能带走。</para>
+/// 都必须记录泛化故障并停止/作废当前运行；不输出可能含密钥的异常正文或堆栈。</para>
 /// <para><b>为什么要防重入</b>：如果异常发生在渲染/排版路径上
 /// （例如曾经踩过的字体缓存崩溃），每次重绘都会立刻再抛一次，
 /// 于是 <c>MessageBox</c> 弹出 → 重绘 → 再弹出 …… 变成弹框风暴，
@@ -100,24 +100,40 @@ public partial class App : Application
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs args)
     {
-        // 写盘永远做（每次追加，保留全部现场），弹框只做一次。
+        args.Handled = true;
+        // handled 只为保留清理机会，不是继续使用本轮的 PASS；先停止审批、清密钥并作废当前运行。
+        if (Current.MainWindow is MainWindow window)
+        {
+            try { window.HandleDispatcherFault(); }
+            catch (Exception)
+            {
+                // 窗口先记故障，停止路径用 finally 保证取消；渲染再次失败不递归弹框。
+            }
+        }
+        else
+        {
+            Current.Shutdown((int)AcceptanceOutcome.HarnessError);
+        }
         string path = TryWriteCrash(args.Exception);
         int seen = Interlocked.Increment(ref _crashReportCount);
-
-        // 无界面模式下不许弹窗——脚本跑着跑着卡在一个没人能点的框上是最坏的结果。
         if (seen == 1 && Volatile.Read(ref _headless) == 0)
         {
-            MessageBox.Show(
-                "验收器发生未处理异常：\n\n" + args.Exception.Message +
-                "\n\n完整信息已写入：\n" + path +
-                "\n\n（若窗口继续闪退，请直接把 crash.log 整段贴回。）",
-                "LanRemote M3 验收器",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            try
+            {
+                MessageBox.Show(
+                    "验收器界面发生故障，当前未完成运行不能作为通过证据。\n" +
+                    "已请求停止并等待任务收尾；lab 提升动作不会被中途终止。\n\n" +
+                    "泛化故障信息已写入：\n" + path +
+                    "\n\n异常正文、内部异常及堆栈未输出，避免秘密进入日志。",
+                    "LanRemote M4 验收器",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            catch (Exception)
+            {
+                // 故障对话框本身也可能触发渲染异常；保留原窗口消息泵继续收尾。
+            }
         }
-
-        // 必须置 true，否则异常会继续往上传，把进程直接带走（连窗口都没有了）。
-        args.Handled = true;
     }
 
     /// <remarks>
@@ -157,7 +173,7 @@ public partial class App : Application
             File.AppendAllText(
                 path,
                 "===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " =====\r\n" +
-                exception + "\r\n",
+                "未预期异常（正文、内部异常及堆栈未输出，避免秘密进入日志）。\r\n",
                 new UTF8Encoding(false));
             return path;
         }

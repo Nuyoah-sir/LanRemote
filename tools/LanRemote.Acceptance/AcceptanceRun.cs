@@ -27,6 +27,9 @@ namespace LanRemote.Acceptance;
 internal sealed class AcceptanceRun
 {
     private readonly List<string> _backgroundFaults = new();
+    private readonly object _completionGate = new();
+    private AcceptanceOutcome? _completed;
+    private int _aborted;
 
     private AcceptanceRun(string runId, string role, AcceptanceLog log)
     {
@@ -48,7 +51,7 @@ internal sealed class AcceptanceRun
     public DateTimeOffset StartedUtc { get; private init; }
 
     /// <summary>操作员是否请求过中止。</summary>
-    public bool AbortedByOperator { get; private set; }
+    public bool AbortedByOperator => Volatile.Read(ref _aborted) != 0;
 
     /// <summary>是否出现过后台故障。</summary>
     public bool HasBackgroundFaults
@@ -107,7 +110,7 @@ internal sealed class AcceptanceRun
     /// <summary>标记操作员中止——整轮作废。</summary>
     public void MarkOperatorAbort(string where)
     {
-        AbortedByOperator = true;
+        Interlocked.Exchange(ref _aborted, 1);
         Log.WriteLine($"[RUN] 操作员中止，来源：{where}。本轮所有证据作废（INVALID_RUN）。");
     }
 
@@ -244,8 +247,28 @@ internal sealed class AcceptanceRun
     /// <summary>把结局写进日志并返回退出码。</summary>
     public static int Finish(AcceptanceRun run, AcceptanceOutcome outcome, string detail)
     {
-        run.WriteFooter(outcome, detail);
-        return (int)outcome;
+        return (int)run.Complete(outcome, detail);
+    }
+
+    /// <summary>所有角色资源收尾后调用；GUI/headless 共用一次结算、一次 footer。</summary>
+    public AcceptanceOutcome Complete(AcceptanceOutcome observed, string detail)
+    {
+        lock (_completionGate)
+        {
+            if (_completed is { } previous)
+                return previous;
+
+            AcceptanceOutcome settled = Settle(observed);
+            WriteFooter(settled, detail);
+            AcceptanceOutcome afterWrite = Settle(settled);
+            if (afterWrite != settled)
+            {
+                // footer 自身落盘失败也必须毒化返回值；内存/UI 明确标废，不掩盖磁盘证据不完整。
+                Log.WriteLine($"[RESULT][CORRECTION] outcome={afterWrite.Code()} reason=footer-write-failed; 磁盘证据无效");
+            }
+            _completed = afterWrite;
+            return afterWrite;
+        }
     }
 
     /// <summary>
@@ -261,9 +284,9 @@ internal sealed class AcceptanceRun
             return AcceptanceOutcome.InvalidRun;
         }
 
-        if (HasBackgroundFaults)
+        if (HasBackgroundFaults || Log.FileUnavailable)
         {
-            return AcceptanceOutcome.HarnessError;
+            return new[] { observed, AcceptanceOutcome.HarnessError }.Combine();
         }
 
         return observed;

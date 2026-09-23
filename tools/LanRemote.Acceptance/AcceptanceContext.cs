@@ -30,8 +30,10 @@ internal sealed class AcceptanceContext : IAsyncDisposable
 {
     private readonly ILoggerFactory _loggerFactory;
     private readonly DeviceCertificateService _certificates;
-    private bool _discoveryStarted;
-    private bool _disposed;
+    private readonly object _workGate = new();
+    private WorkLease? _work;
+    private bool _stopping;
+    private Task? _disposeTask;
 
     public AcceptanceContext(LogLevel minimumLevel, Action<string>? logSink = null)
     {
@@ -55,6 +57,8 @@ internal sealed class AcceptanceContext : IAsyncDisposable
 
         Paths = AppPaths.Default;
         Vault = new DpapiSecretVault(Paths, _loggerFactory.CreateLogger<DpapiSecretVault>());
+        AccessSecretStore = new DpapiAccessSecretStore(
+            Vault, _loggerFactory.CreateLogger<DpapiAccessSecretStore>());
         _certificates = new DeviceCertificateService(
             Vault,
             _loggerFactory.CreateLogger<DeviceCertificateService>());
@@ -70,6 +74,8 @@ internal sealed class AcceptanceContext : IAsyncDisposable
     public AppPaths Paths { get; }
 
     public DpapiSecretVault Vault { get; }
+
+    public DpapiAccessSecretStore AccessSecretStore { get; }
 
     public INetworkBindingProvider Bindings { get; }
 
@@ -113,39 +119,122 @@ internal sealed class AcceptanceContext : IAsyncDisposable
             RuntimeState,
             _loggerFactory.CreateLogger<LanDiscoveryService>());
 
+        // 先保存实例：即使启动中途失败，DisposeAsync 仍负责停掉它。
         await Discovery.StartAsync(cancellationToken);
-        _discoveryStarted = true;
     }
 
     /// <summary>合格网卡的 IPv4 地址——TransportHost 就监听这些。</summary>
     public IReadOnlyList<IPAddress> ListenAddresses() =>
         Bindings.GetBindings().Select(binding => binding.Address).ToArray();
 
-    /// <summary>停掉发现服务并释放日志工厂与证书服务。</summary>
-    public async ValueTask DisposeAsync()
+    internal bool IsStopping { get { lock (_workGate) { return _stopping; } } }
+
+    /// <summary>至多拥有一个附属工作；取得 lease 后，即使停止也必须由工作方交还。</summary>
+    internal WorkLease? TryAcquireWork()
     {
-        if (_disposed)
+        lock (_workGate)
         {
-            return;
+            if (_stopping || (_work is not null && !_work.Completion.IsCompletedSuccessfully)) { return null; }
+            return _work = new WorkLease();
         }
+    }
 
-        _disposed = true;
-
-        if (_discoveryStarted)
+    internal Task StopWorkAsync()
+    {
+        WorkLease? work;
+        lock (_workGate)
         {
-            using CancellationTokenSource budget = new(TimeSpan.FromSeconds(3));
+            _stopping = true;
+            work = _work;
+        }
+        return work is null ? Task.CompletedTask : work.StopAndJoinAsync();
+    }
 
+    /// <summary>附属工作完全归还后才释放 context；重复 Dispose 等待同一清理任务。</summary>
+    public ValueTask DisposeAsync()
+    {
+        lock (_workGate)
+        {
+            _stopping = true;
+            // 不让发现服务/日志订阅方在生命周期锁内执行同步代码。
+            return new ValueTask(_disposeTask ??= Task.Run(DisposeCoreAsync));
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        try { await StopWorkAsync().ConfigureAwait(false); }
+        finally { await DisposeResourcesAsync().ConfigureAwait(false); }
+    }
+
+    private async Task DisposeResourcesAsync()
+    {
+        try
+        {
+            if (Discovery is not null)
+            {
+                using CancellationTokenSource budget = new(TimeSpan.FromSeconds(3));
+                await Discovery.StopAsync(budget.Token).ConfigureAwait(false);
+                // 产品 StopAsync 会吞取消；不能把本层预算耗尽伪报为已完成。
+                budget.Token.ThrowIfCancellationRequested();
+            }
+        }
+        finally
+        {
             try
             {
-                await Discovery.StopAsync(budget.Token).ConfigureAwait(false);
+                _certificates.Dispose();
             }
-            catch (Exception)
+            finally
             {
-                // 收尾失败不该改变任何场景结论；socket 由超时兜底释放。
+                _loggerFactory.Dispose();
+            }
+        }
+    }
+
+    /// <summary>不保存密钥结果；只拥有取消及工作归还信号，取消回调绝不在持锁线程同步执行。</summary>
+    internal sealed class WorkLease : IAsyncDisposable
+    {
+        private readonly object _gate = new();
+        private readonly CancellationTokenSource _stop = new();
+        private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Task? _cancellation;
+        private bool _disposed;
+
+        internal Task Completion => _completion.Task;
+        internal bool IsStopRequested => _stop.IsCancellationRequested;
+
+        internal Task<T> RunAsync<T>(Func<CancellationToken, Task<T>> work) =>
+            Task.Run(() => work(_stop.Token));
+
+        internal Task RequestStop()
+        {
+            lock (_gate)
+            {
+                if (_disposed) { return _cancellation ?? Task.CompletedTask; }
+                return _cancellation ??= _stop.CancelAsync();
             }
         }
 
-        _certificates.Dispose();
-        _loggerFactory.Dispose();
+        internal async Task StopAndJoinAsync()
+        {
+            try { await RequestStop().ConfigureAwait(false); }
+            finally { await Completion.ConfigureAwait(false); }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Exception? fault = null;
+            try { await RequestStop().ConfigureAwait(false); }
+            catch (Exception ex) { fault = ex; throw; }
+            finally
+            {
+                lock (_gate) { _disposed = true; }
+                // 已 join 取消回调，且后续 RequestStop 不再访问 CTS；不在锁内 Dispose。
+                _stop.Dispose();
+                if (fault is null) { _completion.TrySetResult(); }
+                else { _completion.TrySetException(fault); }
+            }
+        }
     }
 }
