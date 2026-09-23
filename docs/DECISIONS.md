@@ -956,7 +956,7 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Consequence**：M5 video attach 校验复用 `SessionRegistry.TryGetSessionToken`（internal）；
 `ControlAuthOptions` 是**测试缩放形态**（全部时限可调）——产品默认值单点定义在
 `AuthProtocol`，不得被测试缩放误导；阶段 4 客户端的 serverProof 独立重算与高层连接所有权见 ADR-043。
-短码可计算不等于批准前双端展示已接线；该过程 API 尚未定案，步骤 19 的 Transport 文案与阶段 5 展示接线边界见 ADR-043。
+短码可计算不等于批准前双端展示已接线。阶段 3/4 时过程 API 尚未定案；2026-09-23 已按 ADR-044 实现非秘密通知与验收器接线，人工双端展示仍待验收。步骤 19 的 Transport 文案与会话边界见 ADR-043。
 **可逆性**：未上线（无外部对端）——除第 3 条（放宽 = 弱化 deadline 语义）与第 6 条
 （fail closed 形态）外均可演进；一经两机验收冻结。
 **验证（历史基线，不作为当前时限合同的证明）**：25 条 `ControlAuthSessionTests`（真实回环 TLS + 真实 TransportHost 全链）+
@@ -1117,9 +1117,9 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
      清零一个数组不等于全进程无残留；也不把客户端上述清理扩大为服务端 success 序列化、FrameWriter
      内部帧副本全部已擦除的保证。stack buffer 是缩小可控临时副本，不是消灭所有副本的证明。
 8. **交付与 UI 接线边界**。步骤 19 的 Transport 异常类型、短码和固定 serverProof 文案已提供；
-   **验收器展示接线仍在阶段 5**，本 ADR 不声明验收器 UI、产品 WPF UI 或阶段 5 收口完成。
-   ShortCode 当前只随成功会话公开；「两端都能算」不等于「批准前双端已展示」。
-   **批准前双端短码展示需要新的认证过程 API，形态当前未定**，不能靠提前泄露连接/token 或假称现有返回值已经支持。
+   **阶段 4 当时验收器展示尚未接线**，本 ADR 不声明产品 WPF UI 或阶段 5 人工收口完成。
+   阶段 4 当时 ShortCode 只随成功会话公开；「两端都能算」不等于「批准前双端已展示」。
+   **阶段 4 时批准前双端短码展示过程 API 尚未定案**；2026-09-23 已按 ADR-044 实现非秘密通知及验收器接线，不能靠提前泄露连接/token 代替。人工 GUI 与两机展示是否通过仍由后续实际验收确定。
 
 **源码依据**：`src/LanRemote.Transport/ControlClientConnector.cs:23`（高层入口）、
 `src/LanRemote.Transport/ControlClientConnector.cs:121`（窗口）、`src/LanRemote.Transport/ControlClientConnector.cs:223`（challenge）、
@@ -1149,3 +1149,18 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Consequence / 可逆性**：高层调用方只消费已认证会话，不参与中间连接读写；任何放宽 pin、权限、proof、
 接受 deadline 或所有权边界的改动都须重新评审。以上是 Transport 合同与定向证据，不是最终全量验收；
 **最终全量 Debug/Release 数字、阶段 5 与两机验收结论留 `HANDOFF.md` 记账，本 ADR 不预写通过结论**。
+
+---
+
+### ADR-044 — 阶段 5 非秘密通知、有界审批与验收证据生命周期
+
+**日期**：2026-09-23。**状态**：已实施并完成自动化验证；人工 GUI/两机验收待执行。用户授权自主推进，不再等待外部模型评审。
+
+1. **客户端通知不是认证成功**。`ControlClientAuthOptions.ApprovalPending` 在首个合法 pending 接受并建立本地审批窗口后同步调用一次；数据仅 SessionId、ShortCode、AcceptedAtTimestamp（连接时钟）、ApprovalWindow。回调必须快速返回，只更新有界内存；执行耗时计入原窗口，前后复核取消/单调截止。异常不透传消息或 inner exception，固定 `client-approval-notification-failed`；取消/截止优先。不能用普通 CTS 承诺强杀永不返回的本机回调。直接 success、错误/重复 pending 不新增通知。
+2. **本机审批收件箱独立且限容**。每 run 新建 `LocalApprovalInbox`，默认 3，UI 拉当前快照而非逐请求排 Dispatcher。RequestId + 每条独立 Generation 标识决定；只接受合法批准（可降不可升）或拒绝。Stop/Dispose 不可重启、清除所有待批项；取消不等待 Dispatcher。TCS 异步 continuation、锁外完成、注册非阻塞注销。收件箱接受决定不等于状态机授权；最终安全接受仍遵循 ADR-042。
+3. **密钥显示的工作拥有者先于 context 清理结束**。仅活跃 Host 显式确认后可查看，同一个真实 vault/store；一次附属 WorkLease，读取未归还不得再起。取消后等迟到工作返回、数组清零、故障记账再释放 context/结算，不以超时冒充 join。显示限 15 秒（原始单调起点），失焦/隐藏/停止清空显示；输入 PasswordBox 不保存不日志，caller 数组 finally 清零。正常查看不轮换；初始化/非法字段修复遵循既有 store 合同。不可变字符串/WPF 副本无法保证擦除，Dispatcher 不响应也无法保证即时清屏。
+4. **双端角色真实接线**。Host 共享 auth context、store、限流器、独立 3/1 待批配额与 registry，消费 handoff 并 await auth。成功 Run 返回表示保持已经结束，不代表当前在线。Client success 在低层 TLS 之前分流到高层完整认证，验证 serverProof 后持有至少 5 秒并同步 Dispose；无安全凭据源/占位 DeviceId 的 headless success 为 UNMET，不关闭身份检查、不加 key argv、不自动审批。
+5. **证据不填造**。仅一个 Host 级 100ms sampler，活动跟踪按连接上限有界。成功证据要求真实正向跨度至少 4 秒、样本间隔及结束距最后样本不超过 500ms、结束已注销、没有 Host 强关；这是验收配置，不是产品默认时限，也不能证明采样间隙内全部连续状态。缺样本/无成功/强关为 UNMET。SessionId 配对成功链，旧负例保留四元组；最后 registry=0 不能证明曾经保持。保持读结束不区分 EOF/RST/越界输入，须配客户端主动 Dispose 证据。
+6. **先清理、后唯一结算**。Host/client 共用幂等 `AcceptanceRun.Complete`；operator abort 优先作废，后台/日志/清理故障不得被 PASS 覆盖。日志后续 append 失败也算不可用；footer 自己失败会修正返回值并在内存标废。180 秒 GUI Host 预定窗口可自然结算，提前停止/关窗仍 INVALID_RUN；关窗超过等待提示预算不强杀任务。附属工作/取消回调永不返回时继续等待，不声明清理完成。
+
+**自动化证据**：`ControlClientApprovalNotificationTests` 真实 TLS；Acceptance.Tests 的真实 STA Dispatcher 卡住时后台取消、实际 Host handler + 高层客户端 TLS 四场景、WorkLease/RunState、日志/footer 与采样判据回归。8 项变异均构建成功后运行期变红、恢复同测试通过（7 项日志直接显示断言失败；M02 原异常外泄由夹具清理重抛，遮蔽原断言诊断，不能记作直接断言证据；M03/M05 为复合变异）。原始日志在 `outputs/m4-stage5-validation/mutations/`。最终全量数字与人工验收状态见 HANDOFF §18.11。未改变线上帧、密码学、Transport 单读者、产品 App 或系统网络配置。

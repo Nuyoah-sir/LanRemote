@@ -1,19 +1,19 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR 工作副本 `docs/DECISIONS.md`（010~043；042取代041旧时限解释，043=客户端所有权/校验/清理边界）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
+> ADR 工作副本 `docs/DECISIONS.md`（010~044；042=接受截止，043=客户端所有权，044=非秘密通知/审批/验收生命周期）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
 > 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；2026-09-22 本次续作后约9.6k字符，接近上限，后续追加先控长度。
 > 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
-## 当前续作点（2026-09-22，优先于下方历史记录）
+## 当前续作点（2026-09-23，优先于下方历史记录）
 
-服务端两条截止缺陷已修复，阶段4 Transport客户端完成；代码 `bc02a0c`（22文件，+4290/−185），ADR-042/043。Debug/Release各1036 PASS（Transport619，其他417），0警告/错误/失败/跳过；服务端5项与客户端9项真实变异均重放恢复。步骤18/20完成，步骤19库层固定文案/断开/不发输入完成，真实验收器展示与阶段5尚未接线。HANDOFF §18.10为准；§18.9与旧证据ZIP仅历史，不再等待转发旧评审。
+阶段5主实现 `6c7a15b`；最后代码/测试提交 `7a9d199`（8处xUnit2031等价改写）。最终Debug/Release各1190 PASS（Transport633、Acceptance140、其他417），0警告/错误/失败/跳过。阶段5新增8项运行期变异kill并恢复（7项直接断言，M02异常在清理时重抛遮蔽诊断；M03/M05复合）。HANDOFF §18.11为准；M4仍缺人工GUI/DPI和真实两机认证，产品还不能看屏/键鼠。候选包265项、57.5MiB、GUI exe自包含，最终SHA见HANDOFF。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
 客户端高层入口独占TLS到认证，实际presentedPin+grant proof均验完才交会话；public无流/token/输入。hello后machine10s、challenge只收窄、一次pending后独立approval60s。只消费首个终帧；DTO string与TLS内部副本不保证擦除。变异抓到clock测试观察点依赖：到期事件必须放在被删检查之前，删检查不能顺带删掉到期事实；正确proof仍可被后置检查兜底，不把纵深防御误当单点覆盖。
 
-阶段5需确认：验收器本机key显式查看+对端遮挡输入、不落盘；是否要求批准前双端比较短码（需非秘密过程API，现只成功后公开）。最小审批面与接受时刻已定不重问。tools/App/权威规格未动；未操作网络/防火墙/真实密钥，未跑GUI/两机。
+用户授权全权继续，不再等外部模型/重问交互。已实现首个合法pending单次非秘密通知、有界inbox（ID+Generation）、显式查看key/遮挡输入、Host/Client高层认证；context单一WorkLease须先归还清零再结算。Host180秒自然结束，提前停止作废；成功按SessionId、负例按四元组配对。100ms真采样跨度>=4s、最大/末尾间隔<=500ms、已注销非强关才PASS。下一关需用户协助两机，未操作网络/真实密钥；产品App/原规格未动。只看约1–3周/基本控制3–6周/稳定6–12周为条件估算，视频闭环后重估，不是日历承诺。
 
 ## 定位与硬约束
 
@@ -41,9 +41,9 @@ source scripts/env.sh   # dotnet 在 ~/.dotnet，不在 PATH
 dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-build
 ```
 
-出包 `scripts/acceptance/make-m3-package.py`（M3 验收器；`LANREMOTE_M3_SKIP_PUBLISH=1` 只重打，**别用 `LANREMOTE_M3_CLEAN=1`**——safe-delete hook 连脚本内 rmtree 也拦 → SystemExit）。
+出包沿用 `scripts/acceptance/make-m3-package.py` 文件名，当前仅M4：`--milestone m4 --manual <M4说明.txt> --output-dir <已有目录>`；禁止SKIP_PUBLISH，不可用旧M3手册。**别用 `LANREMOTE_M3_CLEAN=1`**（safe-delete hook拦脚本内rmtree）。
 `.ps1` 必须 UTF-8 **with BOM**；`.cmd` 纯 ASCII 无 BOM（中文注释也会解析错）。
-包形态：265 files / raw 132.3 MiB / zip 57.4 MiB，zip 内全扁平。
+M4包形态：265 files / raw 132.5 MiB / zip 57.5 MiB，zip内全扁平，程序集含代码提交。
 
 ## 里程碑（2026-09-21）
 
@@ -53,7 +53,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
-| **M4** | **进行中：阶段 0、1、2、3 完成（2026-09-22）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：双档 transcript + HMAC proof 纯函数核心 + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（643 PASS）；阶段 2（**`21a8829`**）：**5 个认证帧 + canonical base64/HEX/GUID + 严格 JSON 解析**（ADR-040；Transport 226→460，**877 PASS**；变异 ×4，M3 抓到一条假测试并修复）；阶段 3（**`760e950`**）：**服务端认证状态机 + 衔接层落地**——7 产品文件（`ControlPreAuthHandoff` exactly-once / `ConnectionSecurityContext` 冻结 / `ControlAuthSession` 八段主干 / `FailedAuthLimiter` / `ILocalApprovalGate` 5 值终态 / `SessionRegistry` / `ControlAuthContext` 旋钮）+ 25 新测试（真实回环 TLS + 真实 TransportHost 全链；Transport 460→485，**902 PASS**；ADR-041）。阶段3修复+阶段4Transport **`bc02a0c`**，Debug/Release **1036 PASS**；下一站=阶段5验收器，步骤19展示仍待接线。6阶段21步见HANDOFF §18.10 |
+| **M4** | **进行中：阶段 0、1、2、3 完成（2026-09-22）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：双档 transcript + HMAC proof 纯函数核心 + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（643 PASS）；阶段 2（**`21a8829`**）：**5 个认证帧 + canonical base64/HEX/GUID + 严格 JSON 解析**（ADR-040；Transport 226→460，**877 PASS**；变异 ×4，M3 抓到一条假测试并修复）；阶段 3（**`760e950`**）：**服务端认证状态机 + 衔接层落地**——7 产品文件（`ControlPreAuthHandoff` exactly-once / `ConnectionSecurityContext` 冻结 / `ControlAuthSession` 八段主干 / `FailedAuthLimiter` / `ILocalApprovalGate` 5 值终态 / `SessionRegistry` / `ControlAuthContext` 旋钮）+ 25 新测试（真实回环 TLS + 真实 TransportHost 全链；Transport 460→485，**902 PASS**；ADR-041）。阶段3修复+阶段4 `bc02a0c`，1036 PASS；阶段5接线 `6c7a15b`+测试修正`7a9d199`，双配置1190 PASS。下一站=人工GUI/两机验收，M4未整体完成。见HANDOFF §18.11 |
 | M5~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**；M4 阶段 3 = **`760e950`**。
