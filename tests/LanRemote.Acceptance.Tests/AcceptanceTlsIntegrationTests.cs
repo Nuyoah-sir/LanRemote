@@ -71,8 +71,8 @@ public sealed class AcceptanceTlsIntegrationTests
             Assert.Equal(expected, scenario.Evaluate());
             Assert.Equal(expected, scenario.Run.Complete(scenario.Evaluate(), "真实 TLS 会话证据"));
 
-            string line = Assert.Single(scenario.Run.Log.ReadFrom(0, 100)
-                .Where(value => value.StartsWith("[HOST][SESSION] ", StringComparison.Ordinal)));
+            string line = Assert.Single(scenario.Run.Log.ReadFrom(0, 100),
+                value => value.StartsWith("[HOST][SESSION] ", StringComparison.Ordinal));
             Assert.Contains($"sessionId={client.SessionId}", line);
             Assert.Contains("authenticated=True ", line);
             Assert.Contains("deregisteredAtRunEnd=True ", line);
@@ -122,7 +122,7 @@ public sealed class AcceptanceTlsIntegrationTests
     private static double ReadMeasurement(string line, string name)
     {
         string prefix = name + "=";
-        string field = Assert.Single(line.Split(' ').Where(value => value.StartsWith(prefix, StringComparison.Ordinal)));
+        string field = Assert.Single(line.Split(' '), value => value.StartsWith(prefix, StringComparison.Ordinal));
         return double.Parse(field[prefix.Length..], CultureInfo.InvariantCulture);
     }
 

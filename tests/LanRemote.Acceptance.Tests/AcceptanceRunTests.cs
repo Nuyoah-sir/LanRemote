@@ -18,7 +18,7 @@ public sealed class AcceptanceRunTests
         Assert.Null(run.Log.FilePath);
         Assert.Equal(AcceptanceOutcome.HarnessError, run.Complete(AcceptanceOutcome.Pass, "初始落盘失败"));
         Assert.Contains("[RESULT] outcome   = HARNESS_ERROR", run.Log.ReadFrom(0, 100));
-        Assert.Single(run.Log.ReadFrom(0, 100).Where(line => line == "RUN COMPLETE"));
+        Assert.Single(run.Log.ReadFrom(0, 100), line => line == "RUN COMPLETE");
     }
 
     [Theory(Timeout = 20_000)]
@@ -53,7 +53,7 @@ public sealed class AcceptanceRunTests
         string before = run.Log.All;
         Assert.Equal(AcceptanceOutcome.HarnessError, run.Complete(AcceptanceOutcome.Pass, "重试不能修复证据"));
         Assert.Equal(before, run.Log.All);
-        Assert.Single(run.Log.ReadFrom(0, 100).Where(line => line == "RUN COMPLETE"));
+        Assert.Single(run.Log.ReadFrom(0, 100), line => line == "RUN COMPLETE");
         if (failInFooter)
             Assert.Contains(run.Log.ReadFrom(0, 100), line => line.StartsWith(
                 "[RESULT][CORRECTION] outcome=HARNESS_ERROR reason=footer-write-failed;", StringComparison.Ordinal));
@@ -82,9 +82,9 @@ public sealed class AcceptanceRunTests
             string before = run.Log.All;
             Assert.Equal((int)AcceptanceOutcome.Pass, AcceptanceRun.Finish(run, AcceptanceOutcome.Fail, "迟到结算"));
             Assert.Equal(before, run.Log.All);
-            Assert.Single(run.Log.ReadFrom(0, 100).Where(line => line == "RUN COMPLETE"));
-            Assert.Single(File.ReadAllLines(run.Log.FilePath!).Where(line => line == "RUN COMPLETE"));
-            Assert.Single(run.Log.ReadFrom(0, 100).Where(line => line.StartsWith("[RESULT] outcome", StringComparison.Ordinal)));
+            Assert.Single(run.Log.ReadFrom(0, 100), line => line == "RUN COMPLETE");
+            Assert.Single(File.ReadAllLines(run.Log.FilePath!), line => line == "RUN COMPLETE");
+            Assert.Single(run.Log.ReadFrom(0, 100), line => line.StartsWith("[RESULT] outcome", StringComparison.Ordinal));
         }
         finally
         {
@@ -112,7 +112,7 @@ public sealed class AcceptanceRunTests
         Assert.Equal(AcceptanceOutcome.InvalidRun, run.Settle(observed));
         Assert.Equal(AcceptanceOutcome.InvalidRun, run.Complete(observed, "优先级"));
         Assert.Contains("[RESULT] outcome   = INVALID_RUN", File.ReadAllLines(run.Log.FilePath!));
-        Assert.Single(run.Log.ReadFrom(0, 100).Where(line => line == "RUN COMPLETE"));
+        Assert.Single(run.Log.ReadFrom(0, 100), line => line == "RUN COMPLETE");
     }
 
     [Theory(Timeout = 20_000)]
