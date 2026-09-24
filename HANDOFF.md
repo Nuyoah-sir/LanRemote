@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-24（修正版真实两机认证主流程已通过；配对证据与剩余人工项见 §18.15）**
+> 更新时间：**2026-09-24（Control与降权主流程通过；拒绝行为已观测，但该Host轮提前停止作废，见 §18.16）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
-> **当前状态：修正版真实两机认证主流程已通过，完整 M4 人工清单仍未全部勾选。**
+> **当前状态：Control与Control→ViewOnly两机认证/保持/自然注销均已通过。最新A `738fbcc1` / B `67442a17`为降权PASS；另A `d1097199` / B `80722d29`拒绝路径有诊断证据，但B提前停止为INVALID_RUN，不能勾选有效拒绝验收。A `aa9cf1bf`为另一独立取消轮，不影响此前降权PASS。完整M4人工清单未全完。**
 > 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复主实现 `bc8cf48`，审批界面修正 `67c7d7e`。此前 Debug / Release 全量各 **1329 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**；代码与证据对应见 §1 / §18.14，本次仅核对用户日志与记账，未重跑构建测试。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
-> **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 本轮网络无影响及当前审批交互人工项通过；不外推全部DPI、密钥失焦清空、降权/拒绝、真实serverProof错误显示与关窗路径。M4整体仍进行中。
+> **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、拒绝有效轮、真实serverProof错误显示与关窗路径；降权后续已通过，见§18.16。M4整体仍进行中。
 > 用户已授权自主推进，不再等待外部模型，不重问已采用的最小密钥交付/短码方案。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：只补§18.15尚未覆盖的人工项，不要求无理由重跑已通过的Control主流程；不能先推进M5。** 本轮未绕过审批、未改60秒期限或网络。§18.12/13/14保留历史事故及修复证据，当前包仍为outputs/m4-approval-ui，无须因纯记账重新下载。
+> **下一关：只补§18.16的有效拒绝轮及原清单其他缺项，不重跑已通过的Control和降权主流程；不能先推进M5。** 本轮未绕过审批、未改60秒期限或网络。§18.12/13/14保留历史事故及修复证据，当前包仍为outputs/m4-approval-ui，无须因纯记账重新下载。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,7 +35,7 @@
 ## 1. 当前状态
 
 - **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0–4 实现完成；阶段 5 自动化及修正版真实两机认证主流程已通过。** 2026-09-24 A `31255177` / B `d8fd8b0d`：同SessionId认证、Control授权、正采样保持与自然注销通过；三个客户端负例通过，pin的Host关联保留局限，见§18.15。不宣称完整GUI人工清单或全部M4 DoD通过。
-- **下一步：只补已有GUI清单剩余项。** 用户已确认本轮双方始终正常上网、审批界面正常且核对短码；不重复要求这些确认或已通过的主流程。降权/拒绝等分别开专项轮。仍不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo、不进入M5。
+- **下一步：只补已有GUI清单剩余项。** 用户已确认本轮双方始终正常上网、审批界面正常且核对短码；不重复要求这些确认或已通过的主流程。降权轮已通过；仅补拒绝的有效自然结束轮及原清单其他未验项。拒绝轮不要提前停止：预期A拒绝后FAIL、B无成功认证而UNMET，不追求总PASS。仍不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo、不进入M5。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0–4 实现；阶段 5 自动化及Control两机主流程完成，完整人工清单尚有缺项）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
 - **Last code commit：`67c7d7e`**（固定审批区、待批提示、关联日志及24项真实WPF回归）；前一拒绝提示编码 `72bfb93`、现网修复 `bc8cf48`。认证阶段5主实现 `6c7a15b`，客户端/时限修复 `bc02a0c`。
@@ -2456,3 +2456,39 @@ transcript **绑 presentedPin** → response → success → **验证 serverProo
 沿用§18.11 D既定清单，不增加新的验收门槛。剩余：未覆盖的布局/DPI组合；显式查看密钥、遮挡/失焦/到期清空；独立降权为ViewOnly和拒绝请求、错key提示、关窗/主动停止。真实serverProof失败的固定文案仍需对应故障场景，不能由错key或pin拒绝提示替代。正常Control主流程不必无理由重跑，复用现包且不改网、不读出真实密钥；拒绝/错key/主动停止应单独记预期拒绝/无效运行，不能混作正常success轮失败或强改全局PASS。完整人工清单完成前，M4保持进行中，不进入M5。
 
 本轮核对说明：`outputs/M4-两机认证核对-20260924.txt`。报告为用户粘贴日志的摘要与阈值核对，不是原始日志副本或新一轮执行结果。
+
+### 18.16 降权主流程通过；拒绝行为已观测但Host轮作废（2026-09-24）
+
+**来源与范围**：用户粘贴A info `a1672e19`、client `738fbcc1` / `aa9cf1bf` / `d1097199`，B info `535e7cf0`、host `67442a17` / `80722d29`。两端所列EXE/Transport SHA与§18.15同修正版一致；不外推完整目录逐文件校验。本次仅核对日志、只读复核`AcceptanceRun.MarkOperatorAbort`及Host结算规则并记账，没有改代码/网络、运行build/test或重打包。Last code commit保持`67c7d7e`，1329为此前自动化结果。
+
+#### A. 有效降权轮：PASS
+
+A `738fbcc1`（10:06:01.404Z）/ B `67442a17`（10:05:10.870Z），双方PASS/aborted=False/无后台故障。完整SessionId `f85e6d5f-4b3d-4dd8-aa93-101d74693997`在双端一致，B ConnectionId `5559c45c-d0e1-4a3e-a0f1-2050235dc488`，peer `192.168.137.1:61339`。
+
+- A `requestedPermission=Control`；B UI `submitted=True decision=Approved grant=ViewOnly`；A最终`serverProof=verified grant=ViewOnly`。三者组合证明实际已验证会话权限降为ViewOnly，不是仅UI文字变化；不提前证明尚未实现的键鼠输入闸门或视频功能。
+- A保持5001ms后同步释放。B `authenticated=True tracked=True observedSamples=50`，`observedSpanMs=4887.638 >=4000`，`maxObservedGapMs=110.118 <=500`，`endObservationGapMs=24.545 <=500`，`observationInterrupted=False`；`deregisteredAtRunEnd=True hostForcedClose=False evidence=PASS`，终态`authenticated-ended-unregistered`。
+- timeout：A `.1:53080`→B`.141:45873`，EOF5008ms；B同peer `pre-auth-timeout`5009.101ms。slow-dribble：A`:59997`、sent3/4、EOF5011ms；B同peer `pre-auth-timeout`5011.865ms。两者精确四元组配对。
+- pin-mismatch：A明确pin拒绝；B conn#2 peer`:53079`、TLS13 `pre-auth-eof`3.374ms，仅顺序关联，A无本地端口。不冒称全部负例唯一配对。
+- B桶1认证自然注销+1前认证EOF+2前认证超时=4、partitionOk=True，authenticatedEnded=1、qualifiedNaturalRelease=1；第一次停止报告全部完成、handler/registry/pending均0、handlerFaults=0、cleanupFault=False。保持证据为采样，不是所有间隙连续在线证明。
+
+#### B. A独立取消轮：INVALID_RUN，不污染上一轮
+
+A `aa9cf1bf`开始10:08:27.561Z，UI中止控制端，连接阶段UNOBSERVED（未知1，未执行3），最终INVALID_RUN/aborted=True/退出4、无后台故障。没有peer、SessionId或本地端口，不能断言从未建连、把B监听窗口间隔当唯一原因，或配到后一个拒绝会话。此轮仅提供取消处理/作废标记的诊断观察，不计认证通过或活动会话取消专项通过，也不代表关窗测试。取消只作用于本run，不能推翻已完成的降权轮PASS。
+
+#### C. 拒绝尝试：行为明确，仍不接受作废轮为专项通过
+
+A `d1097199`开始10:08:56.902Z，B `80722d29`开始10:08:44.954Z。
+
+- B RequestId `fe2cc27c-086e-45a7-bdbf-9d728910c06d`、Generation `da24e9c7-8ded-40c4-a11d-859756dee529`的UI提交为`Denied`、grant=-，并关联SessionId `d154d45e-b278-45d2-b531-aa2602a8da4b`及ConnectionId `cce8ad3f-3640-4827-934d-b3cc548848ec`。同会话`authenticated=False observedSamples=0`，终态`auth-rejected:auth-approval-denied`、Closed，peer`:53012`，elapsed3080.992ms。
+- A `client-remote-authentication-failed`并显示“远端拒绝了认证或审批请求”，未得到已验证会话。A失败路径无SessionId/本地端口，只能按同轮目标及顺序关联B唯一拒绝尝试；不是严格SessionId/四元组双端配对，不能由该通用错误单独证明错key或serverProof失败。
+- 后续timeout`:53639`，A5017ms/B5013.313ms；slow-dribble`:55986`，A3/4、5003ms/B5002.19ms，端点与原因相符。pin为A明确拒绝/B`:53638`TLS13 EOF，仅顺序关联。这些只作该作废轮诊断，不纳入有效验收PASS。
+- B随后明确`UI 提前停止监听`；817样本、采样跨度81599.949ms，最终INVALID_RUN/aborted=True/退出4。虽停止前无活跃认证、最终handler/registry/pending全0、无后台/清理故障，也不能替代180秒自然结算。
+- 现行`MarkOperatorAbort`整轮作废，Host最终Complete优先处理abort。**保留拒绝行为的诊断事实，不把本轮记为有效拒绝专项PASS，不套用旧M3收尾豁免，也不修改日志/判据。** A总FAIL是正常success场景被拒绝后的预期标签，不是新发现产品故障。
+
+#### D. 下一步与边界
+
+Control和降权不重跑、不重打包。仅补一轮有效拒绝：B开始180秒监听、A发起、B拒绝；A跑完，B自然结束，均不按提前停止。无其它流量且只有拒绝时，预期A总FAIL、B总UNMET、双方aborted=False；按`Denied`→`auth-approval-denied`、无认证会话、配对强度及清理判据判专项，不强求总PASS。若仍INVALID_RUN或有故障，不算通过。
+
+原清单剩余密钥显示/遮挡/失焦/到期、错key、真实serverProof失败固定文案、未覆盖DPI及关窗/活动会话停止仍按实际覆盖记账。前一Control轮用户确认联网及审批界面正常的结果保留，不重复追问，但不冒称后续全部轮次互联网均被连续监测。M4整体仍进行中，不进入M5。
+
+核对摘要交付：`outputs/M4-降权与拒绝核对-20260924.txt`；不是原始日志备份或新一轮执行结果。
