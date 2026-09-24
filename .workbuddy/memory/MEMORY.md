@@ -7,9 +7,9 @@
 
 ## 当前续作点（2026-09-24，优先于下方历史记录）
 
-最新用户两机日志A client31255177/B host d8fd8b0d：修正版67c7d7e在137.1/137.141同/24认证主流程PASS，同SessionId 6d3c41f2-5bb5-4f1d-acdd-a091a755baea；B审批Control提交成功，A serverProof verified/持有5001ms，B正样本50/跨度4911.012ms/最大间隔110.472/末间隔64.829，已注销非强关。两超时端口55848/54266精确配对；pin无客户端端口仅顺序关联，双方结算PASS/清理全零。不能补成全部GUI/DPI/降权拒绝/互联网无影响已验，不进M5；详HANDOFF§18.15。旧改网/Undo入口停用；无自动选择批准、不改时限网络。本机SAC关闭是用户单次明确授权，绝不写成产品功能。
+最新用户两机日志A client31255177/B host d8fd8b0d：修正版67c7d7e在137.1/137.141同/24认证主流程PASS，同SessionId 6d3c41f2-5bb5-4f1d-acdd-a091a755baea；B审批Control提交成功，A serverProof verified/持有5001ms，B正样本50/跨度4911.012ms/最大间隔110.472/末间隔64.829，已注销非强关。两超时端口55848/54266精确配对；pin无客户端端口仅顺序关联，双方结算PASS/清理全零。用户随后明确确认本轮两台前中后上网始终正常、审批显示正常且已核对短码；两项人工通过，不重复追问。全部GUI/DPI/降权拒绝未全验，不进M5；详HANDOFF§18.15。旧改网/Undo入口停用；无自动选择批准、不改时限网络。本机SAC关闭是用户单次明确授权，绝不写成产品功能。
 
-最终Debug/Release各1329 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance203），0警告错误失败跳过；新增24真STA/WPF测试及1计数变异红→绿。测试不Show/不触用户日志，App.xaml同源样式离屏800x640不是真屏DPI；内联绑定检查Run.Text。现包outputs/m4-approval-ui：264项/57.5MiB，SHA及边界见HANDOFF§18.14；本次双方EXE/Transport哈希一致。旧1305/Python10/网络3变异见§18.13。主流程已过不重跑、不重打包；下一关仅补原清单人工项及双方联网确认，M4未全完、不进M5，产品无看屏/键鼠。
+最终Debug/Release各1329 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance203），0警告错误失败跳过；新增24真STA/WPF测试及1计数变异红→绿。测试不Show/不触用户日志，App.xaml同源样式离屏800x640不是真屏DPI；内联绑定检查Run.Text。现包outputs/m4-approval-ui：264项/57.5MiB，SHA及边界见HANDOFF§18.14；本次双方EXE/Transport哈希一致。旧1305/Python10/网络3变异见§18.13。主流程已过不重跑、不重打包；下一关仅补原清单剩余人工项，M4未全完、不进M5，产品无看屏/键鼠。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
@@ -55,7 +55,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
-| **M4** | 阶段0–4及阶段5接线/自动化完成；现1329 PASS。最新`67c7d7e`修正版Control真实两机认证、保持与自然注销PASS（2026-09-24）；完整人工清单/双方联网待补，M4未全完，见HANDOFF§18.15。 |
+| **M4** | 阶段0–4及阶段5接线/自动化完成；现1329 PASS。最新`67c7d7e`修正版Control真实两机认证、保持与自然注销PASS（2026-09-24）；联网及审批界面人工已确认，余项待补，M4未全完，见HANDOFF§18.15。 |
 | M5~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**；M4 阶段 3 = **`760e950`**。
