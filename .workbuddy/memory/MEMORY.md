@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-09-24，优先于下方历史记录）
 
-最新用户两机日志A client31255177/B host d8fd8b0d：修正版67c7d7e在137.1/137.141同/24认证主流程PASS，同SessionId 6d3c41f2-5bb5-4f1d-acdd-a091a755baea；B审批Control提交成功，A serverProof verified/持有5001ms，B正样本50/跨度4911.012ms/最大间隔110.472/末间隔64.829，已注销非强关。两超时端口55848/54266精确配对；pin无客户端端口仅顺序关联，双方结算PASS/清理全零。用户随后明确确认本轮两台前中后上网始终正常、审批显示正常且已核对短码；两项人工通过，不重复追问。后续降权A738fbcc1/B67442a17双端PASS（50样本/4887.638ms/自然注销），不重跑。拒绝Ad1097199/B80722d29确有Denied及auth-approval-denied，但B提前停止INVALID_RUN仅可诊断，须补有效自然结束轮；Aaa9cf1bf是独立取消轮，不污染前轮。余人工项未完、不进M5；详HANDOFF§18.16。旧改网/Undo入口停用；无自动选择批准、不改时限网络。本机SAC关闭是用户单次明确授权，绝不写成产品功能。
+最新用户两机日志A client31255177/B host d8fd8b0d：修正版67c7d7e在137.1/137.141同/24认证主流程PASS，同SessionId 6d3c41f2-5bb5-4f1d-acdd-a091a755baea；A serverProof verified，B保持及非强关注销PASS，两超时精确配对，pin仅顺序关联；明细§18.15。用户随后明确确认本轮两台前中后上网始终正常、审批显示正常且已核对短码；两项人工通过，不重复追问。后续降权A738fbcc1/B67442a17双端PASS（50样本/4887.638ms/自然注销），不重跑。最新拒绝A66ef28d0/B8bd52649有效专项PASS：Denied→auth-approval-denied、无认证会话、1800样本/自然结束、双方aborted=False/清理全0，A总FAIL/B总UNMET是预期标签。拒绝失败路径无双端SessionId/端口，仅顺序关联；不再重跑授权/降权/拒绝。旧INVALID_RUN不改判。余人工项未完、不进M5；详HANDOFF§18.17。旧改网/Undo入口停用；无自动选择批准、不改时限网络。本机SAC关闭是用户单次明确授权，绝不写成产品功能。
 
 最终Debug/Release各1329 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance203），0警告错误失败跳过；新增24真STA/WPF测试及1计数变异红→绿。测试不Show/不触用户日志，App.xaml同源样式离屏800x640不是真屏DPI；内联绑定检查Run.Text。现包outputs/m4-approval-ui：264项/57.5MiB，SHA及边界见HANDOFF§18.14；本次双方EXE/Transport哈希一致。旧1305/Python10/网络3变异见§18.13。主流程已过不重跑、不重打包；下一关仅补原清单剩余人工项，M4未全完、不进M5，产品无看屏/键鼠。
 
