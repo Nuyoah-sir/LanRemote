@@ -33,7 +33,7 @@
         </StackPanel>
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-                <GroupBox Header="本机身份与网络（自动检测）">
+                <GroupBox Header="本机身份与现有网络（只读检查）">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -60,18 +60,14 @@
                         <TextBlock Grid.Row="3" Grid.Column="1" x:Name="ReadyText"
                                    Text="检测中…" FontWeight="SemiBold" TextWrapping="Wrap" />
                         <WrapPanel Grid.Row="4" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                            <Button x:Name="SelfCheckButton" Content="重新自检"
+                            <Button x:Name="SelfCheckButton" Content="只读检查现有网络"
                                     Click="SelfCheckButton_Click" Margin="0,0,8,0" />
-                            <Button x:Name="PrepareAButton" Content="准备为 A 机（192.168.1.10）"
-                                    Click="PrepareAButton_Click" Margin="0,0,8,0" />
-                            <Button x:Name="PrepareBButton" Content="准备为 B 机（192.168.1.20）"
-                                    Click="PrepareBButton_Click" />
                         </WrapPanel>
                         <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Margin="0,6,0,0">
-                            <Button x:Name="UndoPrepareButton" Content="撤销准备（还原网络设置）"
-                                    Click="UndoPrepareButton_Click" HorizontalAlignment="Left" />
                             <TextBlock Style="{StaticResource Wrap}" Foreground="#666" FontSize="11"
-                                       Text="lab 按钮是可选的指定实验网段配置，并非只能使用 192.168.1.0/24。确认后会改地址、网络配置文件及防火墙，可能短暂断网，需要 UAC；完成后可按原流程撤销。" />
+                                       Text="只读检查，不改 DHCP/IP/DNS/路由/热点/ICS/网络类别/防火墙，不提供改网或 Undo 操作；管理员权限或 UAC 确认不予豁免。" />
+                            <TextBlock Style="{StaticResource Wrap}" Foreground="#666" FontSize="11"
+                                       Text="本地 PASS 仅代表本地检查通过，不代表发现、互通、认证或互联网可用。" />
                         </StackPanel>
                     </Grid>
                 </GroupBox>

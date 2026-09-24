@@ -10,8 +10,8 @@ namespace LanRemote.Discovery.Networking;
 /// <para>规则（<c>04_PROTOCOL_AND_SECURITY.md</c> 第 3 节）：</para>
 /// <list type="bullet">
 /// <item><description><see cref="OperationalStatus.Up"/>；</description></item>
-/// <item><description>类型属于允许的真实 Ethernet / Wi-Fi；</description></item>
-/// <item><description>不是明显的虚拟 / VPN 适配器；</description></item>
+/// <item><description>类型属于允许的 Ethernet / Wi-Fi；</description></item>
+/// <item><description>不是明显的虚拟 / VPN 适配器（限定的系统 Wi-Fi Direct 接口仅豁免 virtual 关键词）；</description></item>
 /// <item><description>IPv4 地址属于 RFC1918；</description></item>
 /// <item><description>有可用且连续的子网掩码。</description></item>
 /// </list>
@@ -19,7 +19,7 @@ namespace LanRemote.Discovery.Networking;
 /// </remarks>
 public static class NetworkInterfaceSelector
 {
-    /// <summary>允许的物理网络类型。</summary>
+    /// <summary>允许的 Ethernet / Wi-Fi 网络类型。</summary>
     public static IReadOnlySet<NetworkInterfaceType> AllowedInterfaceTypes { get; } =
         new HashSet<NetworkInterfaceType>
         {
@@ -65,7 +65,7 @@ public static class NetworkInterfaceSelector
                 continue;
             }
 
-            if (VirtualAdapterFilter.IsLikelyVirtual(nic.Name, nic.Description))
+            if (VirtualAdapterFilter.IsLikelyVirtual(nic.Name, nic.Description, nic.InterfaceType, nic.InterfaceIndex))
             {
                 continue;
             }

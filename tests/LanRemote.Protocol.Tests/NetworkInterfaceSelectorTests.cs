@@ -42,6 +42,15 @@ public sealed class NetworkInterfaceSelectorTests
             1,
             new[] { new Ipv4UnicastAddress(IPAddress.Parse(address), null) });
 
+    private static NetworkInterfaceSnapshot WiFiDirectNic() =>
+        Nic(
+            "hotspot",
+            "本地连接* 2",
+            "Microsoft Wi-Fi Direct Virtual Adapter #2",
+            NetworkInterfaceType.Wireless80211,
+            OperationalStatus.Up,
+            ("192.168.137.1", "255.255.255.0")) with { InterfaceIndex = 13 };
+
     [Fact]
     public void UpEthernetWithPrivateIpv4AndMask_IsIncluded()
     {
@@ -121,7 +130,7 @@ public sealed class NetworkInterfaceSelectorTests
     [Fact]
     public void RealAdapterNamesAreNotFalsePositives()
     {
-        // 这几个词在真实网卡名称/描述里很常见，绝不能误杀。
+        // 常见真实网卡以及满足窄豁免条件的系统 Wi-Fi Direct 接口均应保留。
         IReadOnlyList<NetworkBinding> bindings = NetworkInterfaceSelector.Select(
             new[]
             {
@@ -130,8 +139,208 @@ public sealed class NetworkInterfaceSelectorTests
                 Nic("3", "Wi-Fi", "Microsoft Wi-Fi Direct Virtual Adapter", NetworkInterfaceType.Wireless80211, OperationalStatus.Up, ("192.168.1.22", "255.255.255.0")),
             });
 
-        // 第三张卡的 description 含 "Virtual"，会被过滤掉（这是保守策略的预期结果）。
+        Assert.Equal(3, bindings.Count);
+        Assert.Contains(bindings, b => b.InterfaceId == "3");
+    }
+
+    [Fact]
+    public void WindowsWiFiDirectHotspot_IsIncludedAlongsideEthernet()
+    {
+        NetworkInterfaceSnapshot hotspot = WiFiDirectNic();
+        IReadOnlyList<NetworkBinding> bindings = NetworkInterfaceSelector.Select(
+            new[]
+            {
+                Nic("ethernet", "Ethernet", "Realtek PCIe GbE", NetworkInterfaceType.Ethernet, OperationalStatus.Up, ("192.168.1.20", "255.255.255.0")),
+                hotspot,
+            });
+
         Assert.Equal(2, bindings.Count);
+        Assert.Contains(bindings, b => b.InterfaceId == "ethernet");
+        NetworkBinding binding = Assert.Single(bindings, b => b.InterfaceId == hotspot.Id);
+        Assert.Equal("本地连接* 2", binding.InterfaceName);
+        Assert.Equal(NetworkInterfaceType.Wireless80211, binding.InterfaceType);
+        Assert.Equal(13, binding.InterfaceIndex);
+        Assert.Equal("192.168.137.1", binding.Address.ToString());
+        Assert.Equal("255.255.255.0", binding.SubnetMask.ToString());
+        Assert.Equal("192.168.137.255", binding.DirectedBroadcast.ToString());
+    }
+
+    [Theory]
+    [InlineData("本地连接* 2", "Microsoft Wi-Fi Direct Virtual Adapter")]
+    [InlineData("我的热点", "Microsoft Wi-Fi Direct Virtual Adapter #1")]
+    [InlineData("已重命名的无线接口", "Microsoft Wi-Fi Direct Virtual Adapter #2")]
+    [InlineData("Virtual LAN", "Microsoft Wi-Fi Direct Virtual Adapter #12")]
+    [InlineData("", "Microsoft Wi-Fi Direct Virtual Adapter #10")]
+    public void WindowsWiFiDirectDescriptionAndRenamedInterface_AreIncluded(string name, string description)
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with { Name = name, Description = description };
+
+        NetworkBinding binding = Assert.Single(NetworkInterfaceSelector.Select(new[] { nic }));
+
+        Assert.Equal(name, binding.InterfaceName);
+        Assert.Equal(13, binding.InterfaceIndex);
+    }
+
+    [Theory]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #0")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #02")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #-2")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #+2")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2.0")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2e1")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter # 2")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2 ")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2\n")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2abc")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #２")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2２")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2 #3")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter#2")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter  #2")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter ")]
+    [InlineData("Other Microsoft Wi-Fi Direct Virtual Adapter #2")]
+    [InlineData("microsoft Wi-Fi Direct Virtual Adapter #2")]
+    [InlineData("Microsoft Wi-Fi Direct virtual Adapter #2")]
+    public void NonExactWindowsWiFiDirectDescription_IsExcluded(string description)
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with { Description = description };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nic }));
+    }
+
+    [Theory]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2", "Intel Wireless")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter", "")]
+    [InlineData("Microsoft Wi-Fi Direct Virtual Adapter #2", "Other Virtual Adapter")]
+    [InlineData("本地连接* 2", "Other Virtual Adapter")]
+    public void SpoofedNameOrHotspotSubnet_DoesNotExemptOtherAdapters(string name, string description)
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with { Name = name, Description = description };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nic }));
+    }
+
+    [Theory]
+    [InlineData(NetworkInterfaceType.Ethernet)]
+    [InlineData(NetworkInterfaceType.FastEthernetT)]
+    [InlineData(NetworkInterfaceType.FastEthernetFx)]
+    [InlineData(NetworkInterfaceType.GigabitEthernet)]
+    [InlineData(NetworkInterfaceType.Loopback)]
+    [InlineData(NetworkInterfaceType.Tunnel)]
+    [InlineData(NetworkInterfaceType.Ppp)]
+    [InlineData(NetworkInterfaceType.Unknown)]
+    [InlineData(NetworkInterfaceType.Wwanpp)]
+    public void WindowsWiFiDirectDescriptionOnNonWirelessType_IsExcluded(NetworkInterfaceType type)
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with { InterfaceType = type };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nic }));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void WindowsWiFiDirectWithoutValidIndex_IsExcluded(int interfaceIndex)
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with { InterfaceIndex = interfaceIndex };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nic }));
+    }
+
+    [Fact]
+    public void DownWindowsWiFiDirect_IsExcluded()
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with { OperationalStatus = OperationalStatus.Down };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nic }));
+    }
+
+    [Theory]
+    [InlineData("8.8.8.8")]
+    [InlineData("169.254.137.1")]
+    [InlineData("172.32.137.1")]
+    [InlineData("fe80::1")]
+    public void WindowsWiFiDirectWithNonPrivateIpv4_IsExcluded(string address)
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with
+        {
+            UnicastAddresses = new[] { new Ipv4UnicastAddress(IPAddress.Parse(address), IPAddress.Parse("255.255.255.0")) },
+        };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nic }));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("0.0.0.0")]
+    [InlineData("255.255.255.255")]
+    [InlineData("255.0.255.0")]
+    [InlineData("ffff:ffff:ffff:ffff::")]
+    public void WindowsWiFiDirectWithoutUsableMask_IsExcluded(string? mask)
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with
+        {
+            UnicastAddresses = new[] { new Ipv4UnicastAddress(IPAddress.Parse("192.168.137.1"), mask is null ? null : IPAddress.Parse(mask)) },
+        };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nic }));
+    }
+
+    [Theory]
+    [InlineData("VPN")]
+    [InlineData("Hyper-V")]
+    [InlineData("vEthernet")]
+    [InlineData("VMware")]
+    [InlineData("VirtualBox")]
+    [InlineData("WireGuard")]
+    [InlineData("Wintun")]
+    [InlineData("Tailscale")]
+    [InlineData("ZeroTier")]
+    [InlineData("TAP-Windows Adapter V9")]
+    [InlineData("Tunnel")]
+    public void WindowsWiFiDirectConflictingVirtualTokens_AreStillExcluded(string token)
+    {
+        NetworkInterfaceSnapshot nameConflict = WiFiDirectNic() with { Name = $"本地连接* 2 {token}" };
+        NetworkInterfaceSnapshot descriptionConflict = WiFiDirectNic() with { Description = $"Microsoft Wi-Fi Direct Virtual Adapter #2 {token}" };
+
+        Assert.Empty(NetworkInterfaceSelector.Select(new[] { nameConflict, descriptionConflict }));
+    }
+
+    [Fact]
+    public void WindowsWiFiDirectWithMultipleAddresses_PreservesEligibleBindings()
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic() with
+        {
+            UnicastAddresses = new[]
+            {
+                new Ipv4UnicastAddress(IPAddress.Parse("192.168.137.1"), IPAddress.Parse("255.255.255.0")),
+                new Ipv4UnicastAddress(IPAddress.Parse("10.1.2.3"), IPAddress.Parse("255.255.0.0")),
+                new Ipv4UnicastAddress(IPAddress.Parse("172.16.17.18"), IPAddress.Parse("255.255.240.0")),
+                new Ipv4UnicastAddress(IPAddress.Parse("8.8.8.8"), IPAddress.Parse("255.255.255.0")),
+                new Ipv4UnicastAddress(IPAddress.Parse("192.168.137.2"), null),
+            },
+        };
+
+        IReadOnlyList<NetworkBinding> bindings = NetworkInterfaceSelector.Select(new[] { nic });
+
+        Assert.Equal(3, bindings.Count);
+        Assert.All(bindings, binding =>
+        {
+            Assert.Equal(nic.Id, binding.InterfaceId);
+            Assert.Equal(13, binding.InterfaceIndex);
+        });
+        Assert.Contains(bindings, b => b.Address.ToString() == "192.168.137.1" && b.SubnetMask.ToString() == "255.255.255.0" && b.DirectedBroadcast.ToString() == "192.168.137.255");
+        Assert.Contains(bindings, b => b.Address.ToString() == "10.1.2.3" && b.SubnetMask.ToString() == "255.255.0.0" && b.DirectedBroadcast.ToString() == "10.1.255.255");
+        Assert.Contains(bindings, b => b.Address.ToString() == "172.16.17.18" && b.SubnetMask.ToString() == "255.255.240.0" && b.DirectedBroadcast.ToString() == "172.16.31.255");
+    }
+
+    [Fact]
+    public void VirtualFilterWithoutInterfaceMetadata_RemainsConservative()
+    {
+        NetworkInterfaceSnapshot nic = WiFiDirectNic();
+
+        Assert.True(VirtualAdapterFilter.IsLikelyVirtual(nic.Name, nic.Description));
     }
 
     [Fact]

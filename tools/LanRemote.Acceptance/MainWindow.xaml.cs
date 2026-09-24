@@ -192,9 +192,6 @@ public partial class MainWindow : Window
         PeerKeyBox.IsEnabled = idle;
         PermissionBox.IsEnabled = idle;
         SelfCheckButton.IsEnabled = idle;
-        PrepareAButton.IsEnabled = idle;
-        PrepareBButton.IsEnabled = idle;
-        UndoPrepareButton.IsEnabled = idle;
         bool running = !_closing && !_faulted && _activeRun is { IsStopped: false } && _runTask is { IsCompleted: false };
         StopHostButton.IsEnabled = running && _activeRun!.IsHost;
         StopClientButton.IsEnabled = running && !_activeRun!.IsHost;
@@ -223,12 +220,12 @@ public partial class MainWindow : Window
         }
         catch (Exception)
         {
-            ReportFault(_run, "窗口自检或 lab 工作");
+            ReportFault(_run, "窗口只读检查");
             _ready = false;
             ShowResult(_run?.Settle(AcceptanceOutcome.HarnessError) ?? AcceptanceOutcome.HarnessError,
                 "工作异常；异常正文未输出。请检查日志与实际环境。");
         }
-        // _busy 由定时器在任务回收后解除；关窗期间绝不取消提升操作。
+        // _busy 由定时器在只读检查任务回收后解除。
     }
 
     private async Task RunSelfCheckAsync()
@@ -238,14 +235,14 @@ public partial class MainWindow : Window
         {
             InfoRole.InfoResult info = await Task.Run(() => InfoRole.RunAsync(run, CancellationToken.None));
             AcceptanceOutcome outcome = run.Complete(info.Ready ? AcceptanceOutcome.Pass : AcceptanceOutcome.PreconditionUnmet,
-                "本机环境自检已收尾；同子网与对端可达性仍须两机核验。");
+                InfoRole.LocalCheckScope);
             DeviceCodeText.Text = info.DeviceCode;
             CertPinText.Text = info.CertSha256;
             ListenText.Text = info.ListenAddresses.Count == 0 ? "(无合格 RFC1918 网卡)" : string.Join(", ", info.ListenAddresses);
             _ready = info.Ready && outcome == AcceptanceOutcome.Pass && !_faulted;
-            ReadyText.Text = _ready ? "本机存在合格 RFC1918 地址；请确认对端位于同一子网。"
-                : "本机尚未就绪：请检查合格 RFC1918 网卡或自检故障。不限于 192.168.1.0/24；lab 按钮仅为可选配置。";
+            ReadyText.Text = InfoRole.DescribeReadiness(_ready);
             ReadyText.Foreground = _ready ? Brushes.DarkGreen : Brushes.DarkRed;
+            ShowResult(outcome, InfoRole.LocalCheckScope);
         }
         catch (Exception)
         {
@@ -255,45 +252,6 @@ public partial class MainWindow : Window
             ReadyText.Foreground = Brushes.DarkRed;
             ShowResult(run.Settle(run.Complete(AcceptanceOutcome.HarnessError, "自检异常，资源收尾后结算。")), "本机尚未就绪。");
         }
-    }
-
-    private void PrepareAButton_Click(object sender, RoutedEventArgs e) => PrepareLab(LabAction.ApplyA);
-    private void PrepareBButton_Click(object sender, RoutedEventArgs e) => PrepareLab(LabAction.ApplyB);
-    private void UndoPrepareButton_Click(object sender, RoutedEventArgs e) => PrepareLab(LabAction.Undo);
-
-    private void PrepareLab(LabAction action)
-    {
-        if (!CanStart) { return; }
-        bool undo = action == LabAction.Undo;
-        string question = undo
-            ? "撤销会删除 lab 地址与两条入站规则，并恢复网卡原有 DHCP 或静态配置。\n\n会改变网络配置，可能短暂断网，需要管理员权限并弹出 UAC。继续吗？"
-            : "把本机准备成「" + action.Describe() + "」——" + action.Address() + "：\n\n" +
-              "给上网网卡增加 192.168.1.x 地址、网络配置文件设为「专用」、放行 UDP 45872 与 TCP 45873。\n\n" +
-              "会改变网络配置，可能短暂断网，需要管理员权限并弹出 UAC。完成后可按原流程撤销。继续吗？";
-        if (MessageBox.Show(this, question, undo ? "撤销 lab 网络设置" : action.Describe(),
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
-        {
-            _processLog.WriteLine("[UI] 用户取消 lab 确认；未启动配置动作。");
-            return;
-        }
-        StartBusy(async () =>
-        {
-            AcceptanceRun run = BeginRun(action.Verb());
-            ShowBanner("正在执行已确认的 lab 动作；若弹出 UAC 请核对。期间不允许关窗或中途取消提升动作。",
-                Brushes.Cornsilk, Brushes.DarkOrange);
-            try
-            {
-                AcceptanceOutcome outcome = await Task.Run(() => LabSetupRole.PrepareAsync(run, action, CancellationToken.None));
-                ShowResult(run.Settle(outcome), "请核对 [LAB] 日志及实际网络状态；未完成交接不表示配置未改变。");
-            }
-            catch (Exception)
-            {
-                ReportFault(run, "MainWindow 准备 lab");
-                ShowResult(run.Settle(run.Complete(AcceptanceOutcome.HarnessError, "lab 调用异常；不能断言提升实例已经结束。")),
-                    "请核对实际网络状态，不要把异常视为未做任何更改。");
-            }
-            if (!_faulted) { await RunSelfCheckAsync(); }
-        });
     }
 
     private void HostButton_Click(object sender, RoutedEventArgs e)
@@ -542,7 +500,7 @@ public partial class MainWindow : Window
             e.Cancel = true;
             HideHostKey();
             PeerKeyBox.Clear();
-            ShowBanner("自检或 lab 动作尚未收尾，已阻止关窗；不会中途终止提升动作，请结束后再关闭。", Brushes.Cornsilk, Brushes.DarkOrange);
+            ShowBanner("只读检查尚未收尾，已阻止关窗；请检查结束后再关闭。", Brushes.Cornsilk, Brushes.DarkOrange);
             return;
         }
         if (_runTask is not null || _keyTask is not null || _activeRun is not null)

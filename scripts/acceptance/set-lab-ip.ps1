@@ -77,6 +77,10 @@ param(
     [switch]$Undo
 )
 
+# DISABLED 2026-09-24: historical implementation below is not an executable workflow.
+# Refuse before privilege checks, state reads/writes, or any network command.
+throw 'Network configuration and automatic undo are disabled. Use the current read-only acceptance application. Do not change the existing network for LanRemote.'
+
 $ErrorActionPreference = 'Stop'
 
 $stateFile = Join-Path $env:TEMP 'lanremote-lab-ip-state.json'

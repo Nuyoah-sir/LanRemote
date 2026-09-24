@@ -23,8 +23,7 @@ WHY THIS IS A SEPARATE SCRIPT FROM make-package.py
     that actually exercises TLS + pinning + channel_hello.
 
 The zip contains the published self-contained output plus:
-    START-HERE.md       - the M3 two-machine acceptance manual (Chinese)
-    set-lab-ip.ps1      - put both machines on a private 192.168.1.0/24 lab net
+    START-HERE.*        - 所选里程碑的两机验收手册；不附带改网脚本。
 
 THE ENTRY POINT IS AN EXE, NOT A SCRIPT
     LanRemote.Acceptance is a WinExe + WPF app: double-clicking
@@ -43,24 +42,20 @@ THE ENTRY POINT IS AN EXE, NOT A SCRIPT
     Lesson: don't ship a console tool for a step the project intends to be
     driven from a window.
 
-set-lab-ip.ps1 stays a script on purpose: it needs elevation and it touches the
-machine's network configuration, which must never happen silently.
+set-lab-ip.ps1 仅保留为仓库历史材料，不得随新包交付。
+验收器只读检查现有网络，管理员权限或 UAC 确认不豁免不改网约束。
 """
 
 import argparse
 import os
 import re
-import shutil
 import subprocess
+import tempfile
 import zipfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROJECT = os.path.join(REPO_ROOT, "tools", "LanRemote.Acceptance", "LanRemote.Acceptance.csproj")
-PUBLISH_DIR = os.path.join(REPO_ROOT, "artifacts", "m3-acceptance")
-SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "acceptance")
-DOC_SOURCE = os.path.join(REPO_ROOT, "docs", "M3_TWO_MACHINE_ACCEPTANCE.md")
-
-HELPERS = ("set-lab-ip.ps1",)
+EXCLUDED_SCRIPT_EXTENSIONS = frozenset({".ps1", ".cmd", ".bat"})
 
 
 def read_version() -> str:
@@ -82,17 +77,10 @@ def find_dotnet() -> str:
     return os.path.join(os.path.expanduser("~"), ".dotnet", "dotnet.exe")
 
 
-def publish() -> None:
+def publish(publish_dir: str) -> None:
     dotnet = find_dotnet()
     if not os.path.isfile(dotnet):
         raise SystemExit(f"dotnet.exe not found (looked at {dotnet}); source scripts/env.sh first")
-
-    # Published output is overwritten in place by default. Wiping the directory
-    # first deletes 200+ files in one go, which trips bulk-delete safety prompts,
-    # and nothing needs it: `dotnet publish -o` overwrites every file it emits.
-    # Set LANREMOTE_M3_CLEAN=1 only when you want a from-scratch directory.
-    if os.environ.get("LANREMOTE_M3_CLEAN") == "1" and os.path.isdir(PUBLISH_DIR):
-        shutil.rmtree(PUBLISH_DIR)
 
     print(f"publishing   : {os.path.relpath(PROJECT, REPO_ROOT)}")
     subprocess.run(
@@ -103,7 +91,7 @@ def publish() -> None:
             "-c", "Release",
             "-r", "win-x64",
             "--self-contained", "true",
-            "-o", PUBLISH_DIR,
+            "-o", publish_dir,
         ],
         check=True,
         cwd=REPO_ROOT,
@@ -111,74 +99,58 @@ def publish() -> None:
 
 
 def main() -> None:
-    global PUBLISH_DIR, DOC_SOURCE
     parser = argparse.ArgumentParser(description="Build the self-contained WPF acceptance package.")
     parser.add_argument("--milestone", choices=("m4",), default="m4")
     parser.add_argument("--manual", help="Explicit acceptance manual for the selected milestone")
     parser.add_argument("--output-dir", default=REPO_ROOT)
     args = parser.parse_args()
-    if args.milestone == "m4" and not args.manual:
+    if not args.manual:
         parser.error("m4 requires --manual; never ship the historical M3 EOF criteria as M4 instructions")
-    if args.milestone == "m4" and os.environ.get("LANREMOTE_M3_SKIP_PUBLISH") == "1":
-        parser.error("m4 must publish fresh binaries; skipping publish is only for historical M3 repacking")
-    if args.milestone != "m3":
-        PUBLISH_DIR = os.path.join(REPO_ROOT, "artifacts", args.milestone + "-acceptance")
-    if args.manual:
-        DOC_SOURCE = os.path.abspath(args.manual)
+    if os.environ.get("LANREMOTE_M3_SKIP_PUBLISH") == "1":
+        parser.error("m4 must publish fresh binaries; skipping publish is not supported")
+    doc_source = os.path.abspath(args.manual)
     output_dir = os.path.abspath(args.output_dir)
     if not os.path.isdir(output_dir):
         parser.error("output directory must already exist")
-    if not os.path.isfile(DOC_SOURCE):
+    if not os.path.isfile(doc_source):
         parser.error("acceptance manual not found")
+    manual_extension = os.path.splitext(doc_source)[1]
+    if manual_extension.casefold() in EXCLUDED_SCRIPT_EXTENSIONS:
+        parser.error("acceptance manual must not be a script")
+    manual_name = "START-HERE" + manual_extension
     version = read_version()
 
-    if os.environ.get("LANREMOTE_M3_SKIP_PUBLISH") != "1":
-        publish()
-
-    if not os.path.isdir(PUBLISH_DIR):
-        raise SystemExit(f"publish output not found: {PUBLISH_DIR}")
-
-    if not os.path.isfile(DOC_SOURCE):
-        raise SystemExit(f"manual not found: {DOC_SOURCE}")
-
-    manual_name = "START-HERE" + os.path.splitext(DOC_SOURCE)[1]
-    shutil.copyfile(DOC_SOURCE, os.path.join(PUBLISH_DIR, manual_name))
-    for name in HELPERS:
-        source = os.path.join(SCRIPTS_DIR, name)
-        if not os.path.isfile(source):
-            raise SystemExit(f"helper script not found: {source}")
-        shutil.copyfile(source, os.path.join(PUBLISH_DIR, name))
-
-    # PowerShell 5.1 decodes .ps1 as ANSI unless a BOM says otherwise, which
-    # garbles every Chinese character in the console output.
-    # (No .cmd ships any more - and if one ever does, it must stay pure ASCII:
-    # cmd.exe decodes it with the console code page.)
-    for name in HELPERS:
-        if not name.lower().endswith(".ps1"):
-            continue
-        target = os.path.join(PUBLISH_DIR, name)
-        with open(target, "rb") as handle:
-            raw = handle.read()
-        if not raw.startswith(b"\xef\xbb\xbf"):
-            with open(target, "wb") as handle:
-                handle.write(b"\xef\xbb\xbf" + raw)
+    # 每次发布到独立新目录；不复用或删除任何旧发布产物，失败目录也保留。
+    artifacts_dir = os.path.join(REPO_ROOT, "artifacts")
+    os.makedirs(artifacts_dir, exist_ok=True)
+    publish_dir = tempfile.mkdtemp(prefix=args.milestone + "-acceptance-", dir=artifacts_dir)
+    publish(publish_dir)
 
     zip_path = os.path.join(output_dir, f"LanRemote-{version}-{args.milestone}-acceptance-win-x64.zip")
 
     file_count = 0
     total_bytes = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for root, _dirs, files in os.walk(PUBLISH_DIR):
+        for root, _dirs, files in os.walk(publish_dir):
             for file_name in sorted(files):
+                # 防御性过滤所有层级、大小写的脚本与旧手册，包括嵌套同名手册。
+                name = file_name.casefold()
+                if (os.path.splitext(name)[1] in EXCLUDED_SCRIPT_EXTENSIONS
+                        or name == "start-here" or name.startswith("start-here.")):
+                    continue
                 full_path = os.path.join(root, file_name)
-                rel_path = os.path.relpath(full_path, PUBLISH_DIR)
+                rel_path = os.path.relpath(full_path, publish_dir)
                 archive.write(full_path, rel_path)
                 file_count += 1
                 total_bytes += os.path.getsize(full_path)
+        # 只从明确选择的源路径装入一份手册，不以文件名放行发布目录中的任何副本。
+        archive.write(doc_source, manual_name)
+        file_count += 1
+        total_bytes += os.path.getsize(doc_source)
 
     packed = os.path.getsize(zip_path)
     print(f"version      : {version}")
-    print(f"source dir   : {PUBLISH_DIR}")
+    print(f"source dir   : {publish_dir}")
     print(f"files packed : {file_count}")
     print(f"raw size     : {total_bytes / 1024 / 1024:.1f} MiB")
     print(f"zip size     : {packed / 1024 / 1024:.1f} MiB")

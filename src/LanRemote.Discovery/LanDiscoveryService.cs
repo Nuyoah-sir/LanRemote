@@ -138,7 +138,7 @@ public sealed class LanDiscoveryService : IDiscoveryService
                 // 没有合格网卡时不开 socket：既拿不到可信来源，也不该白占端口。
                 if (bindings.Count > 0)
                 {
-                    CreateReceiver(bindings);
+                    _receiver = CreateReceiver(bindings, _multicastAddress, DiscoveryConstants.Port, _logger);
                     CreateSenders(bindings);
                 }
             }
@@ -650,7 +650,11 @@ public sealed class LanDiscoveryService : IDiscoveryService
         }
     }
 
-    private void CreateReceiver(IReadOnlyList<NetworkBinding> bindings)
+    internal static Socket CreateReceiver(
+        IReadOnlyList<NetworkBinding> bindings,
+        IPAddress multicastAddress,
+        int port,
+        ILogger logger)
     {
         Socket receiver = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
@@ -660,17 +664,31 @@ public sealed class LanDiscoveryService : IDiscoveryService
             receiver.ExclusiveAddressUse = false;
             receiver.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
-            receiver.Bind(new IPEndPoint(IPAddress.Any, DiscoveryConstants.Port));
+            receiver.Bind(new IPEndPoint(IPAddress.Any, port));
 
-            foreach (NetworkBinding binding in bindings)
+            MulticastMembership.JoinUniqueInterfaces(bindings, binding =>
             {
-                receiver.SetSocketOption(
-                    SocketOptionLevel.IP,
-                    SocketOptionName.AddMembership,
-                    new MulticastOption(_multicastAddress, binding.Address));
-            }
+                try
+                {
+                    receiver.SetSocketOption(
+                        SocketOptionLevel.IP,
+                        SocketOptionName.AddMembership,
+                        new MulticastOption(multicastAddress, binding.Address));
+                    logger.LogInformation(
+                        "发现组播加入成功：ifIndex={InterfaceIndex}, address={Address}, group={Group}。",
+                        binding.InterfaceIndex, binding.Address, multicastAddress);
+                }
+                catch (SocketException ex)
+                {
+                    logger.LogError(ex,
+                        "发现组播加入失败：ifIndex={InterfaceIndex}, address={Address}, group={Group}, socketError={SocketError}, nativeError={NativeError}；启动回滚，不修改网络配置。",
+                        binding.InterfaceIndex, binding.Address, multicastAddress,
+                        ex.SocketErrorCode, ex.NativeErrorCode);
+                    throw;
+                }
+            });
 
-            _receiver = receiver;
+            return receiver;
         }
         catch
         {
