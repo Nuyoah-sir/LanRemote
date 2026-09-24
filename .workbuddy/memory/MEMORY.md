@@ -7,9 +7,9 @@
 
 ## 当前续作点（2026-09-24，优先于下方历史记录）
 
-热点事故已代码修复：主提交bc8cf48，最后代码72bfb93（拒绝输出UTF-8）。WFD仅Wireless80211+正index+系统精确描述豁免virtual，其它VPN词仍拒；membership按一致index/Id一次加入，地址绑定保留。GUI/CLI/elevated/Undo旧改网链移除，仓库旧PS参数后throw。A真实if13热点137.1入选、组播/TCP45873启动成功并自然收尾；无对端=UNMET，不是认证PASS。未改网络、未证B恢复/双方互联网连续可用，不默认Undo。下一关=新版GUI/两机认证，不进M5。
+热点修复bc8cf48/72bfb93已真机推进：A c96401d1/B b5b519b8在137.1/137.141同/24互相发现并TLS成功；success双方审批60秒超时，未认证。两超时负例按端口配对，pin缺本地端口仅顺序关联。清理干净≠通过，不能推断未点击或双方互联网正常。旧改网/Undo入口停用，WFD窄例外及按接口membership保留。最新67c7d7e修审批区固定/有请求误显无待批/失败点击与ID关联日志/跨run清理；无自动选择或批准、不改时限网络。用户本次明确授权关闭本机SAC后旧包GUI已启动，绝不写成产品功能。
 
-最终Debug/Release各1305 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance179），0警告错误失败跳过；Python10 PASS；网络三变异7/11/2红→绿并字节恢复，真实重复加组仅回环复现不等于B双地址现场。新包264项/57.5MiB，独立fresh publish，无脚本/旧手册，唯一现网说明；SHA及证据见HANDOFF §18.13。认证阶段5历史6c7a15b/7a9d199及1190、8变异见§18.11。产品尚不能看屏/键鼠。
+最终Debug/Release各1329 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance203），0警告错误失败跳过；新增24真STA/WPF测试及1计数变异红→绿。测试不Show/不触用户日志，App.xaml同源样式离屏800x640不是真屏DPI；内联绑定检查Run.Text。新包outputs/m4-approval-ui：264项/57.5MiB，fresh publish无脚本、唯一说明，SHA及边界见HANDOFF§18.14。旧1305/Python10/网络3变异见§18.13。下一关=用户换包手选核短码及时批准、Host180秒自然结算与双端日志；M4未完、不进M5，产品无看屏/键鼠。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 

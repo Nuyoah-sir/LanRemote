@@ -1,18 +1,19 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-24（现网修复已实现并验证；当前交付及人工关口见 §18.13）**
+> 更新时间：**2026-09-24（现网双机已通至审批；审批界面修正版及重验关口见 §18.14）**
 >
-> **优先停点：暂停旧候选包重试及“准备 A/B”流程。用户报告 A 准备后 B 热点上网中断；B 发现层 AddMembership 抛 10022。未进入认证，M4 未通过。**
+> **优先停点：不使用旧“准备 A/B”流程。最新 A c96401d1 / B b5b519b8 已完成发现、TLS并进入本机审批，但 success 因60秒审批超时失败；M4未通过。不能把这轮再记成组播启动受阻，也不能推断用户没有点击审批。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。两机重验前确认原有联网正常。**
 >
 > **当前状态：双端认证、非秘密 pending 通知、有界本机审批、密钥界面与真实会话证据已接通。**
-> 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复主实现 `bc8cf48`。当前 Debug / Release 全量各 **1305 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**；最终代码与证据对应见 §1 / §18.13。
+> 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复主实现 `bc8cf48`，审批界面修正 `67c7d7e`。当前 Debug / Release 全量各 **1329 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**；代码与证据对应见 §1 / §18.14。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
-> **2026-09-24 两台用户日志已记录 GUI 渲染；完整布局/DPI/密钥/审批未验，真实两机认证被发现层故障阻断。因此 M4 整体仍进行中。**
+> **2026-09-24 最新两端GUI渲染日志均为1000×940，TLS及两个前缀超时专项已双端对齐；成功认证、完整布局/DPI/审批交互及双方持续联网尚待重验。M4整体仍进行中。**
 > 用户已授权自主推进，不再等待外部模型，不重问已采用的最小密钥交付/短码方案。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：修复版 GUI / 热点两机认证及双方联网不受影响的人工验收；不能先推进 M5。** A侧现有热点识别、组播加入及TCP监听已实际运行成功（无对端为UNMET，不是认证PASS）。§18.12为事故记录，修复交付见§18.13。
+> **下一关：用§18.14审批界面新包重验，B手选请求、核对短码并及时批准，等180秒自然结算；不能先推进M5。** 本轮未绕过审批、未改60秒期限或网络。§18.12为事故记录，§18.13为前一现网包，最新包在outputs/m4-approval-ui。
+> **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
 > 上轮（**M4 · 阶段 3「服务端认证状态机」**）**动了代码**：
@@ -33,12 +34,12 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0–4 实现完成；阶段 5 认证验收器接线、自动化测试及变异完成（2026-09-23）。** 步骤 19 固定文案已接入验收器错误显示路径；2026-09-24 用户两端已运行GUI但发现层故障阻断认证，不宣称完整 M4 DoD 通过。
-- **下一步：使用§18.13修复包完成GUI/两机认证与持续联网验收，旧包停用。** WFD识别、按接口组播加入和改网入口停用已完成；不改 DHCP/IP/路由/DNS/热点/网络类别/防火墙凑验收。既有网络恢复须另行核实和授权，不执行旧Undo。
+- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0–4 实现完成；阶段 5 认证验收器接线、自动化测试及变异完成（2026-09-23）。** 步骤19固定文案已接入验收器错误显示路径；2026-09-24最新两端已运行GUI并越过发现/TLS，success审批超时。审批界面修正后仍待真实两机重验，不宣称完整M4 DoD通过。
+- **下一步：使用§18.14审批界面包完成GUI/两机认证与持续联网验收。** 最新现场已不再被发现层阻断，当前明确停在60秒审批超时；审批区误导提示已修，仍须用户反馈实际可见/选中/点击结果。不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0–4 实现；阶段 5 自动化完成，修复版人工验收待通过）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`72bfb93`**（旧命令拒绝输出统一UTF-8）；现网修复主实现 `bc8cf48`（21 files，+1052/−1469）。认证阶段5主实现 `6c7a15b`，客户端/时限修复 `bc02a0c`。
-- **Working tree at validation：最终 Debug/Release 各1305 PASS、0警告/0错误，对应 `bc8cf48` + 随后提交为 `72bfb93` 的拒绝提示编码修正**；三项网络变异均已恢复。证据 `outputs/m4-network-fix/14..17`，Python10项回归见08；之后只记账、fresh publish和包级实跑。前轮1190及1036证据仍保留，不冒充当前版本。
+- **Last code commit：`67c7d7e`**（固定审批区、待批提示、关联日志及24项真实WPF回归）；前一拒绝提示编码 `72bfb93`、现网修复 `bc8cf48`。认证阶段5主实现 `6c7a15b`，客户端/时限修复 `bc02a0c`。
+- **Working tree at validation：最终Debug/Release各1329 PASS、0警告/0错误，对应随后提交为67c7d7e的4个源码/测试文件；审批文案变异已恢复**。证据 `outputs/m4-approval-ui/09..12`；之后仅记账及fresh publish/包级只读自检。前轮1305/Python10/三网络变异见§18.13，未冒称此次又运行Python回归。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2391,3 +2392,30 @@ transcript **绑 presentedPin** → response → success → **验证 serverProo
 **最终交付**：`outputs/m4-network-fix/LanRemote-0.1.0-m2-m4-acceptance-win-x64.zip`，264唯一扁平成员，60,242,991 bytes（约57.5MiB）；SHA256 `9d947a68cdd127dd73ca46f9cdbf6e7e9eec08a52c4493ed84bc33ee4caa434e`。CRC通过、逐文件与此次publish一致，唯一START-HERE.txt与`M4-现网验收说明.txt`相同，无脚本；EXE AMD64 GUI subsystem2，托管程序集包含完整72bfb93提交标记。发布日志18，`package-verification.json`保存检验结果。静态PE/无窗口实跑不冒称新GUI布局已人工通过。
 
 **下一关**：旧包停止使用，双方原有联网正常后换本包，各自解压新目录并双击。只读自检→Host180秒→查看/安全交付密钥→Client四场景及审批→Host自然结算→两端完整SessionId/负例四元组配对，同时记录双方使用前/中/后联网无影响。若旧配置仍造成断网，暂停并单独核实恢复，不使用旧Undo。当前软件仍未实现看屏和键鼠控制。
+
+### 18.14 双机审批超时及界面修正（2026-09-24）
+
+**现场结论**：用户粘贴A client `c96401d1`（07:32:59Z）及B host `b5b519b8`（07:32:03Z）。两端旧现网包EXE/Transport哈希相同，地址A `192.168.137.1/24`、B `192.168.137.141/24`；B if23组播加入成功并发现A，A也发现B并完成真实TLS。此次不再是AddMembership启动故障；未证明B原双地址现场的全部因果，也不能证明互联网持续正常。
+
+- success：A `client-approval-timeout`；B conn#1/session `82bce40d-1580-4b78-8865-6d1d57cb3c09`，`auth-approval-timeout`、elapsed60097.729ms、authenticated=False、observedSamples=0。无客户端成功SessionId，本条只能按同轮顺序/唯一认证尝试关联，不能伪称完整SessionId双端配对。按状态机代码，已越过clientProof检查进入本机审批，但没有serverProof成功及已认证会话证据。
+- pin-mismatch：A按pin拒绝，B conn#2的TLS13 pre-auth-eof与其相容；A未记录本地端口，只能顺序关联，非严格四元组配对。
+- timeout：A本地 `192.168.137.1:63919`→B `.141:45873`，5011ms EOF；B conn#3 peer同端口，pre-auth-timeout，5013.013ms，精确配对。
+- slow-dribble：A本地`:53730`，sent3/4、5009ms EOF；B conn#4 peer同端口，pre-auth-timeout、5007.872ms，精确配对。
+- B自然结束（非操作员中止），sessionHandled4、partitionOk=True；handler/registry/pending=0，handlerFaults0、cleanupFaultFalse、firstStopAllFinishedWithinBudgetTrue。结果A FAIL/B UNMET合理，不能改判M4通过。B的“设备离线”是发现记录过期，不证明任一端互联网断网。
+
+**明确问题与推断边界**：原审批区处于上方ScrollViewer最底部，存在不可见风险；StartRole写“无待批请求”后RefreshApprovalList未在首条入队时更新该文案，确定会产生误导。旧UI只记成功提交，没有失败点击/拉取记录；不能推断用户没点，也不能将界面问题断言为本次唯一原因。
+
+**最小修正**（代码 `67c7d7e`，4 files）：
+- 审批区移到根Grid独立行，待批数量/“先选中”提示独立于最后动作；列表限高、长名称行省略，手动选择规则保持。
+- 只对最多3条快照差集记录OBSERVED/REMOVED（含RequestId、Generation、SessionId、ConnectionId、UTC），不积累历史ID；拉取不等于实际可见，移除不推断原因。
+- 提交成功/失败均在UI更新前记submitted结果，关闭/故障或未产生Click不属完整物理点击审计。submitted=True不等于授权；无密钥/新网络动作。
+- 保留旧run快照owner，FinishRole及StopCurrentRun同步清理列表/提示并归属旧日志，避免跨轮丢失或串记。
+- 新增internal隔离日志目录构造给真实WPF测试；不触用户gui.log、身份或网络。未改Transport/协议、审批60秒、pending配额、RequestId+Generation、防御顺序，不自动选中/批准。
+
+**实测**：新增24项真实STA/WPF控件测试（含Click路由、实际Inbox决定、失败旧代、重复刷新去重、FinishRole/StopCurrentRun、同源App.xaml样式与800×640离屏布局、64中文名）。初版4个xUnit警告已修；长名称验证最初错误读取TextBlock.Text，改查真实绑定Run.Text后通过，原失败日志保留。离屏布局不等于真屏/DPI/鼠标可达验证。
+- 定向24 PASS；临时把队列计数改0，目标测试真正1 FAIL（实际有1条却显示无待批）；恢复后双配置全绿，变异测试未改。
+- Debug/Release各 **1329 PASS / 0 FAIL / 0 SKIP**：Core125、Protocol299、Integration3、Security66、Transport633、Acceptance203；构建均0警告错误。日志 `outputs/m4-approval-ui/09..12`，变异07/08。
+
+**新包**：`outputs/m4-approval-ui/LanRemote-0.1.0-m2-m4-acceptance-win-x64.zip`，264唯一扁平成员，60,244,834 bytes，SHA256 `444f207295e886ad824dc29ec346586172abd6212476e572498f836f157427c8`。与独立publish逐文件相同、CRC通过、唯一新手册、无脚本、AMD64 GUI subsystem2、程序集含67c7d7e完整提交。发布目录artifacts/m4-acceptance-r_ljlyg1；包内同源EXE只读info实跑a589d94c通过（本地限定），未替换用户安装目录、未开启新GUI或发起真实审批。包级日志14。
+
+**用户下一步**：确认双方当前联网正常；两台换新包到新目录。B开始180秒监听，安全交付密钥；A开始四场景后B在60秒内手工选中条目、核对两端短码并“批准请求权限”，等自然结束交两端日志。若仍超时需反馈条目出现/选择/按钮可用/点击后提示，并避开密钥截图。不为过测试延长期限或改网络；成功认证、降权/拒绝与完整GUI人工验收仍未完成。
