@@ -1,13 +1,15 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR 工作副本 `docs/DECISIONS.md`（010~044；042=接受截止，043=客户端所有权，044=非秘密通知/审批/验收生命周期）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
+> ADR 工作副本 `docs/DECISIONS.md`（010~045；045=现网只读/WFD/组播去重，覆盖旧改IP计划）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
 > 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；2026-09-22 本次续作后约9.6k字符，接近上限，后续追加先控长度。
 > 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
-## 当前续作点（2026-09-23，优先于下方历史记录）
+## 当前续作点（2026-09-24，优先于下方历史记录）
 
-阶段5主实现 `6c7a15b`；最后代码/测试提交 `7a9d199`（8处xUnit2031等价改写）。最终Debug/Release各1190 PASS（Transport633、Acceptance140、其他417），0警告/错误/失败/跳过。阶段5新增8项运行期变异kill并恢复（7项直接断言，M02异常在清理时重抛遮蔽诊断；M03/M05复合）。HANDOFF §18.11为准；M4仍缺人工GUI/DPI和真实两机认证，产品还不能看屏/键鼠。候选包265项、57.5MiB、GUI exe自包含，最终SHA见HANDOFF。
+热点事故已代码修复：主提交bc8cf48，最后代码72bfb93（拒绝输出UTF-8）。WFD仅Wireless80211+正index+系统精确描述豁免virtual，其它VPN词仍拒；membership按一致index/Id一次加入，地址绑定保留。GUI/CLI/elevated/Undo旧改网链移除，仓库旧PS参数后throw。A真实if13热点137.1入选、组播/TCP45873启动成功并自然收尾；无对端=UNMET，不是认证PASS。未改网络、未证B恢复/双方互联网连续可用，不默认Undo。下一关=新版GUI/两机认证，不进M5。
+
+最终Debug/Release各1305 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance179），0警告错误失败跳过；Python10 PASS；网络三变异7/11/2红→绿并字节恢复，真实重复加组仅回环复现不等于B双地址现场。新包264项/57.5MiB，独立fresh publish，无脚本/旧手册，唯一现网说明；SHA及证据见HANDOFF §18.13。认证阶段5历史6c7a15b/7a9d199及1190、8变异见§18.11。产品尚不能看屏/键鼠。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
@@ -32,7 +34,7 @@ Windows 局域网屏幕共享/远程控制（自用）。无账号/云/穿透/UP
 每里程碑 = build + test + 更新 HANDOFF（记 `Last code commit` + `Working tree at validation`，**不写 HEAD hash**）。
 外部模型只做设计红队评审（prompt 在 `docs/`）；Windows/.NET 行为一律本机实测；模型结论不直写 HANDOFF。
 **交付必须双击即 GUI**（WinExe/WPF），绝不「控制台 exe + 脚本」（用户连纠三次）。
-不许静默改网络/防火墙（两次断网事故）；「一键」= 入口无感 + 触发显式 + UAC。
+**2026-09-24用户重申原始需求**：同局域网中安装并运行软件的机器应自动发现；软件适应现网，只读网卡/地址并使用标准通信，不重配系统网络。A/B仅角色，不代表固定IP/实验网段；不改DHCP/静态IP/网关/DNS/路由/热点/ICS/网络类别，不自动动防火墙。发现失败应修识别/通信代码或如实诊断，不能要求用户改网配合。软件/验收均不能导致任何一端断网，短暂也不接受，UAC/可撤销不是豁免。旧lab准备停用；恢复旧改动须核对状态并单独获准，不能默认Undo。
 
 ## 命令 / 打包
 
@@ -41,9 +43,9 @@ source scripts/env.sh   # dotnet 在 ~/.dotnet，不在 PATH
 dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-build
 ```
 
-出包沿用 `scripts/acceptance/make-m3-package.py` 文件名，当前仅M4：`--milestone m4 --manual <M4说明.txt> --output-dir <已有目录>`；禁止SKIP_PUBLISH，不可用旧M3手册。**别用 `LANREMOTE_M3_CLEAN=1`**（safe-delete hook拦脚本内rmtree）。
-`.ps1` 必须 UTF-8 **with BOM**；`.cmd` 纯 ASCII 无 BOM（中文注释也会解析错）。
-M4包形态：265 files / raw 132.5 MiB / zip 57.5 MiB，zip内全扁平，程序集含代码提交。
+出包沿用 `scripts/acceptance/make-m3-package.py`，仅M4：`--manual outputs/m4-network-fix/M4-现网验收说明.txt --output-dir <已有目录>`；禁止SKIP，每次独立artifacts/m4-acceptance-*，不删除旧目录，CLEAN已移除。旧make-package.py拒绝。
+`.ps1` 必须 UTF-8 **with BOM**；`.cmd` 纯ASCII。新包不交付这些脚本。
+M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代码提交。
 
 ## 里程碑（2026-09-21）
 
@@ -53,7 +55,7 @@ M4包形态：265 files / raw 132.5 MiB / zip 57.5 MiB，zip内全扁平，程�
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
-| **M4** | **进行中：阶段 0、1、2、3 完成（2026-09-22）**——阶段 0：盘点定案 → ADR-037（衔接层）+ ADR-038（认证协议）+ ADR-027 落地（609 PASS）；阶段 1：双档 transcript + HMAC proof 纯函数核心 + 独立 Python 黄金向量脚本入库 + `docs/PROTOCOL_AND_SECURITY.md` §9 本地修订 1（643 PASS）；阶段 2（**`21a8829`**）：**5 个认证帧 + canonical base64/HEX/GUID + 严格 JSON 解析**（ADR-040；Transport 226→460，**877 PASS**；变异 ×4，M3 抓到一条假测试并修复）；阶段 3（**`760e950`**）：**服务端认证状态机 + 衔接层落地**——7 产品文件（`ControlPreAuthHandoff` exactly-once / `ConnectionSecurityContext` 冻结 / `ControlAuthSession` 八段主干 / `FailedAuthLimiter` / `ILocalApprovalGate` 5 值终态 / `SessionRegistry` / `ControlAuthContext` 旋钮）+ 25 新测试（真实回环 TLS + 真实 TransportHost 全链；Transport 460→485，**902 PASS**；ADR-041）。阶段3修复+阶段4 `bc02a0c`，1036 PASS；阶段5接线 `6c7a15b`+测试修正`7a9d199`，双配置1190 PASS。下一站=人工GUI/两机验收，M4未整体完成。见HANDOFF §18.11 |
+| **M4** | 阶段0–4实现与阶段5接线/自动化完成：609→643→877→902→1036→1190 PASS。阶段4 `bc02a0c`，阶段5 `6c7a15b` + 测试修正 `7a9d199`。2026-09-24热点真机验收受阻，旧包暂停重试，M4未整体完成；见HANDOFF §18.12。 |
 | M5~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**；M4 阶段 3 = **`760e950`**。
@@ -76,7 +78,7 @@ M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`
 ## M3 速查（细节在 HANDOFF.md）
 
 accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 4 KiB；M3 终态 = hello 后干净关闭（**M4 已定案改为显式交接** `ControlPreAuthHandoff` → `ControlAuthSession`，ADR-037；落地在阶段 3）。五段绝对 deadline 只验了「执行得准」（误差 0–36 ms）；**第二轮评审已回收**（两处缺陷级：外层信封缺失 / transcript 拆分；数值待本机实验后定案，M3.1 先补信封）。`TransportHost` 零 logger（同子网/准入/TLS 拒绝全静默 → ADR-024/M9）。
-验收器：双击=WPF 窗口，`--headless client|host|info|prepare-lab`；退出码 0/1/2/3/4=预期内/真失败/前置不满足/工具错/无效运行；`Combine` 优先级 `InvalidRun>HarnessError>Fail>PreconditionUnmet>Pass`；四场景 `success`→`pin-mismatch`→`timeout`→`slow-dribble`（判据 `sent=3/4`）；两机配对用 4 元组（聚合计数不算证明）；控制端只给 `PENDING-HOST-EVIDENCE`；`gui.log` 只记进程级事实、每轮证据在 per-run 文件；别拿 `LanRemote.App` 验传输层（零调用）。**被控端「停止监听」收尾 → 结局字段必为 `INVALID_RUN`（设计：按停=机械作废，防「按停伪造通过」），判定看逐条证据；`--headless host --seconds N` 定时轮不走该路径（实测 PASS）。**
+验收器：双击=WPF 窗口，`--headless client|host|info`（旧prepare/lab/Undo全拒绝）；退出码 0/1/2/3/4=预期内/真失败/前置不满足/工具错/无效运行；`Combine` 优先级 `InvalidRun>HarnessError>Fail>PreconditionUnmet>Pass`；四场景 `success`→`pin-mismatch`→`timeout`→`slow-dribble`（判据 `sent=3/4`）；两机配对用 4 元组（聚合计数不算证明）；控制端只给 `PENDING-HOST-EVIDENCE`；`gui.log` 只记进程级事实、每轮证据在 per-run 文件；别拿 `LanRemote.App` 验传输层（零调用）。**被控端「停止监听」收尾 → 结局字段必为 `INVALID_RUN`（设计：按停=机械作废，防「按停伪造通过」），判定看逐条证据；`--headless host --seconds N` 定时轮不走该路径（实测 PASS）。**
 
 ## 测试/验收写法硬约束（踩过的坑）
 
@@ -95,13 +97,13 @@ accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 
 
 ## 网络 / lab
 
-- 本机唯一活跃网卡 = 以太网 `172.100.166.220/24`（Dhcp，非 RFC1918）→ 本机跑不通发现（正确行为）
+- 当前A热点if13=`192.168.137.1/24`、Wi-Fi Direct Virtual Adapter #2；上游以太网if6=`172.100.166.220/24` DHCP且非RFC1918。旧“唯一活跃公网网卡”已过时。
 - A = DESKTOP-D132BMD `M5WC-14GX`（lab `192.168.1.10`）；B = DESKTOP-CU2263D `3ERD-R74V`（lab `192.168.1.20`）；**两机验收已跑完；lab 已两机撤销还原**（2026-09-21：B 11:13Z 窗口按钮 / A 19:21 管理员直跑 `--headless lab-undo` runId `037fd836`），两机 `info` 均 `qualifiedNic=(无)`
-- `set-lab-ip.ps1 -Role A|B`：整口切静态+追加 lab 地址+Private+**UDP 45872 与 TCP 45873 两条入站规则**；幂等分支也补规则；`-Undo` 一并清（**类别有记录才还原**，无记录保持不动=兜底）；脚本 v3 修过两坑（毒化 state 检测——A 机 state 曾被旧版毒化、注释 "Measured on machine A" 即本机；类别还原）。**验收物料不进产品**，验收器「一键准备」调的就是它；M3 期间「不要真跑 `-Undo`」红线 **2026-09-21 撤销收尾后作废**
+- 旧set-lab-ip.ps1仅保留历史正文，当前入口无条件throw；不会随包交付，严禁按旧记录执行准备/Undo。2026-09-21还原仅是历史，不能当作9月24日事故后的恢复证明。
 
 ## 产品形态（ADR-024/025/026/035/036，规则已定未编码）
 
-网络诊断进 UI（M9）；防火墙一键（M10，只放行 LocalSubnet）；私有地址一键（不早于 M10）；提权模型 ADR-035；网络类别永不自动改（ADR-036）。
+ADR-045优先：只读网络诊断保留；旧ADR-026产品改IP计划取消，025/035网络修改默认落地停止；主进程不提权。不得按旧M10安排重加改网功能。
 已实测（M10 别重跑）：绑路径防火墙规则目录移动后**静默悬挂**（读回 Program 检测）；`Set-NetFirewallRule -Program` 可改且**原地修复保 InstanceID**；`LocalSubnet4` 可写可读。
 **M3 不插队做 024/025/026**，等对应里程碑指令。
 
