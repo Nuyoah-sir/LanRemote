@@ -18,6 +18,7 @@ public partial class MainWindow
     private bool _keyRequestValid;
     private bool _keyConfirming;
     private IReadOnlyList<LocalApprovalSnapshot> _displayedApprovals = Array.Empty<LocalApprovalSnapshot>();
+    private RunState? _displayedApprovalOwner;
 
     private bool CanViewHostKey() => !_closing && !_faulted && _activeRun is { IsHost: true } state
         && _runTask is { IsCompleted: false } && state.GetHostContext() is not null;
@@ -159,30 +160,54 @@ public partial class MainWindow
 
     private void RefreshApprovalList()
     {
-        IReadOnlyList<LocalApprovalSnapshot> current = _activeRun is { IsHost: true, IsStopped: false } state
+        RunState? state = _activeRun;
+        IReadOnlyList<LocalApprovalSnapshot> current = state is { IsHost: true, IsStopped: false }
             ? state.Inbox!.GetSnapshot()
             : Array.Empty<LocalApprovalSnapshot>();
         if (!_displayedApprovals.Select(item => (item.RequestId, item.Generation))
                 .SequenceEqual(current.Select(item => (item.RequestId, item.Generation))))
         {
+            // 只记有限快照的差集；不积累历史ID、不按100ms重复写日志。
+            foreach (LocalApprovalSnapshot added in current.Where(item => !_displayedApprovals.Any(old =>
+                         old.RequestId == item.RequestId && old.Generation == item.Generation)))
+            {
+                state!.Run.Log.WriteLine($"[UI][APPROVAL-OBSERVED] utc={DateTimeOffset.UtcNow:O} requestId={added.RequestId} generation={added.Generation} sessionId={added.Request.SessionId} connectionId={added.Request.ConnectionId} expiresUtc={added.Request.ExpiresAt.ToUniversalTime():O} // UI 已拉取待批快照，不证明操作者已看到或控件实际可见。");
+            }
+            foreach (LocalApprovalSnapshot removed in _displayedApprovals.Where(item => !current.Any(now =>
+                         now.RequestId == item.RequestId && now.Generation == item.Generation)))
+            {
+                _displayedApprovalOwner?.Run.Log.WriteLine($"[UI][APPROVAL-REMOVED] utc={DateTimeOffset.UtcNow:O} requestId={removed.RequestId} generation={removed.Generation} sessionId={removed.Request.SessionId} connectionId={removed.Request.ConnectionId} // 已离开待批快照，原因须核对状态机终态。");
+            }
             LocalApprovalSnapshot? selected = ApprovalList.SelectedItem as LocalApprovalSnapshot;
             _displayedApprovals = current;
+            _displayedApprovalOwner = current.Count > 0 ? state : null;
             ApprovalList.ItemsSource = current;
             if (selected is not null)
             {
                 ApprovalList.SelectedItem = current.FirstOrDefault(item => item.RequestId == selected.RequestId
                     && item.Generation == selected.Generation);
-                if (ApprovalList.SelectedItem is null)
-                {
-                    ApprovalStatusText.Text = "所选请求已失效或离开待批队列；不能再提交。";
-                }
             }
             // 不自动选中下一条，避免旧请求消失后把一次点击交给新请求。
         }
+        UpdateApprovalQueueText();
         UpdateApprovalButtons();
     }
 
-    private void ApprovalList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateApprovalButtons();
+    private void UpdateApprovalQueueText()
+    {
+        int count = _displayedApprovals.Count;
+        ApprovalQueueText.Text = count == 0
+            ? "无待批请求。新请求到达后会在此列出，不会自动批准。"
+            : $"待审批 {count} 条：" + (ApprovalList.SelectedItem is null
+                ? "请先选中请求，核对短码后再点击批准、降为仅观看或拒绝。"
+                : "已选中请求，请核对来源与短码后作出决定；等待本身不会批准。");
+    }
+
+    private void ApprovalList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateApprovalQueueText();
+        UpdateApprovalButtons();
+    }
 
     private void UpdateApprovalButtons()
     {
@@ -209,15 +234,13 @@ public partial class MainWindow
             : null;
         bool submitted = selected is not null && state is { IsHost: true, IsStopped: false }
             && state.Inbox!.TrySubmit(selected.RequestId, selected.Generation, outcome, grant);
+        // 先记录实际收件箱提交结果，再更新UI；记录失败点击，且不把决定提交当作认证。
+        (state?.Run.Log ?? _processLog).WriteLine($"[UI][APPROVAL] utc={DateTimeOffset.UtcNow:O} requestId={selected?.RequestId.ToString() ?? "-"} generation={selected?.Generation.ToString() ?? "-"} sessionId={selected?.Request.SessionId.ToString() ?? "-"} connectionId={selected?.Request.ConnectionId.ToString() ?? "-"} submitted={submitted} decision={outcome} grant={grant?.ToString() ?? "-"} // 仅记录收件箱提交结果，不代表授权。");
         ApprovalList.SelectedItem = null;
         RefreshApprovalList();
         ApprovalStatusText.Text = submitted
             ? "决定已提交，不等于已授权；期限、断连及最终授权由 Transport 继续复核，请看最终日志。"
-            : "请求已失效，决定未提交；请重新核对待批列表。";
-        if (submitted)
-        {
-            state!.Run.Log.WriteLine($"[UI][APPROVAL] requestId={selected!.RequestId} generation={selected.Generation} decision={outcome} grant={grant?.ToString() ?? "-"} // 仅提交决定，不代表授权。");
-        }
+            : "未选中有效请求或请求已失效，决定未提交；请重新核对待批列表。";
     }
 
     /// <summary>每 run 独立状态。后台回调只写有界内存；取消与清理不调 Dispatcher。</summary>

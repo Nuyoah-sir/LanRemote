@@ -19,8 +19,8 @@ public partial class MainWindow : Window
     private const int HostWindowSeconds = 180;
     private const int LogBatchSize = 200;
     private const int UiLogCharacterLimit = 160_000;
-    private readonly string _logDirectory = AcceptanceLog.DefaultDirectory;
-    private readonly AcceptanceLog _processLog = new(AcceptanceLog.DefaultDirectory, "gui.log");
+    private readonly string _logDirectory;
+    private readonly AcceptanceLog _processLog;
     private readonly List<LogCursor> _logs = new();
     private readonly DispatcherTimer _uiTimer;
     private int _nextLog;
@@ -37,8 +37,14 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private long _closeStarted;
 
-    public MainWindow()
+    public MainWindow() : this(AcceptanceLog.DefaultDirectory) { }
+
+    // 测试以独立目录承载真实WPF控件，避免覆盖正在使用的验收器日志。
+    internal MainWindow(string logDirectory)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
+        _logDirectory = logDirectory;
+        _processLog = new AcceptanceLog(logDirectory, "gui.log");
         InitializeComponent();
         _logs.Add(new LogCursor(_processLog));
         _uiTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
@@ -325,9 +331,13 @@ public partial class MainWindow : Window
         _runCts = new CancellationTokenSource();
         RunState state = new(run, _runCts, isHost);
         _activeRun = state;
+        _displayedApprovals = Array.Empty<LocalApprovalSnapshot>();
+        _displayedApprovalOwner = null;
         ApprovalList.ItemsSource = null;
+        UpdateApprovalQueueText();
+        UpdateApprovalButtons();
         ClientPendingText.Text = string.Empty;
-        ApprovalStatusText.Text = "无待批请求。已提交不等于已授权；短码仅作人工关联。";
+        ApprovalStatusText.Text = "尚未提交决定。已提交不等于已授权；短码仅作人工关联。";
         ResultBanner.Visibility = Visibility.Collapsed;
         ShowBanner(isHost
             ? "HOST —— 启动后监听 180 秒，到时正常结算；提前停止会作废本轮。"
@@ -390,7 +400,7 @@ public partial class MainWindow : Window
             finally { cts?.Dispose(); }
         }
         HideHostKey();
-        ApprovalList.ItemsSource = null;
+        RefreshApprovalList();
         ClientPendingText.Text = string.Empty;
         AcceptanceOutcome settled = state.Run.Settle(returned);
         if (settled != returned)
@@ -415,7 +425,7 @@ public partial class MainWindow : Window
         RequestRunStop(source);
         HideHostKey();
         PeerKeyBox.Clear();
-        ApprovalList.ItemsSource = null;
+        RefreshApprovalList();
         ClientPendingText.Text = string.Empty;
         ShowBanner("已停止接收审批并请求取消；本轮作废，正在等待角色与密钥任务清理。", Brushes.Cornsilk, Brushes.DarkOrange);
         UpdateButtons();

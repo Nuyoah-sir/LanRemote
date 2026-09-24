@@ -22,6 +22,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="3*" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="2*" MinHeight="140" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -119,49 +120,54 @@
                         <TextBlock x:Name="ClientPendingText" Style="{StaticResource Wrap}" Foreground="#8B4513" />
                     </StackPanel>
                 </GroupBox>
-                <GroupBox Header="被控端本机审批（只针对所选请求；无操作不会自动批准）">
-                    <StackPanel>
-                        <ListBox x:Name="ApprovalList" MaxHeight="135" SelectionChanged="ApprovalList_SelectionChanged">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Margin="0,2">
-                                        <TextBlock>
-                                            <Run Text="来源 IP：" /><Run Text="{Binding Request.RemoteAddress, Mode=OneWay}" />
-                                            <Run Text="　自称名称：" /><Run Text="{Binding Request.ClientName, Mode=OneWay}" />
-                                        </TextBlock>
-                                        <TextBlock>
-                                            <Run Text="短码（仅人工关联）：" /><Run Text="{Binding Request.ShortCode, Mode=OneWay}" />
-                                            <Run Text="　请求权限：" /><Run Text="{Binding Request.RequestedPermission, Mode=OneWay}" />
-                                        </TextBlock>
-                                        <TextBlock FontSize="11" Foreground="#666">
-                                            <Run Text="RequestId：" /><Run Text="{Binding RequestId, Mode=OneWay}" />
-                                        </TextBlock>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                        <WrapPanel Margin="0,6,0,0">
-                            <Button x:Name="ApproveButton" Content="批准请求权限" IsEnabled="False"
-                                    Click="ApproveButton_Click" Margin="0,0,8,0" />
-                            <Button x:Name="ViewOnlyButton" Content="降为仅观看" IsEnabled="False"
-                                    Click="ViewOnlyButton_Click" Margin="0,0,8,0" />
-                            <Button x:Name="RejectButton" Content="拒绝" IsEnabled="False" Click="RejectButton_Click" />
-                        </WrapPanel>
-                        <TextBlock x:Name="ApprovalStatusText" Style="{StaticResource Wrap}" Foreground="#666"
-                                   Text="名称为对端自称；已提交不等于已授权，Transport 仍需复核期限、断连与最终认证。" />
-                    </StackPanel>
-                </GroupBox>
             </StackPanel>
         </ScrollViewer>
-        <GroupBox Grid.Row="2" Header="日志（界面仅保留近期内容；复制全部会读取所有运行的完整日志）">
+        <!-- 审批不再埋在角色滚动区底部；待批列表有界，仍须明确选择再提交。 -->
+        <GroupBox Grid.Row="2" x:Name="ApprovalPanel" Margin="0,6,0,6"
+                  Header="被控端本机审批（先选中请求，再点击批准；无操作不会自动批准）">
+            <StackPanel>
+                <TextBlock x:Name="ApprovalQueueText" Style="{StaticResource Wrap}" FontWeight="SemiBold"
+                           Foreground="#8B4513" Text="无待批请求。新请求到达后会在此列出，不会自动批准。" />
+                <ListBox x:Name="ApprovalList" MaxHeight="135" HorizontalContentAlignment="Stretch"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="ApprovalList_SelectionChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="0,2">
+                                <TextBlock TextTrimming="CharacterEllipsis">
+                                    <Run Text="来源 IP：" /><Run Text="{Binding Request.RemoteAddress, Mode=OneWay}" />
+                                    <Run Text="　自称名称：" /><Run Text="{Binding Request.ClientName, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock>
+                                    <Run Text="短码（仅人工关联）：" /><Run Text="{Binding Request.ShortCode, Mode=OneWay}" />
+                                    <Run Text="　请求权限：" /><Run Text="{Binding Request.RequestedPermission, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock FontSize="11" Foreground="#666">
+                                    <Run Text="RequestId：" /><Run Text="{Binding RequestId, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <WrapPanel Margin="0,6,0,0">
+                    <Button x:Name="ApproveButton" Content="批准请求权限" IsEnabled="False"
+                            Click="ApproveButton_Click" Margin="0,0,8,0" />
+                    <Button x:Name="ViewOnlyButton" Content="降为仅观看" IsEnabled="False"
+                            Click="ViewOnlyButton_Click" Margin="0,0,8,0" />
+                    <Button x:Name="RejectButton" Content="拒绝" IsEnabled="False" Click="RejectButton_Click" />
+                </WrapPanel>
+                <TextBlock x:Name="ApprovalStatusText" Style="{StaticResource Wrap}" Foreground="#666"
+                           Text="名称为对端自称；已提交不等于已授权，Transport 仍需复核期限、断连与最终认证。" />
+            </StackPanel>
+        </GroupBox>
+        <GroupBox Grid.Row="3" Header="日志（界面仅保留近期内容；复制全部会读取所有运行的完整日志）">
             <TextBox x:Name="LogBox" Style="{StaticResource MonoText}" IsReadOnly="True" AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" />
         </GroupBox>
-        <Border Grid.Row="3" x:Name="ResultBanner" Margin="0,8,0,0" Padding="10,6" CornerRadius="4"
+        <Border Grid.Row="4" x:Name="ResultBanner" Margin="0,8,0,0" Padding="10,6" CornerRadius="4"
                 Background="#EEE" BorderBrush="#CCC" BorderThickness="1" Visibility="Collapsed">
             <TextBlock x:Name="ResultBannerText" FontSize="13" FontWeight="SemiBold" Style="{StaticResource Wrap}" />
         </Border>
-        <WrapPanel Grid.Row="4" Margin="0,8,0,0">
+        <WrapPanel Grid.Row="5" Margin="0,8,0,0">
             <Button Content="复制全部日志" Click="CopyLog_Click" Margin="0,0,8,0" />
             <Button Content="打开日志目录" Click="OpenFolder_Click" Margin="0,0,8,0" />
             <TextBlock x:Name="LogPathText" VerticalAlignment="Center" Foreground="#666" FontSize="11"
