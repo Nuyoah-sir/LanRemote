@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-24（现网双机已通至审批；审批界面修正版及重验关口见 §18.14）**
+> 更新时间：**2026-09-24（修正版真实两机认证主流程已通过；配对证据与剩余人工项见 §18.15）**
 >
-> **优先停点：不使用旧“准备 A/B”流程。最新 A c96401d1 / B b5b519b8 已完成发现、TLS并进入本机审批，但 success 因60秒审批超时失败；M4未通过。不能把这轮再记成组播启动受阻，也不能推断用户没有点击审批。**
-> **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。两机重验前确认原有联网正常。**
+> **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
+> **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
-> **当前状态：双端认证、非秘密 pending 通知、有界本机审批、密钥界面与真实会话证据已接通。**
-> 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复主实现 `bc8cf48`，审批界面修正 `67c7d7e`。当前 Debug / Release 全量各 **1329 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**；代码与证据对应见 §1 / §18.14。
+> **当前状态：修正版真实两机认证主流程已通过，完整 M4 人工清单仍未全部勾选。**
+> 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复主实现 `bc8cf48`，审批界面修正 `67c7d7e`。此前 Debug / Release 全量各 **1329 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**；代码与证据对应见 §1 / §18.14，本次仅核对用户日志与记账，未重跑构建测试。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
-> **2026-09-24 最新两端GUI渲染日志均为1000×940，TLS及两个前缀超时专项已双端对齐；成功认证、完整布局/DPI/审批交互及双方持续联网尚待重验。M4整体仍进行中。**
+> **2026-09-24 两端GUI均渲染1000×940，B审批提交成功且最终授权。未证明全部布局/DPI、密钥失焦清空、短码人工核对、降权/拒绝、真实serverProof错误显示与关窗路径；双方互联网前/中/后情况待用户确认。M4整体仍进行中。**
 > 用户已授权自主推进，不再等待外部模型，不重问已采用的最小密钥交付/短码方案。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：用§18.14审批界面新包重验，B手选请求、核对短码并及时批准，等180秒自然结算；不能先推进M5。** 本轮未绕过审批、未改60秒期限或网络。§18.12为事故记录，§18.13为前一现网包，最新包在outputs/m4-approval-ui。
+> **下一关：只补§18.15尚未覆盖的人工项，不要求无理由重跑已通过的Control主流程；不能先推进M5。** 本轮未绕过审批、未改60秒期限或网络。§18.12/13/14保留历史事故及修复证据，当前包仍为outputs/m4-approval-ui，无须因纯记账重新下载。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -34,9 +34,9 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0–4 实现完成；阶段 5 认证验收器接线、自动化测试及变异完成（2026-09-23）。** 步骤19固定文案已接入验收器错误显示路径；2026-09-24最新两端已运行GUI并越过发现/TLS，success审批超时。审批界面修正后仍待真实两机重验，不宣称完整M4 DoD通过。
-- **下一步：使用§18.14审批界面包完成GUI/两机认证与持续联网验收。** 最新现场已不再被发现层阻断，当前明确停在60秒审批超时；审批区误导提示已修，仍须用户反馈实际可见/选中/点击结果。不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo。
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0–4 实现；阶段 5 自动化完成，修复版人工验收待通过）
+- **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0–4 实现完成；阶段 5 自动化及修正版真实两机认证主流程已通过。** 2026-09-24 A `31255177` / B `d8fd8b0d`：同SessionId认证、Control授权、正采样保持与自然注销通过；三个客户端负例通过，pin的Host关联保留局限，见§18.15。不宣称完整GUI人工清单或全部M4 DoD通过。
+- **下一步：补齐已有GUI清单与双方互联网无影响的人工证据。** 60秒审批超时已解除，不重复要求已通过的主流程；降权/拒绝等分别开专项轮。仍不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo、不进入M5。
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0–4 实现；阶段 5 自动化及Control两机主流程完成，完整人工清单尚有缺项）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
 - **Last code commit：`67c7d7e`**（固定审批区、待批提示、关联日志及24项真实WPF回归）；前一拒绝提示编码 `72bfb93`、现网修复 `bc8cf48`。认证阶段5主实现 `6c7a15b`，客户端/时限修复 `bc02a0c`。
 - **Working tree at validation：最终Debug/Release各1329 PASS、0警告/0错误，对应随后提交为67c7d7e的4个源码/测试文件；审批文案变异已恢复**。证据 `outputs/m4-approval-ui/09..12`；之后仅记账及fresh publish/包级只读自检。前轮1305/Python10/三网络变异见§18.13，未冒称此次又运行Python回归。
@@ -1835,8 +1835,8 @@ modified cert fingerprint fail；modified permission fail；expired challenge fa
 
 **阶段 5 —— 收口**
 
-21. [自动化完成 / 人工未完成] 全量 `build` + `test`、真实回环 TLS 接线、8 项运行期变异及 HANDOFF 记账完成；
-    GUI 验收器仍为双击即窗口。**人工 GUI 与真实两机认证演练待执行，不以回环或发布成功代替**（§18.11）。
+21. [自动化完成 / 两机认证主流程通过 / 人工清单未全部完成] 全量 `build` + `test`、真实回环 TLS 接线、8 项运行期变异及 HANDOFF 记账完成；
+    GUI 验收器仍为双击即窗口。**修正版Control两机认证、保持与自然注销已有用户实测证据；完整GUI及双方联网人工项尚有缺项**（历史§18.11，最新§18.15）。
 
 ### 18.3 未决点（阶段 0 / 用户对齐）—— 均已关闭
 
@@ -2418,4 +2418,39 @@ transcript **绑 presentedPin** → response → success → **验证 serverProo
 
 **新包**：`outputs/m4-approval-ui/LanRemote-0.1.0-m2-m4-acceptance-win-x64.zip`，264唯一扁平成员，60,244,834 bytes，SHA256 `444f207295e886ad824dc29ec346586172abd6212476e572498f836f157427c8`。与独立publish逐文件相同、CRC通过、唯一新手册、无脚本、AMD64 GUI subsystem2、程序集含67c7d7e完整提交。发布目录artifacts/m4-acceptance-r_ljlyg1；包内同源EXE只读info实跑a589d94c通过（本地限定），未替换用户安装目录、未开启新GUI或发起真实审批。包级日志14。
 
-**用户下一步**：确认双方当前联网正常；两台换新包到新目录。B开始180秒监听，安全交付密钥；A开始四场景后B在60秒内手工选中条目、核对两端短码并“批准请求权限”，等自然结束交两端日志。若仍超时需反馈条目出现/选择/按钮可用/点击后提示，并避开密钥截图。不为过测试延长期限或改网络；成功认证、降权/拒绝与完整GUI人工验收仍未完成。
+**用户下一步（当时记录，主流程现已完成，见§18.15）**：确认双方当前联网正常；两台换新包到新目录。B开始180秒监听，安全交付密钥；A开始四场景后B在60秒内手工选中条目、核对两端短码并“批准请求权限”，等自然结束交两端日志。若仍超时需反馈条目出现/选择/按钮可用/点击后提示，并避开密钥截图。不为过测试延长期限或改网络；成功认证、降权/拒绝与完整GUI人工验收仍未完成。
+
+### 18.15 修正版两机认证主流程通过（2026-09-24）
+
+**证据来源与范围**：用户本轮粘贴的A info `0728189f` / client `31255177`，B info `3b99088a` / host `d8fd8b0d`日志；不是助手重新运行或从B磁盘采集的原始文件。A client开始09:24:23.259Z，B host开始09:23:43.100Z。两端EXE SHA256均为 `0E5421A658B3EF9AF06733E07E2D29A6F375654EF58AF3DECAC4A473F14B83FD`，Transport均为 `AE90E02431DF674605A15E7B44897F92AF2BD2FA19BC16BB8BFD53F6038F4434`，与§18.14已验证包一致；只核对了日志所列两个组件，不冒称B所有264文件均重新校验。
+
+**结论**：本轮真实两机认证主流程及保持/自然注销PASS。A四场景全部PASS；B最终PASS、退出0。原审批超时不再是当前阻断，但不将它扩展为完整M4人工清单全通过。没有新产品代码或新包；`Last code commit`仍为`67c7d7e`。此前双配置1329结果保持，本次未运行build/test，只有日志值/时间差计算与文档核对。
+
+#### A. 发现、审批与认证成功的精确配对
+
+- A `192.168.137.1/24`（热点if13）、B `192.168.137.141/24`（WLAN if23）；B组播加入成功并发现A，A解析到B并连接。不能由此反推DHCP/DNS未变或双方互联网持续正常。
+- 完整SessionId：`6d3c41f2-5bb5-4f1d-acdd-a091a755baea`，在A AUTH/CORRELATE/HOLD/DISPOSE/RESULT与B AUTH-BEGIN/UI/SESSION/RESULT中一致；B connectionId `be0a9f6b-849b-4d86-8c7e-d21b6235be6f`，peer `192.168.137.1:60592`。A高层日志未给本地端口，成功场景使用SessionId，而不是伪称四元组双端齐全。
+- 审批RequestId `286fe033-ad6d-4e29-8d2f-cad8c2006ae8`、Generation `82a7d938-011a-4bf4-bc9a-59e0e4d4a699`：OBSERVED、APPROVAL及REMOVED均一致，并关联同SessionId/ConnectionId。
+- B UI拉取09:24:25.2724095Z，提交09:25:09.5978545Z，`submitted=True decision=Approved grant=Control`；显示截止09:25:25.1970154Z。拉取至提交约44.325秒，提交距显示截止约15.599秒。只是UI记录时间差，不是物理点击时间或最终裁决的单独证明；随后A验证serverProof/B authenticated才是授权成功证据。
+- A `serverProof=verified`、`grant=Control`、expectedPin与presentedPin一致，`localObjectHeldMs=5001`、同步Dispose完成。
+- B `authenticated=True tracked=True observedSamples=50`，`observedSpanMs=4911.012 >=4000`，`maxObservedGapMs=110.472 <=500`，`endObservationGapMs=64.829 <=500`，`observationInterrupted=False`。
+- B `deregisteredAtRunEnd=True hostForcedClose=False evidence=PASS`，终态`authenticated-ended-unregistered`。elapsed49504.298ms包含审批等待与会话保持，不能当作TLS握手耗时；不将采样证明写成所有间隙连续在线证明。
+
+#### B. 三个负例及收尾
+
+| 场景 | A实测 | B实测 | 配对结论 |
+|---|---|---|---|
+| pin-mismatch | AuthenticationException，明确pin-mismatch，PASS | conn#2 peer :55847，TLS13 pre-auth-eof，5.075ms，Closed | 与顺序和TLS13行为相容；A缺本地端口，不能唯一四元组配对，保留不确定性 |
+| timeout | local .1:55848 → .141:45873，5001ms EOF，PASS | conn#3 peer .1:55848，pre-auth-timeout，5000.256ms | 四元组及拒绝原因精确配对 |
+| slow-dribble | local .1:54266 → .141:45873，sent=3/4，5011ms EOF，PASS | conn#4 peer .1:54266，pre-auth-timeout，5009.746ms | 四元组及拒绝原因精确配对，未随字节重置期限 |
+
+- B `sessionHandled=4`，桶为1认证自然注销+1前认证EOF+2前认证超时，`partitionOk=True`；`authenticatedEnded=1 qualifiedNaturalRelease=1 holdUnmet=0 hostForcedClose=0 registryViolations=0 trackingDropped=0`。
+- B `firstStopAllFinishedWithinBudget=True firstStopUnfinishedConnections=0 acceptLoopsFinished=True activeHandlers=0 activeRegistry=0 pendingApprovals=0 handlerFaults=0 cleanupFault=False`；双方`aborted=False`、无后台故障，Host自然结算。
+- A仍打印`M4 = PENDING-HOST-EVIDENCE`是单端不可宣布完成的设计；本轮B证据已供人工交叉核对，不修改程序日志来制造PASS。
+- B的“设备离线”仅为发现记录过期，不能解释为互联网掉线；未观测TLS级拒绝、close_notify、EOF/RST区别的项目仍保留UNOBSERVABLE/UNOBSERVED。
+
+#### C. 仍需人工补证，不扩大本轮通过范围
+
+沿用§18.11 D既定清单，不增加新的验收门槛：双方运行前/中/后上网情况；实际布局/DPI和短码人工核对；显式查看密钥、遮挡/失焦/到期清空；独立降权为ViewOnly和拒绝请求、错key提示、关窗/主动停止。真实serverProof失败的固定文案仍需对应故障场景，不能由错key或pin拒绝提示替代。正常Control主流程不必无理由重跑，复用现包且不改网、不读出真实密钥；拒绝/错key/主动停止应单独记预期拒绝/无效运行，不能混作正常success轮失败或强改全局PASS。完整人工清单与联网情况确认前，M4保持进行中，不进入M5。
+
+本轮核对说明：`outputs/M4-两机认证核对-20260924.txt`。报告为用户粘贴日志的摘要与阈值核对，不是原始日志副本或新一轮执行结果。
