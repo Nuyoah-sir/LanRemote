@@ -139,6 +139,8 @@ internal static class HeadlessRunner
     /// </remarks>
     public static void WriteUsage(string? error)
     {
+        // 解析拒绝发生在 RunAsync 之前；重定向的错误提示同样必须使用 UTF-8。
+        ConfigureConsoleEncoding();
         StringBuilder builder = new();
 
         if (!string.IsNullOrWhiteSpace(error))
