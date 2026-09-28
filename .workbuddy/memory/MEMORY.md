@@ -9,7 +9,7 @@
 
 历史包67c7d7e已过Control A31255177/Bd8fd8b0d及该轮联网/审批/短码、降权A738fbcc1/B67442a17、拒绝A66ef28d0/B8bd52649、错key A509bbe18/Bad5ed4cc（A FAIL/B UNMET符合负例预期）；B密钥六项/A输入遮挡通过，pin仅顺序关联，超时按端口。B监听关窗host1c41d46e的清理证据和用户“是自行消失了”已配齐，该无认证会话专项完整通过、不重跑；63样本/6202.419ms不是退出耗时。细节HANDOFF§18.15–20。A本机可做的应自主做，不推给B；实际桌面自动化仍受限、不绕过。通过项不外推全DPI/内存擦除；旧改网/Undo停用，SAC历史单次授权非产品功能。
 
-最新2596357：本机隔离真实TLS+专用WinExe入口（LanRemote.IsolatedAcceptance.exe），无真实vault/发现、不改网，手动审批。proof翻一位仍FAIL固定文案，活动认证后120秒可停止（先Host快照/Stop再取消客户端，INVALID_RUN）；普通保持5秒/审批60秒不变。修复timer提前回调与FrameReader重复计时导致的拒绝码竞态，确定性复现后修，不放宽断言。最终Debug/Release各1433 PASS（125/299/3/66/658/282），0警告错误失败跳过；Python14。HANDOFF§18.22/outputs/m4-isolated-ui；新包424成员/60.8MiB，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b。提交前fresh构建同源码，不冒称内嵌新hash。旧包67c7d7e未覆盖。新包未桌面启动，原实屏错误提示/活动停止/布局待用户A操作，不需B、不加DPI矩阵，不进M5。
+最新2596357：本机隔离真实TLS+专用WinExe入口（LanRemote.IsolatedAcceptance.exe），无真实vault/发现、不改网，手动审批。proof翻一位仍FAIL固定文案，活动认证后120秒可停止（先Host快照/Stop再取消客户端，INVALID_RUN）；普通保持5秒/审批60秒不变。修复timer提前回调与FrameReader重复计时导致的拒绝码竞态，确定性复现后修，不放宽断言。最终Debug/Release各1433 PASS（125/299/3/66/658/282），0警告错误失败跳过；Python14。HANDOFF§18.22/outputs/m4-isolated-ui；新包424成员/60.8MiB，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b。提交前fresh构建同源码，不冒称内嵌新hash。旧包67c7d7e未覆盖。用户已启动新包：b42a1553坏proof拒绝/清理日志通过，实屏文案待确认；e339ed58仅读到认证保持，停止/清理未见，详§18.23。不需B、不重跑proof、不加DPI矩阵、不进M5。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
