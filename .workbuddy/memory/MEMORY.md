@@ -5,9 +5,9 @@
 > 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；2026-09-22 本次续作后约9.6k字符，接近上限，后续追加先控长度。
 > 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
-## 当前续作点（2026-09-24，优先于下方历史记录）
+## 当前续作点（2026-09-28，优先于下方历史记录）
 
-修正版67c7d7e两机已过：Control A31255177/Bd8fd8b0d（proof、保持/自然注销、该轮联网/审批/短码人工确认）；降权A738fbcc1/B67442a17；有效拒绝A66ef28d0/B8bd52649（Denied→auth-approval-denied、无认证会话、1800样本自然结束、无中止/清理故障；A FAIL/B UNMET为专项预期）。成功按SessionId配对，拒绝和pin仅顺序关联，超时按端口；旧INVALID_RUN不改判。用户随后回复“各项正常”：B默认无明文、取消不显示、15秒到期清空、切窗清空、手动隐藏及当前缩放布局六项人工通过。不外推全DPI/A输入遮挡/关窗/内存擦除，不补未提供的run结算。上述通过项均不重跑；下一关错key及A输入遮挡/提示，之后真实serverProof失败提示、关窗/活动会话停止等原清单；M4未全完、不进M5，见HANDOFF§18.18。旧改网/Undo入口停用；无自动批准、不改时限网络。SAC关闭为本机单次授权，非产品功能。
+修正版67c7d7e已过：Control A31255177/Bd8fd8b0d及该轮联网/审批/短码人工确认；降权A738fbcc1/B67442a17；有效拒绝A66ef28d0/B8bd52649（A FAIL/B UNMET为专项预期）。B默认隐藏/取消/15秒到期/切窗/手动隐藏/当前缩放布局六项人工通过；旧INVALID_RUN不改判。9月28日错key A509bbe18/Bad5ed4cc：B auth-proof-mismatch、无认证会话、Closed；A通用拒绝、完整FAIL/未中止/无故障。用户确认A输入遮挡正常。B日志止于“设备离线”，缺最终BUCKETS/EVIDENCE/SUMMARY/RESULT/RUN COMPLETE，只补同轮尾部、不重跑；不能预填B UNMET/未中止/清理通过，也不能据发现离线推断断网。失败会话双端仅顺序关联，timeout52454/slow57251精确配对。当前错key行为符合预期、整轮收尾待核；真实serverProof失败提示、关窗/活动会话停止等仍待验，M4未全完、不进M5，详HANDOFF§18.19。通过项不重跑，不外推全DPI/内存擦除。旧改网/Undo停用，无自动批准、不改时限网络；SAC关闭是本机单次授权，非产品功能。
 
 最终Debug/Release各1329 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance203），0警告错误失败跳过；新增24真STA/WPF测试及1计数变异红→绿。测试不Show/不触用户日志，App.xaml同源样式离屏800x640不是真屏DPI；内联绑定检查Run.Text。现包outputs/m4-approval-ui：264项/57.5MiB，SHA及边界见HANDOFF§18.14；本次双方EXE/Transport哈希一致。旧1305/Python10/网络3变异见§18.13。主流程已过不重跑、不重打包；下一关仅补原清单剩余人工项，M4未全完、不进M5，产品无看屏/键鼠。
 
