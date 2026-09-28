@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-09-28，优先于下方历史记录）
 
-修正版67c7d7e已过：Control A31255177/Bd8fd8b0d及该轮联网/审批/短码人工确认；降权A738fbcc1/B67442a17；有效拒绝A66ef28d0/B8bd52649（A FAIL/B UNMET为专项预期）。B默认隐藏/取消/15秒到期/切窗/手动隐藏/当前缩放布局六项人工通过；旧INVALID_RUN不改判。9月28日错key A509bbe18/Bad5ed4cc有效专项PASS：B auth-proof-mismatch/无认证会话，同轮尾部已补齐，1800样本/179889.598ms自然结束、桶4/partitionOk/清理全0；双方未中止无故障，A FAIL/B UNMET为预期。A输入遮挡人工通过。拒绝双端仅顺序关联，timeout52454/slow57251精确配对。用户纠正：本机能做的窗口/日志验收由助手在A自主完成，不推给用户操作B；确需双机或人眼再请求配合。下一项A监听中关窗尚未运行，先解决GUI执行权限；不用headless冒充。真实serverProof提示及其余窗口项仍待验，M4未全完、不进M5，见HANDOFF§18.19。通过项不重跑，不外推全DPI/内存擦除。旧改网/Undo停用，无自动批准、不改时限网络；SAC关闭是本机单次授权，非产品功能。
+修正版67c7d7e已过Control A31255177/Bd8fd8b0d及该轮联网/审批/短码；降权A738fbcc1/B67442a17；拒绝A66ef28d0/B8bd52649；错key A509bbe18/Bad5ed4cc（proof-mismatch、1800样本自然结束/无故障，A FAIL/B UNMET为专项预期）。B密钥六项和A输入遮挡人工通过；失败会话/pin仅顺序关联，超时按端口；旧作废轮不改判。用户要求本机可做的窗口/日志验收由助手在A自主完成，不推给B；A界面自动化执行权限仍受限，未实际测试。用户随后自行用B，host1c41d46e监听中关窗：关闭来源、取消/首次停止预算内清理/全0无故障证据通过，INVALID_RUN/aborted=True保留。63样本/6202.419ms非退出耗时，RUN COMPLETE非进程退出；仅待确认窗口自行关闭且未强杀，不重跑A/B。活动会话停止、真实serverProof固定提示等仍待验，M4未全完、不进M5，详HANDOFF§18.20。通过项不重跑，不外推全DPI/内存擦除；旧改网/Undo停用，无自动批准、不改时限网络；SAC关闭是本机单次授权，非产品功能。
 
 最终Debug/Release各1329 PASS（Core125/Protocol299/Integration3/Security66/Transport633/Acceptance203），0警告错误失败跳过；新增24真STA/WPF测试及1计数变异红→绿。测试不Show/不触用户日志，App.xaml同源样式离屏800x640不是真屏DPI；内联绑定检查Run.Text。现包outputs/m4-approval-ui：264项/57.5MiB，SHA及边界见HANDOFF§18.14；本次双方EXE/Transport哈希一致。旧1305/Python10/网络3变异见§18.13。主流程已过不重跑、不重打包；下一关仅补原清单剩余人工项，M4未全完、不进M5，产品无看屏/键鼠。
 
