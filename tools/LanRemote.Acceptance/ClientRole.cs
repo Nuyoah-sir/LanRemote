@@ -384,7 +384,7 @@ internal static class ClientRole
         // 高层自己建立且独占 TLS；必须先分流，不能先建低层连接再做第二次认证连接。
         if (scenario == ScenarioSuccess)
         {
-            return await RunSuccessAsync(run, context, target, accessKey, requestedPermission,
+            return await RunSuccessAsync(run, context.Identity, target, accessKey, requestedPermission,
                 approvalPending, cancellationToken).ConfigureAwait(false);
         }
 
@@ -441,9 +441,9 @@ internal static class ClientRole
     }
 
     /// <summary><c>success</c>：只接受高层已验证会话，不读取内部 Stream/Token。</summary>
-    private static async Task<ScenarioOutcome> RunSuccessAsync(
+    internal static async Task<ScenarioOutcome> RunSuccessAsync(
         AcceptanceRun run,
-        AcceptanceContext context,
+        DeviceIdentity identity,
         ConnectionTarget target,
         ReadOnlyMemory<byte> accessKey,
         SessionPermission requestedPermission,
@@ -461,14 +461,14 @@ internal static class ClientRole
             // 认证窗口内只执行 UI 提供的有界内存更新，不包装同步日志或 Dispatcher 等待。
             ApprovalPending = approvalPending,
         };
-        run.Log.WriteLine($"[CLIENT][AUTH] clientDeviceId={context.Identity.DeviceId} " +
+        run.Log.WriteLine($"[CLIENT][AUTH] clientDeviceId={identity.DeviceId} " +
             $"requestedPermission={requestedPermission} machineWindowMs={options.MachineWindow.TotalMilliseconds:0} " +
             $"approvalWindowMs={options.ApprovalWindow.TotalMilliseconds:0}");
         AuthenticatedControlSession session;
         try
         {
             session = await new ControlClientConnector().ConnectAndAuthenticateAsync(
-                target, context.Identity.DeviceId, context.Identity.DeviceName, accessKey, requestedPermission,
+                target, identity.DeviceId, identity.DeviceName, accessKey, requestedPermission,
                 options, AcceptanceProfile.Timeouts, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -918,7 +918,7 @@ internal static class ClientRole
     // -----------------------------------------------------------------------
     // 输出
     // -----------------------------------------------------------------------
-    private static void WriteOutcome(AcceptanceRun run, string scenario, ScenarioOutcome outcome)
+    internal static void WriteOutcome(AcceptanceRun run, string scenario, ScenarioOutcome outcome)
     {
         string fields = string.Join(" ", outcome.Fields.Select(pair => $"{pair.Key}={pair.Value}"));
 

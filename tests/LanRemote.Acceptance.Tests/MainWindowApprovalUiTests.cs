@@ -433,7 +433,7 @@ public sealed class MainWindowApprovalUiTests
             if (showResult)
             {
                 Invoke(ui.Window, "ShowResult", AcceptanceOutcome.PreconditionUnmet,
-                    "离屏布局测试：本地结论不能代替两机认证证据。");
+                    ControlClientAuthenticationException.ServerProofFailureMessage);
             }
             ui.Window.Width = 820;
             ui.Window.Height = 700;
@@ -482,6 +482,17 @@ public sealed class MainWindowApprovalUiTests
             Assert.True(root.ActualWidth <= contentBounds.Width + 0.5 && root.ActualHeight <= contentBounds.Height + 0.5,
                 "不能通过把内容树撑出离屏预算来满足按钮边界断言。");
             AssertWithin(root, approval, contentBounds);
+            WrapPanel footer = Assert.Single(root.Children.OfType<WrapPanel>(), item => Grid.GetRow(item) == 5);
+            AssertWithin(root, footer, contentBounds);
+            Assert.All(footer.Children.OfType<Button>(), button => AssertWithin(root, button, contentBounds));
+            if (showResult)
+            {
+                Border banner = ui.Named<Border>("ResultBanner");
+                TextBlock text = ui.Named<TextBlock>("ResultBannerText");
+                Assert.Contains(ControlClientAuthenticationException.ServerProofFailureMessage, text.Text);
+                AssertWithin(root, banner, contentBounds);
+                AssertWithin(banner, text, new Rect(new Point(0, 0), banner.RenderSize));
+            }
             AssertWithin(root, buttonPanel, contentBounds);
             AssertWithin(approval, buttonPanel, new Rect(new Point(0, 0), approval.RenderSize));
             Rect panelBounds = new(new Point(0, 0), buttonPanel.RenderSize);

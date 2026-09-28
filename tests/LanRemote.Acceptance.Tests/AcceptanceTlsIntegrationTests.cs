@@ -3,9 +3,14 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Threading;
 using LanRemote.Core.Abstractions;
 using LanRemote.Core.Models;
 using LanRemote.Transport;
@@ -119,6 +124,341 @@ public sealed class AcceptanceTlsIntegrationTests
             Assert.DoesNotContain("evidence=PASS ", scenario.Run.Log.All);
         });
 
+    [Theory(Timeout = 60_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task Offscreen_Stop_Or_Close_Joins_Authenticated_Tls_Role_And_Settles_Once(bool close) =>
+        RunWindowScenarioAsync(close, holdCancellation: false);
+
+    [Theory(Timeout = 60_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task Reap_Preserves_Completed_Tls_Role_Until_Cancellation_Callback_Exits(bool close) =>
+        RunWindowScenarioAsync(close, holdCancellation: true);
+
+    private static async Task RunWindowScenarioAsync(bool close, bool holdCancellation)
+    {
+        using AcceptanceTestDirectory directory = new();
+        using RandomSecretStore store = new();
+        using X509Certificate2 certificate = CreateCertificate();
+        await using StaDispatcherFixture sta = new();
+        Dispatcher dispatcher = await sta.Ready.WaitAsync(TimeSpan.FromSeconds(5));
+        await dispatcher.InvokeAsync(async () =>
+        {
+            MainWindow window = new(directory.Path);
+            Field<DispatcherTimer>(window, "_uiTimer").Stop();
+            bool closed = false;
+            System.ComponentModel.CancelEventArgs? closing = null;
+            window.Closing += (_, args) => closing = args;
+            window.Closed += (_, _) => closed = true;
+            MainWindow.RunState? state = null;
+            TlsScenario? scenario = null;
+            Task<AcceptanceOutcome>? worker = null;
+            CancellationTokenRegistration registration = default;
+            using ManualResetEventSlim releaseCallback = new(!holdCancellation);
+            TaskCompletionSource<int> callbackEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource callbackExited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<int> workerStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                Assert.Equal(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
+                Assert.IsType<DispatcherSynchronizationContext>(SynchronizationContext.Current);
+                int uiThread = Environment.CurrentManagedThreadId;
+                AssertNoNativeWindow(window);
+                Assert.False(Field<bool>(window, "_ready"));
+                Assert.Null(Field<Task?>(window, "_busyTask"));
+                Assert.Null(Field<Task?>(window, "_keyTask"));
+                Assert.Equal(directory.Path, Field<string>(window, "_logDirectory"));
+                AcceptanceLog processLog = Field<AcceptanceLog>(window, "_processLog");
+                Assert.Equal(Path.Combine(directory.Path, "gui.log"), processLog.FilePath);
+                Assert.False(processLog.FileUnavailable);
+                state = Assert.IsType<MainWindow.RunState>(Invoke(window, "StartRole", true));
+                CancellationToken roleToken = state.Cts.Token;
+                scenario = new TlsScenario(directory.Path, store, certificate, state.Run, state.Inbox);
+                Assert.Same(state.Run, scenario.Run);
+                Assert.Same(state.Inbox, scenario.Inbox);
+                Assert.Equal(directory.Path, Path.GetDirectoryName(state.Run.Log.FilePath));
+                Assert.Null(state.GetHostContext());
+
+                // 先登记闸门，再由角色登记令牌等待；CancelAsync 按后进先出先唤醒角色。
+                // 回调不依赖 Dispatcher，且即使测试失败也最多阻塞 5 秒。
+                registration = roleToken.UnsafeRegister(_ =>
+                {
+                    callbackEntered.TrySetResult(Environment.CurrentManagedThreadId);
+                    try
+                    {
+                        if (!releaseCallback.Wait(TimeSpan.FromSeconds(5)))
+                            throw new TimeoutException("测试取消回调闸门未及时释放。");
+                    }
+                    finally { callbackExited.TrySetResult(); }
+                }, null);
+                Func<Task<AcceptanceOutcome>> role = async () =>
+                {
+                    Assert.Null(SynchronizationContext.Current);
+                    try
+                    {
+                        scenario.Start();
+                        using CancellationTokenSource waiting = CancellationTokenSource.CreateLinkedTokenSource(
+                            roleToken, scenario.Token);
+                        Task stopped = Task.Delay(Timeout.InfiniteTimeSpan, waiting.Token);
+                        workerStarted.TrySetResult(Environment.CurrentManagedThreadId);
+                        try { await stopped.ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (roleToken.IsCancellationRequested) { }
+                    }
+                    finally
+                    {
+                        await scenario.StopHostAsync().ConfigureAwait(false);
+                        await scenario.AssertCleanAsync("authenticated-host-forced-close").ConfigureAwait(false);
+                    }
+                    return scenario.Run.Complete(scenario.Evaluate(), "真实 TLS 角色已停止 Host 并核对资源归零。");
+                };
+                MethodInfo executor = typeof(MainWindow).GetMethod("RunRoleWorkerAsync",
+                    BindingFlags.Static | BindingFlags.NonPublic)
+                    ?? throw new MissingMethodException(typeof(MainWindow).FullName, "RunRoleWorkerAsync");
+                // 与真实按钮的执行器相同；不运行会触碰用户身份/网卡的 HostRole.RunAsync。
+                worker = Task.Run(() => (Task<AcceptanceOutcome>)executor.Invoke(null, new object[] { state, role })!);
+                PrivateField("_runTask").SetValue(window, worker);
+                Assert.NotEqual(uiThread, await workerStarted.Task.WaitAsync(scenario.Token));
+                Assert.Same(worker, Field<Task?>(window, "_runTask"));
+                Assert.False(worker.IsCompleted);
+
+                Task<AuthenticatedControlSession> connecting = scenario.Connect();
+                LocalApprovalSnapshot request = await scenario.AssertPendingAsync(connecting);
+                Invoke(window, "RefreshApprovalList");
+                ListBox approvals = Assert.IsType<ListBox>(window.FindName("ApprovalList"));
+                approvals.SelectedItem = Assert.Single(approvals.Items.Cast<LocalApprovalSnapshot>());
+                Assert.Equal(request, approvals.SelectedItem);
+                Button approve = Assert.IsType<Button>(window.FindName("ViewOnlyButton"));
+                Assert.True(approve.IsEnabled);
+                approve.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, approve));
+                // 不用 using 提前释放客户端；直到 Host 首次停止、角色收尾和 UI 回收后仍由 scenario 持有。
+                AuthenticatedControlSession client = await connecting.WaitAsync(scenario.Token);
+                Assert.Equal(request.Request.SessionId, client.SessionId);
+                Assert.Equal(request.Request.ShortCode, client.ShortCode);
+                Assert.Equal(SessionPermission.ViewOnly, client.GrantedPermission);
+                Assert.Equal(scenario.ServerDeviceId, client.Identity.DeviceId);
+                Assert.True(client.Identity.PinsMatch);
+                Assert.Equal(scenario.Target.ExpectedCertSha256.ToArray(), client.Identity.PresentedCertSha256.ToArray());
+                ControlSessionSummary registered = await scenario.Registered.Task.WaitAsync(scenario.Token);
+                Assert.Equal(client.SessionId, registered.SessionId);
+                Assert.Equal(request.Request.ConnectionId, registered.ConnectionId);
+                Assert.Equal(scenario.ClientDeviceId, registered.ClientDeviceId);
+                Assert.Equal(SessionPermission.ViewOnly, registered.GrantedPermission);
+                Assert.Equal(IPAddress.Loopback, registered.RemoteAddress);
+                Assert.Equal(1, scenario.Context.SessionRegistry.ActiveSessionCount);
+                Assert.Equal(registered, Assert.Single(scenario.Context.SessionRegistry.Snapshot()));
+                Assert.Equal(1, scenario.Host.ActiveConnections);
+                Assert.Equal(1, scenario.Host.AdmittedConnections);
+                Assert.Equal(1, scenario.Counters.Snapshot().Active);
+                Assert.Equal(0, scenario.Context.PendingApprovalLimiter.GlobalInUse);
+                Assert.Empty(scenario.Inbox.GetSnapshot());
+                Assert.False(scenario.HandlerFinished.Task.IsCompleted);
+                Assert.False(state.IsStopped);
+                Assert.False(state.Run.AbortedByOperator);
+                Assert.False(roleToken.IsCancellationRequested);
+                Assert.Null(Field<Task?>(window, "_runCancellationTask"));
+                Assert.DoesNotContain(state.Run.Log.ReadFrom(0, int.MaxValue), line => line == "RUN COMPLETE");
+                Invoke(window, "UpdateButtons");
+                Button stop = Assert.IsType<Button>(window.FindName("StopHostButton"));
+                Assert.True(stop.IsEnabled);
+                if (close)
+                {
+                    window.Close();
+                    Assert.NotNull(closing);
+                    Assert.True(closing.Cancel);
+                    Assert.True(Field<bool>(window, "_closing"));
+                    Assert.False(window.IsEnabled);
+                    Assert.False(closed);
+                }
+                else
+                {
+                    stop.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, stop));
+                    Assert.False(Field<bool>(window, "_closing"));
+                }
+                Assert.True(state.IsStopped);
+                Assert.True(state.Run.AbortedByOperator);
+                Assert.True(roleToken.IsCancellationRequested);
+                Assert.False(stop.IsEnabled);
+                Task cancellation = Assert.IsAssignableFrom<Task>(Field<Task?>(window, "_runCancellationTask"));
+                Assert.NotEqual(uiThread, await callbackEntered.Task.WaitAsync(scenario.Token));
+                Assert.Equal(AcceptanceOutcome.InvalidRun, await worker.WaitAsync(scenario.Token));
+                Assert.True(worker.IsCompletedSuccessfully);
+                Assert.False(state.Run.HasBackgroundFaults, state.Run.BackgroundFaultSummary);
+                // StopHostAsync 只返回缓存的首次报告，不能靠第二次 Stop/Dispose 洗白。
+                Assert.Equal(registered, Assert.Single(await scenario.StopHostAsync()));
+                await scenario.AssertCleanAsync("authenticated-host-forced-close");
+                Assert.Equal(AcceptanceOutcome.PreconditionUnmet, scenario.Evaluate());
+                string session = Assert.Single(state.Run.Log.ReadFrom(0, int.MaxValue),
+                    line => line.StartsWith("[HOST][SESSION] ", StringComparison.Ordinal));
+                Assert.Contains($"sessionId={client.SessionId} ", session);
+                Assert.Contains($"connectionId={registered.ConnectionId} ", session);
+                Assert.Contains("authenticated=True ", session);
+                Assert.Contains("deregisteredAtRunEnd=True ", session);
+                Assert.Contains("hostForcedClose=True ", session);
+                Assert.Contains($"evidence={AcceptanceOutcome.PreconditionUnmet.Code()} ", session);
+                AssertSingleInvalidSettlement(state.Run, close);
+                AssertNoNativeWindow(window);
+
+                if (holdCancellation)
+                {
+                    Assert.False(callbackExited.Task.IsCompleted);
+                    Assert.False(cancellation.IsCompleted);
+                    for (int i = 0; i < 2; i++)
+                    {
+                        Invoke(window, "ReapCompletedTasks");
+                        Assert.Same(state, Field<MainWindow.RunState?>(window, "_activeRun"));
+                        Assert.Same(worker, Field<Task?>(window, "_runTask"));
+                        Assert.Same(cancellation, Field<Task?>(window, "_runCancellationTask"));
+                        Assert.Same(state.Cts, Field<CancellationTokenSource?>(window, "_runCts"));
+                        Assert.Equal(roleToken, state.Cts.Token); // 提前 Dispose CTS 会抛异常。
+                        AssertRunSubscription(state, subscribed: true);
+                        Assert.Equal(Visibility.Collapsed, Assert.IsType<Border>(window.FindName("ResultBanner")).Visibility);
+                        Assert.False(closed);
+                        Assert.False(callbackExited.Task.IsCompleted);
+                        Assert.False(cancellation.IsCompleted);
+                    }
+                    releaseCallback.Set();
+                }
+                await cancellation.WaitAsync(scenario.Token);
+                Assert.True(cancellation.IsCompletedSuccessfully);
+                Assert.True(callbackExited.Task.IsCompletedSuccessfully);
+                Invoke(window, "ReapCompletedTasks");
+                AssertUiOwnershipReturned(window, state);
+                string settledLog = state.Run.Log.All;
+                Invoke(window, "ReapCompletedTasks");
+                AssertUiOwnershipReturned(window, state);
+                Assert.Equal(settledLog, state.Run.Log.All);
+                AssertSingleInvalidSettlement(state.Run, close);
+                Assert.False(state.Run.HasBackgroundFaults, state.Run.BackgroundFaultSummary);
+                Assert.False(Field<bool>(window, "_faulted"));
+                AssertNoNativeWindow(window);
+                if (close)
+                {
+                    Assert.False(closed);
+                    // 定时器停用，显式执行真实 tick 验证回收后自动允许关闭。
+                    Invoke(window, "OnUiTick", window, EventArgs.Empty);
+                    Assert.True(Field<bool>(window, "_allowClose"));
+                    Assert.NotNull(closing);
+                    Assert.False(closing.Cancel);
+                    Assert.True(closed);
+                }
+                else
+                {
+                    Assert.False(closed);
+                    Assert.True(window.IsEnabled);
+                    Assert.False(Field<bool>(window, "_allowClose"));
+                }
+                Assert.False(Field<bool>(window, "_faulted"));
+                Assert.False(Field<bool>(window, "_ready"));
+                Assert.False(Field<DispatcherTimer>(window, "_uiTimer").IsEnabled);
+                Assert.Equal(settledLog, state.Run.Log.All);
+                AssertNoNativeWindow(window);
+            }
+            finally
+            {
+                // 无论断言/回调/角色哪一方失败，先放闸，再 join；不伪造完成任务、不摘除在途所有权。
+                releaseCallback.Set();
+                using CancellationTokenSource cleanup = new(TimeSpan.FromSeconds(5));
+                try
+                {
+                    if (worker is not null)
+                    {
+                        if (!worker.IsCompleted) { Invoke(window, "StopCurrentRun", "测试 finally 收回角色"); }
+                        Task cancellation = Field<Task?>(window, "_runCancellationTask") ?? Task.CompletedTask;
+                        await Task.WhenAll(worker, cancellation).WaitAsync(cleanup.Token);
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        await registration.DisposeAsync().AsTask().WaitAsync(cleanup.Token);
+                        if (worker is not null) { Invoke(window, "ReapCompletedTasks"); }
+                        else if (state is not null)
+                        {
+                            // 仅构造失败且尚未交付任何 worker 的路径由测试归还状态。
+                            state.Dispose();
+                            state.Cts.Dispose();
+                            PrivateField("_activeRun").SetValue(window, null);
+                            PrivateField("_runCts").SetValue(window, null);
+                        }
+                    }
+                    finally
+                    {
+                        try { if (scenario is not null) { await scenario.DisposeAsync(); } }
+                        finally
+                        {
+                            Field<DispatcherTimer>(window, "_uiTimer").Stop();
+                            if (!closed) { window.Close(); }
+                        }
+                    }
+                }
+            }
+        }).Task.Unwrap().WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    private static void AssertSingleInvalidSettlement(AcceptanceRun run, bool close)
+    {
+        string[] lines = run.Log.ReadFrom(0, int.MaxValue).ToArray();
+        Assert.Equal("[RESULT] outcome   = INVALID_RUN", Assert.Single(lines,
+            line => line.StartsWith("[RESULT] outcome", StringComparison.Ordinal)));
+        Assert.Equal("[RESULT] aborted   = True", Assert.Single(lines,
+            line => line.StartsWith("[RESULT] aborted", StringComparison.Ordinal)));
+        Assert.Equal("[RESULT] detail    = 真实 TLS 角色已停止 Host 并核对资源归零。", Assert.Single(lines,
+            line => line.StartsWith("[RESULT] detail", StringComparison.Ordinal)));
+        string terminal = Assert.Single(lines, line => line.StartsWith("[HOST][RESULT] ", StringComparison.Ordinal));
+        Assert.Contains("terminal=authenticated-host-forced-close ", terminal);
+        Assert.True(Array.IndexOf(lines, terminal) < Array.FindIndex(lines,
+            line => line.StartsWith("[RESULT] outcome", StringComparison.Ordinal)));
+        Assert.Single(lines, line => line == "RUN COMPLETE");
+        Assert.Contains(close ? "关闭窗口" : "UI 提前停止监听", Assert.Single(lines,
+            line => line.StartsWith("[RUN] 操作员中止", StringComparison.Ordinal)));
+        Assert.DoesNotContain(lines, line => line.Contains("[CORRECTION]", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("evidence=PASS ", StringComparison.Ordinal));
+        Assert.Equal(lines, File.ReadAllLines(run.Log.FilePath!));
+    }
+
+    private static void AssertUiOwnershipReturned(MainWindow window, MainWindow.RunState state)
+    {
+        foreach (string name in new[] { "_activeRun", "_runTask", "_runCancellationTask", "_runCts",
+                     "_busyTask", "_keyTask", "_keyWork", "_displayedApprovalOwner" })
+        {
+            Assert.Null(PrivateField(name).GetValue(window));
+        }
+        Assert.False(Field<bool>(window, "_busy"));
+        Assert.Empty(Field<IReadOnlyList<LocalApprovalSnapshot>>(window, "_displayedApprovals"));
+        Assert.Throws<ObjectDisposedException>(() => { _ = state.Cts.Token; });
+        AssertRunSubscription(state, subscribed: false);
+        Assert.Equal(Visibility.Visible, Assert.IsType<Border>(window.FindName("ResultBanner")).Visibility);
+        Assert.Contains("INVALID_RUN", Assert.IsType<TextBlock>(window.FindName("ResultBannerText")).Text);
+    }
+
+    private static void AssertRunSubscription(MainWindow.RunState state, bool subscribed)
+    {
+        // RunState.Dispose 没有公开标志；核对真实日志订阅，不注入伪造的认证事件。
+        FieldInfo field = typeof(AcceptanceLog).GetField("LineWritten", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(AcceptanceLog).FullName, "LineWritten");
+        Delegate? handlers = (Delegate?)field.GetValue(state.Run.Log);
+        Assert.Equal(subscribed, handlers?.GetInvocationList().Any(handler => ReferenceEquals(handler.Target, state)) == true);
+    }
+
+    private static void AssertNoNativeWindow(MainWindow window)
+    {
+        Assert.False(window.IsVisible);
+        Assert.False(window.IsLoaded);
+        Assert.Equal(IntPtr.Zero, new WindowInteropHelper(window).Handle);
+        Assert.Null(PresentationSource.FromVisual(window));
+    }
+
+    private static FieldInfo PrivateField(string name) => typeof(MainWindow).GetField(name,
+        BindingFlags.Instance | BindingFlags.NonPublic) ?? throw new MissingFieldException(typeof(MainWindow).FullName, name);
+
+    private static T Field<T>(MainWindow window, string name) => (T)PrivateField(name).GetValue(window)!;
+
+    private static object? Invoke(MainWindow window, string name, params object[] arguments) =>
+        (typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(typeof(MainWindow).FullName, name)).Invoke(window, arguments);
+
     private static double ReadMeasurement(string line, string name)
     {
         string prefix = name + "=";
@@ -186,6 +526,7 @@ public sealed class AcceptanceTlsIntegrationTests
         private readonly CancellationTokenSource _clientStop = new();
         private readonly CancellationTokenSource _samplingStop = new();
         private readonly RandomSecretStore _store;
+        private readonly bool _ownsInbox;
         private readonly HostSessionEvidence _evidence = new(4);
         private readonly TransportTimeouts _timeouts = new(
             TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3),
@@ -200,10 +541,16 @@ public sealed class AcceptanceTlsIntegrationTests
         private int _pendingNotifications;
         private int _maximumRegistered;
 
-        internal TlsScenario(string directory, RandomSecretStore store, X509Certificate2 certificate)
+        internal TlsScenario(string directory, RandomSecretStore store, X509Certificate2 certificate,
+            AcceptanceRun? run = null, LocalApprovalInbox? inbox = null)
         {
+            if ((run is null) != (inbox is null))
+                throw new ArgumentException("外部 Run 与 Inbox 必须成对提供，且属于同一个 UI 角色。");
             _store = store;
-            Run = AcceptanceRun.Create(directory, "tls-test");
+            // 外部 Run 的结算由角色工作任务负责；外部 Inbox 只 Stop，由 UI 的 FinishRole 负责 Dispose。
+            Run = run ?? AcceptanceRun.Create(directory, "tls-test");
+            Inbox = inbox ?? new LocalApprovalInbox();
+            _ownsInbox = inbox is null;
             Context = new ControlAuthContext
             {
                 ServerDeviceId = ServerDeviceId,
@@ -240,7 +587,7 @@ public sealed class AcceptanceTlsIntegrationTests
         internal Guid ServerDeviceId { get; } = Guid.NewGuid();
         internal Guid ClientDeviceId { get; } = Guid.NewGuid();
         internal AcceptanceRun Run { get; }
-        internal LocalApprovalInbox Inbox { get; } = new();
+        internal LocalApprovalInbox Inbox { get; }
         internal ControlAuthContext Context { get; }
         internal HostRole.HostCounters Counters { get; }
         internal TransportHost Host { get; }
@@ -462,7 +809,7 @@ public sealed class AcceptanceTlsIntegrationTests
                 }
                 finally
                 {
-                    Inbox.Dispose();
+                    if (_ownsInbox) { Inbox.Dispose(); }
                     _operation.Dispose();
                     _clientStop.Dispose();
                     _samplingStop.Dispose();
