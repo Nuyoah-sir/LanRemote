@@ -1243,3 +1243,18 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 第三项证明真实 socket 上重复加组路径受到守护，但回环重复 binding **不等于 B 机双地址现场已完整复现**，不能据此把历史现场根因或修复后的双机通过写成已证实。上述定向红/绿也不能代替当前全量测试与实际双机证据。
 
 **Consequence / 可逆性**：后续实现、验收和打包统一遵守现网只读边界。保留历史用于追溯，不把旧确认/UAC/Undo 设计当成继续改网的授权；遇到不满足的网络条件须如实报告，不能放宽 RFC1918、同子网或认证约束来取得表面通过。
+
+### ADR-046 — 本机隔离专项入口与单调截止通知修正
+
+**日期**：2026-09-28。实现`2596357`，实测与交付见HANDOFF§18.22。
+
+**Context**：剩余实屏proof错误没有可操作安全入口，活动停止只有5秒抢点窗口；本机桌面自动化执行权限未解除。新增隔离入口应是正常验收工程能力，而不是绕过桌面权限或放松产品认证策略。全量另暴露服务端approval-timeout被归unavailable、客户端approval-timeout被归frame-timeout的竞态。
+
+**Decision**：
+- 新专用WinExe/WPF入口直接复用Acceptance.App和MainWindow；启动前不可变隔离模式，普通入口不变。专用入口不接受headless/远端/密钥参数；Loaded不触真实自检。实际审批依然手选，错误proof必须真实经TLS送达真实连接器并按原固定提示展示。
+- 隔离仅Acceptance内私有精确IPv4 Loopback策略、随机端口、每轮临时身份/key/证书，不改产品SubnetPolicy、不加载真实vault或发现、不改系统网络。界面状态为每run有界快照，所有任务随role回收；Host先快照/Stop，配套客户端后取消。仅本地已认证对象观察120秒，普通success仍5秒；认证/审批预算不变。
+- 负例维持FAIL、操作员停止维持INVALID_RUN、无人审批或未执行目标操作维持UNMET；这些标签本身不等于专项通过。相对lnk原生目标解析未通过，未交付，改为真实薄WinExe，不引入脚本。
+- AuthenticationDeadline的timer只负责唤醒，回调先复核原单调截止。提前回调重排、不足1ms只延后下一次通知到1ms，不改变IsExpired接受判据。构造同步回调与Dispose重排有明确同步；外部取消通知在锁外。
+- ControlClientConnector已持有deadline时，FrameReader使用内部令牌入口，禁止另起独立系统CancelAfter。公共读取接口保留；错误路径同样遵循父取消>绝对截止>帧错误，不扩大预算、不接受模糊拒绝码。
+
+**Evidence / 边界**：服务端599.5/600ms提前回调在真实TLS场景、客户端399.5/400ms重复CTS在受控Stream场景分别确定性复现旧错误；不声称现场Windows timer具体提前量已采集。最终Debug/Release各1433 PASS、Python14；实际桌面窗口尚未观察，不替代原人工清单或整个M4。证书DefaultKeySet遵循既有Schannel实测，非“绝不触盘”承诺；旧A/B安装目录保留。

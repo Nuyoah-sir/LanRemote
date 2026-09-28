@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-28（B监听中关窗专项完整通过；M4新增7项真实TLS/离屏WPF跨层回归，Debug/Release各1336 PASS，见 §18.20–21）**
+> 更新时间：**2026-09-28（本机隔离专项GUI入口与截止分类修复完成；Debug/Release各1433 PASS，独立可双击包已生成，见 §18.22；剩余实屏观察未假记通过）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
-> **当前状态：正常Control、Control→ViewOnly及有效拒绝专项均已通过。最新A `66ef28d0` / B `8bd52649`为拒绝自然结束轮：Denied→auth-approval-denied、无认证会话、两端aborted=False、清理正常。A总FAIL/B总UNMET符合该专项预期，不修改原始结果。前轮INVALID_RUN保留历史，不污染有效轮。完整M4人工清单仍未全完。
-> 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复 `bc8cf48`，审批界面修正 `67c7d7e`；最新跨层回归及内部接缝 `608f5c6`。本次 Debug / Release 全量各 **1336 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**，见 §18.21。此前1329是审批修正版的历史证据。
+> **当前状态：正常Control、Control→ViewOnly及有效拒绝专项均已通过。最新A `66ef28d0` / B `8bd52649`为拒绝自然结束轮：Denied→auth-approval-denied、无认证会话、两端aborted=False、清理正常。A总FAIL/B总UNMET符合该专项预期，不修改原始结果。前轮INVALID_RUN保留历史，不污染有效轮。完整M4人工清单仍未全完。**
+> 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复 `bc8cf48`，审批界面修正 `67c7d7e`；跨层回归及内部接缝 `608f5c6`、Debug / Release 全量各 **1336 PASS / 0 FAIL / 0 SKIP**及构建均 **0 警告 / 0 错误**属 **§18.21 历史记录**。最新代码为 `2596357`，该代码轮 Debug / Release 全量各 **1433 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**，Python打包 **14/14 PASS**，见 §18.22。此前1329是审批修正版的历史证据。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17。M4整体仍进行中。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：不重跑已通过的人工作业，补齐M4原清单剩余实屏观察。** B无会话监听关窗已完整通过（§18.20）；活动认证会话停止/关窗和真正serverProof错误到结果控件已有本机跨层自动化证据（§18.21），不是实屏/两机人工替代。剩余活动会话实屏停止、真实错误提示的实屏表现及原范围未覆盖布局不假勾通过，仍不进入M5。未改审批/时限/网络；现有安装包仍为outputs/m4-approval-ui（67c7d7e），本次未重打包或覆盖安装目录。
+> **下一关：使用新独立本机隔离包完成剩余实屏观察，不需要B参与，不重复已通过项。** `2596357` 增加真实TLS故障注入/活动停止及专用WinExe入口；审批须手选，普通保持仍5秒、仅隔离观察最长120秒。最终双配置各1433 PASS、Python打包14 PASS；另修复两个确定性复现的截止分类竞态，未放宽预算或权限。新包位于outputs/m4-isolated-ui，尚未启动，A实屏未测；旧A/B安装目录未覆盖。真正错误提示、活动停止及原范围布局的实屏观察仍待确认，M4未全完、不进入M5；A桌面自动化权限仍未解除。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -38,8 +38,8 @@
 - **下一步：继续剩余窗口生命周期及真实serverProof错误显示专项。** 正常授权、降权、拒绝及前一Control轮联网/审批/短码通过（§18.15–17）；B密钥六项人工通过（§18.18）；错key A509bbe18/Bad5ed4cc完整有效轮及A输入遮挡通过（§18.19）。通过项不再重跑，原清单剩余关窗/活动会话停止、真实serverProof失败提示与未覆盖布局仍按实际覆盖记账。用户随后已自行在B执行监听中关窗，run 1c41d46e的关闭来源、取消、首次停止预算内清理及无故障已核对通过（§18.20）；用户随后明确“是自行消失了”，窗口自行退出人工确认补齐，该专项完整通过，不重跑，也不再要求A重复此路径。A自动化执行权限未解除、A未运行，不冒称助手实测。既定本机可做则自主执行的分工规则保留。该无已认证会话路径不代替活动会话停止。现已另补7项真实TLS/离屏WPF跨层回归（§18.21），活动会话与错误提示的自动化链通过，实屏观察边界仍保留。仍不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo、不进入M5。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0–4 实现；阶段 5 自动化及Control/降权/拒绝两机专项完成，完整人工清单尚有缺项）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`608f5c6`**（7项TLS/WPF跨层回归、2项既有布局增强、ClientRole最小内部接缝）；现有安装包仍为`67c7d7e`（审批UI修正版）。未改变Transport或产品App行为。
-- **Working tree at validation：最终Debug/Release各1336 PASS、0失败/0跳过、构建0警告/0错误，对应随后提交为608f5c6的4个源码/测试文件；两处临时变异均已完全恢复**。证据 `outputs/m4-cross-layer/build-debug.log`、`test-debug.log`、`build-release.log`、`test-release.log`及TRX；安装包1329历史证据仍在§18.14，不冒称新源码已重打包部署。
+- **Last code commit：`2596357`**（本机隔离GUI入口、真实场景及打包，认证deadline和客户端读取的截止分类修复，共20个文件）。产品App未改、网络/权限/预算合同不变；旧A/B包67c7d7e未覆盖，新隔离包见§18.22。
+- **Working tree at validation：对应随后提交为2596357的20个源码/测试/打包文件；Debug/Release各1433 PASS、0失败/0跳过，构建0警告/0错误，Python打包14/14**。证据 `outputs/m4-isolated-ui/*-validated.log`、`validated-*.trx`；新独立WinExe另行Debug build及fresh Release publish成功。publish发生在代码提交前，程序集不冒称内嵌2596357，源码归属与包SHA按§18.22关联。失败中间轮日志保留，不刷掉历史；之前1336见§18.21。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2586,4 +2586,34 @@ Control和降权不重跑、不重打包。仅补一轮有效拒绝：B开始180
 
 **覆盖边界**：本次为本机真实回环TLS+离屏STA/WPF，不Show、不创建桌面原生窗口、不调用OnLoaded，不访问真实身份/密钥，不修改现网。Host测试复用真实HostCounters/TransportHost但不是整个HostRole.RunAsync装配；Client复用真实success核心但不是发现及RunAllAsync四场景编排。不得以此宣称剩余人工实屏观察通过、整个M4完成或M5已开始。既有人工通过项继续有效、不重跑。
 
-**停点**：代码层跨层缺口已补；原清单仍余活动认证会话实屏停止、真实serverProof固定提示实屏表现和未覆盖布局观察。A桌面自动化执行权限仍未解决，不通过替代通道绕过。现有包仍是§18.14版本，本次未fresh publish、未覆盖安装目录。交付`outputs/M4-跨层回归核对-20260928.txt`。
+**当时停点（现已续作至§18.22）**：代码层跨层缺口已补；原清单仍余活动认证会话实屏停止、真实serverProof固定提示实屏表现和未覆盖布局观察。A桌面自动化执行权限仍未解决，不通过替代通道绕过。该轮未fresh publish、未覆盖安装目录。交付`outputs/M4-跨层回归核对-20260928.txt`。
+
+### 18.22 本机隔离实屏入口与截止分类修复（2026-09-28）
+
+**实现提交**：`2596357`，20个文件，+2856/-108。不是仅更新计划：代码、实际测试与fresh发布均完成；M4剩余实屏仍未完成。
+
+**入口与隔离**：
+
+- `LanRemote.IsolatedAcceptance` 新增薄WinExe/WPF项目，直接构造真实Acceptance.App(isolatedOnly:true)，无参数仅进入隔离模式。普通Acceptance无参数行为保留；专用入口拒绝headless/混合参数，模式在Loaded前确定。无启动脚本、无外部进程代理、无自动批准。
+- `IsolatedUiScenario` 使用每轮随机身份、16字节key、证书、IPv4精确127.0.0.1随机端口；不构造AcceptanceContext、不读取用户vault/配置或启动发现。独立临时日志；普通自检/Host/Client/查看密钥在隔离模式均有方法级拒绝。
+- 复用真实TransportHost/ControlClientConnector、同一Inbox及MainWindow worker/CancelAsync/Reap/FinishRole链。活动专项认证后最多120秒，普通success仍5秒；Host活动快照与首次Stop在客户端取消前。停止仍INVALID_RUN、无操作到期UNMET。
+- proof专项校验正确clientProof，经手动审批后按实际grant计算serverProof并翻一位；真实客户端拒绝码必须为client-server-proof-mismatch，固定文案经原日志/结果链显示。故意负例保持FAIL，不翻绿；审批自然60秒到期UNMET，无注入。EOF/RST计数分开，关闭须在HostStop前观测。完成handler引用及时移除，避免累计无界历史列表。
+
+**全量揭示并修复的旧竞态**：
+
+1. 首次全量原服务端用例期待auth-approval-timeout、实际auth-approval-unavailable。旧AuthenticationDeadline无条件在timer回调取消，而单调截止可能未到；受控时钟599.5/600ms提前触发，在真实TLS测试确定性复现。修复回调复核单调剩余量，必要时重排；不足1ms只调整通知排期，不增加接受宽限。覆盖构造同步回调、Dispose重排竞态、父取消和晚回调。
+2. 下一全量原客户端用例期待client-approval-timeout、实际client-frame-timeout。客户端已有deadline，但FrameReader再启独立系统CancelAfter；受控流399.5/400ms取消实际重复CTS，确定性复现。增加内部仅消费deadline令牌的读帧入口；公共FrameReader接口保留，缓冲清零共用原实现。失败也复核父取消>绝对窗口到期>真实帧错误。短帧deadline仍报frame-timeout，不把两码都接受为通过。
+3. 原现场未采集timer/单调时间戳，不能将“Windows截断恰好导致该次提前量”写成现场实测；确定性故障机制与现场同错误码已验证。旧测试未放宽。初始测试另修缺using、OnClosing反射歧义、Loaded后WPF可能排队ContentRendered导致的错误空日志断言。
+
+**最终实测**：
+
+- Debug与Release各：Core125 + Protocol299 + Integration3 + Security66 + Transport658 + Acceptance282 = **1433 PASS / 0 FAIL / 0 SKIP**，构建0警告/0错误。
+- 相对1336基线新增97项：Acceptance+72（引擎/离屏UI/专用入口路由），Transport+25（deadline及读帧边界）。Python打包回归另计14/14，不混入.NET总数。
+- 独立启动器不在sln中，另行Debug build 0警告/0错误，Release win-x64自包含fresh publish成功；两配置全量覆盖引用的Acceptance与Transport。未启动该新包的实际桌面窗口，不冒称实屏已通过。
+- 原始证据`outputs/m4-isolated-ui/`：`build-{debug,release}-validated.log`、`test-{debug,release}-validated.log`、12份`validated-*.trx`、`launcher-build-debug.log`、`package-tests.log`、`publish.log`。所有失败中间轮保留。代理补做定向复现/修复验证后，最终结论以主线程上述全量为准。
+
+**新交付**：`outputs/m4-isolated-ui/LanRemote-0.1.0-m2-m4-isolated-ui-win-x64.zip`，63729201 bytes（60.8MiB），424个唯一成员，CRC完整，含正常多语言子目录（不是扁平包）。主入口`LanRemote.IsolatedAcceptance.exe`为x64、PE subsystem=2；无普通Acceptance.exe、无ps1/cmd/bat/lnk，另含.NET运行时createdump.exe（非用户入口）。ZIP SHA-256：`c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b`。`START-HERE.txt`与交付说明逐字节一致。
+
+fresh源目录`artifacts/m4-isolated-ui-73x0r3z0`；包构建于代码提交前，和2596357相同源码，但不冒称程序集版本已嵌入该提交。旧A/B安装目录与旧包未覆盖。曾尝试最小相对lnk，原生GetPath为空、未通过验证，实验已撤回，改用实际WinExe入口，不交付不可靠快捷方式。
+
+**现在只停在原人工依赖**：解压新包、双击专用exe，在A本机确认固定错误文案和活动停止后恢复操作，同时查看原范围布局/日志入口；不需B、不改网、不新增DPI矩阵、不重复已通过项。界面自动化权限仍未解除；不绕过拦截，离屏测试不代替实屏。收到实屏结果/日志后继续M4核对，完整收口前不进入M5。
