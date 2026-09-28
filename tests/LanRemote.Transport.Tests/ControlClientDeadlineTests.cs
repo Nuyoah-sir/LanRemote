@@ -190,8 +190,7 @@ public sealed partial class ControlClientConnectorTests
             ClientTimer timer = await clock.WaitForTimerAsync(payloadBudget, after: prefix, cancellationToken: ct);
             Assert.Equal(prefixWait.Ticks, timer.StartedAt - approval.StartedAt);
             payloadStarted.SetResult(timer);
-            // 不再发送剩余 payload，也不主动断线。让真实 FrameReader 的 100ms 分段
-            // CancelAfter 结束读取；它是被测超时，不是用于猜测协议阶段的固定 Sleep。
+            // 不再发送剩余 payload，也不主动断线；由测试推进客户端同一时钟上的分段截止。
             await peer.AssertClosedWithoutDataAsync(ct);
         });
         scenario.Start();
@@ -199,11 +198,15 @@ public sealed partial class ControlClientConnectorTests
             options: ClientOptions with { ApprovalWindow = approvalBudget },
             timeouts: Timeouts(prefixMs: 100, payloadMs: 100), clock: clock);
         ClientTimer payloadTimer = await payloadStarted.Task.WaitAsync(Guard);
+        clock.Advance(payloadBudget - TimeSpan.FromTicks(1), fireTimers: false);
+        Assert.False(client.IsCompleted);
+        Assert.Equal(0, clock.TimerCallbacks);
+        clock.Advance(TimeSpan.FromTicks(1), fireTimers: true);
         await AssertRejectedAsync(scenario, client, "client-frame-timeout", "远端认证等待超时，请重试。");
         Assert.Equal(payloadBudget, payloadTimer.Budget);
         Assert.True(payloadTimer.IsDisposed);
-        Assert.Equal(prefixWait.Ticks, clock.MonotonicTimestamp);
-        Assert.Equal(0, clock.TimerCallbacks);
+        Assert.Equal((prefixWait + payloadBudget).Ticks, clock.MonotonicTimestamp);
+        Assert.Equal(1, clock.TimerCallbacks);
         Assert.Equal(0, clock.ActiveTimerCount);
     }
 

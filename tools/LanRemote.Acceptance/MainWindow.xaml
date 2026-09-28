@@ -18,7 +18,7 @@
             <Setter Property="Margin" Value="0,2,0,2" />
         </Style>
     </Window.Resources>
-    <Grid Margin="12">
+    <Grid x:Name="ContentGrid" Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="3*" />
@@ -27,14 +27,16 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" Margin="0,0,0,8">
-            <TextBlock FontSize="16" FontWeight="SemiBold" Text="LanRemote M4 两机验收器" />
-            <TextBlock Style="{StaticResource Wrap}" Foreground="#555" FontSize="12"
-                       Text="两机须有合格的 RFC1918 同子网地址。被控端显式开始监听；控制端输入对端设备码、访问密钥并选择权限。短码只供人工关联，不能证明远端身份。" />
-        </StackPanel>
+        <Border x:Name="ModeBanner" Grid.Row="0" Margin="0,0,0,8">
+            <StackPanel>
+                <TextBlock x:Name="WindowHeading" FontSize="16" FontWeight="SemiBold" Text="LanRemote M4 两机验收器" />
+                <TextBlock x:Name="WindowDescription" Style="{StaticResource Wrap}" Foreground="#555" FontSize="12"
+                           Text="两机须有合格的 RFC1918 同子网地址。被控端显式开始监听；控制端输入对端设备码、访问密钥并选择权限。短码只供人工关联，不能证明远端身份。" />
+            </StackPanel>
+        </Border>
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-                <GroupBox Header="本机身份与现有网络（只读检查）">
+                <GroupBox x:Name="IdentityPanel" Header="本机身份与现有网络（只读检查）">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -72,21 +74,25 @@
                         </StackPanel>
                     </Grid>
                 </GroupBox>
+                <WrapPanel Margin="0,0,0,6">
+                    <Button x:Name="HostButton" Content="被控端：开始 180 秒监听窗口"
+                            Click="HostButton_Click" Margin="0,0,8,0" />
+                    <Button x:Name="IsolatedActiveStopButton" Content="开始活动会话停止专项"
+                            Click="IsolatedActiveStopButton_Click" Visibility="Collapsed" Margin="0,0,8,0" />
+                    <Button x:Name="IsolatedProofMismatchButton" Content="开始proof错误专项"
+                            Click="IsolatedProofMismatchButton_Click" Visibility="Collapsed" Margin="0,0,8,0" />
+                    <Button x:Name="StopHostButton" Content="提前停止（本轮作废）"
+                            Click="StopHostButton_Click" IsEnabled="False" />
+                </WrapPanel>
                 <Border x:Name="RoleBanner" Margin="0,8,0,8" Padding="10,6" CornerRadius="4"
                         Background="#EEE" BorderBrush="#CCC" BorderThickness="1">
                     <TextBlock x:Name="RoleBannerText" FontSize="13" FontWeight="SemiBold"
                                Style="{StaticResource Wrap}" Text="尚未选定角色；同一轮不能切换角色。" />
                 </Border>
-                <GroupBox Header="这台机器的角色">
+                <TextBlock x:Name="HostWindowText" Style="{StaticResource Wrap}" Foreground="#555"
+                           Text="监听成功后计时 180 秒；到时正常清理并按证据结算，不保证 PASS。提前停止为操作员中止。" />
+                <GroupBox x:Name="NormalRolePanel" Header="普通角色身份与密钥">
                     <StackPanel>
-                        <WrapPanel Margin="0,0,0,6">
-                            <Button x:Name="HostButton" Content="被控端：开始 180 秒监听窗口"
-                                    Click="HostButton_Click" Margin="0,0,8,0" />
-                            <Button x:Name="StopHostButton" Content="提前停止（本轮作废）"
-                                    Click="StopHostButton_Click" IsEnabled="False" />
-                        </WrapPanel>
-                        <TextBlock x:Name="HostWindowText" Style="{StaticResource Wrap}" Foreground="#555"
-                                   Text="监听成功后计时 180 秒；到时正常清理并按证据结算，不保证 PASS。提前停止为操作员中止。" />
                         <WrapPanel Margin="0,6,0,6">
                             <Button x:Name="ShowKeyButton" Content="确认查看本机访问密钥"
                                     Click="ShowKeyButton_Click" IsEnabled="False" Margin="0,0,8,0" />
@@ -117,9 +123,9 @@
                             <Button x:Name="StopClientButton" Content="中止（本轮作废）"
                                     Click="StopClientButton_Click" IsEnabled="False" />
                         </WrapPanel>
-                        <TextBlock x:Name="ClientPendingText" Style="{StaticResource Wrap}" Foreground="#8B4513" />
                     </StackPanel>
                 </GroupBox>
+                <TextBlock x:Name="ClientPendingText" Style="{StaticResource Wrap}" Foreground="#8B4513" />
             </StackPanel>
         </ScrollViewer>
         <!-- 审批不再埋在角色滚动区底部；待批列表有界，仍须明确选择再提交。 -->

@@ -448,8 +448,14 @@ internal static class ClientRole
         ReadOnlyMemory<byte> accessKey,
         SessionPermission requestedPermission,
         Action<ControlClientApprovalPending>? approvalPending,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? holdDuration = null)
     {
+        TimeSpan sessionHold = holdDuration ?? SessionHoldDuration;
+        if (sessionHold <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(holdDuration), "会话保持时长必须为正。");
+        }
         if (target.DeviceId == UnverifiedPeerId)
         {
             return TargetResolution.Failed("success 的目标仍为占位 DeviceId，无法验证远端身份。",
@@ -496,13 +502,13 @@ internal static class ClientRole
             // 高层身份不暴露本地端口，不能为凑四元组而伪造端点或再次建连。
             run.Log.WriteLine($"[CLIENT][CORRELATE] sessionId={session.SessionId} peerDeviceId={target.DeviceId} " +
                 $"peerHost={target.RemoteAddress}:{target.Port} presentedPin={presented} grant={session.GrantedPermission}");
-            run.Log.WriteLine("[CLIENT][HOLD] localObjectHoldTargetMs=5000 hostRegistry=UNOBSERVED");
+            run.Log.WriteLine($"[CLIENT][HOLD] localObjectHoldTargetMs={sessionHold.TotalMilliseconds:0} hostRegistry=UNOBSERVED");
             Stopwatch hold = Stopwatch.StartNew();
-            TimeSpan remaining = SessionHoldDuration;
+            TimeSpan remaining = sessionHold;
             do
             {
                 await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
-                remaining = SessionHoldDuration - hold.Elapsed;
+                remaining = sessionHold - hold.Elapsed;
             }
             while (remaining > TimeSpan.Zero);
             cancellationToken.ThrowIfCancellationRequested();
@@ -511,7 +517,9 @@ internal static class ClientRole
                 "// 仅证明本地对象保有，不证明 Host registry 持续在线");
             outcome = new ScenarioOutcome(
                 AcceptanceOutcome.Pass,
-                "serverProof 已通过；本地持有已验证会话至少五秒后同步释放。Host 保持及注销仍须按 SessionId 实测核对。",
+                sessionHold == SessionHoldDuration
+                    ? "serverProof 已通过；本地持有已验证会话至少五秒后同步释放。Host 保持及注销仍须按 SessionId 实测核对。"
+                    : $"serverProof 已通过；本地持有已验证会话至少 {sessionHold.TotalMilliseconds:0} 毫秒后同步释放。Host 保持及注销仍须按 SessionId 实测核对。",
                 Fields(("serverProof", "verified"), ("sessionId", session.SessionId.ToString()),
                     ("expectedPin", expected), ("presentedPin", presented),
                     ("grant", session.GrantedPermission.ToString()), ("localObjectHeldMs", heldMs.ToString()),

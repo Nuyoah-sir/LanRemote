@@ -397,7 +397,7 @@ public sealed class ControlClientConnector
             uint length;
             using (AuthenticationDeadline prefix = new(window.Clock, prefixBudget, window.Token))
             {
-                length = await reader.ReadLengthPrefixAsync(prefixBudget, prefix.Token).ConfigureAwait(false);
+                length = await reader.ReadLengthPrefixAsync(prefix.Token).ConfigureAwait(false);
                 _ = window.GetRemaining();
                 CheckReadStage(prefix);
             }
@@ -413,7 +413,7 @@ public sealed class ControlClientConnector
             byte[]? payload = null;
             try
             {
-                payload = await reader.ReadPayloadAsync(lengthBytes, payloadBudget, payloadDeadline.Token)
+                payload = await reader.ReadPayloadAsync(lengthBytes, payloadDeadline.Token)
                     .ConfigureAwait(false);
                 long receivedAt = window.Clock.GetTimestamp();
                 _ = window.GetRemaining();
@@ -434,6 +434,12 @@ public sealed class ControlClientConnector
         {
             _ = window.GetRemaining();
             throw TimeoutFailure("client-frame-timeout");
+        }
+        catch (Exception)
+        {
+            // 读失败也必须遵循调用方取消 > 绝对窗口到期 > 帧错误，及时的真实错误原样抛出。
+            _ = window.GetRemaining();
+            throw;
         }
     }
 

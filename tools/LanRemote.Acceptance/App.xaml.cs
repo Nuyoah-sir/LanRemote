@@ -29,39 +29,85 @@ public partial class App : Application
 {
     private static int _crashReportCount;
     private static int _headless;
+    private static string? _crashLogDirectory;
+    private readonly bool _isolatedOnly;
+
+    public App() : this(false) { }
+
+    public App(bool isolatedOnly)
+    {
+        _isolatedOnly = isolatedOnly;
+    }
+
+    internal enum StartupMode { NormalUi, IsolatedUi, Headless, Invalid }
+
+    internal static StartupMode RouteStartup(string[] args, out HeadlessCommand? command, out string? error,
+        bool isolatedOnly = false)
+    {
+        command = null;
+        error = null;
+        if (isolatedOnly)
+        {
+            if (args.Length == 0 || (args.Length == 1 && args[0] == "--isolated-ui"))
+            {
+                return StartupMode.IsolatedUi;
+            }
+            error = "本机隔离启动器只接受无参数或唯一参数 --isolated-ui；不得运行普通自检或 headless。";
+            return StartupMode.Invalid;
+        }
+        if (args.Length == 0) { return StartupMode.NormalUi; }
+        if (args.Length == 1 && args[0] == "--isolated-ui") { return StartupMode.IsolatedUi; }
+        // 在 headless 消费参数值之前拒绝组合、重复及变形开关，不允许退回普通自检。
+        if (args.Any(arg => arg.StartsWith("--isolated-ui", StringComparison.OrdinalIgnoreCase)))
+        {
+            error = "隔离窗口只接受唯一参数 --isolated-ui；不得组合角色、地址、密钥或日志目录等参数。";
+            return StartupMode.Invalid;
+        }
+        if (HeadlessCommand.TryParse(args, out command, out error) && error is null && command is not null)
+        {
+            return StartupMode.Headless;
+        }
+        command = null;
+        error ??= "参数无效：无参数打开普通窗口；隔离窗口只接受唯一参数 --isolated-ui。";
+        return StartupMode.Invalid;
+    }
+
+    internal static string ConfigureStartupLogDirectory(bool isolatedUi)
+    {
+        string directory = isolatedUi
+            ? Path.Combine(Path.GetTempPath(), "LanRemote-Isolated", Guid.NewGuid().ToString("N"))
+            : AcceptanceLog.DefaultDirectory;
+        Volatile.Write(ref _crashLogDirectory, directory);
+        return directory;
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        StartupMode mode = RouteStartup(e.Args, out HeadlessCommand? command, out string? error,
+            isolatedOnly: _isolatedOnly);
+        bool isolatedUi = mode == StartupMode.IsolatedUi;
+        string logDirectory = ConfigureStartupLogDirectory(_isolatedOnly || isolatedUi);
+        Interlocked.Exchange(ref _headless, mode is StartupMode.Headless or StartupMode.Invalid ? 1 : 0);
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
         base.OnStartup(e);
 
-        if (e.Args.Length > 0)
+        if (mode == StartupMode.Invalid)
         {
-            Interlocked.Exchange(ref _headless, 1);
-
-            bool parsed = HeadlessCommand.TryParse(e.Args, out HeadlessCommand? command, out string? error);
-
-            // 两个条件都要判。只判 parsed 是不够的——曾经就因为 TryParse 在参数错误时
-            // 返回 true，于是这里拿着 null 命令走下去，参数错误的消息被彻底丢掉，
-            // 用户看到的只有「退出码 3、零输出」。详见 HeadlessCommand.TryParse 的 remarks。
-            if (!parsed || error is not null || command is null)
-            {
-                HeadlessRunner.WriteUsage(
-                    error ?? "参数里没有 --headless。不带任何参数双击才是打开窗口。");
-
-                Shutdown((int)AcceptanceOutcome.HarnessError);
-                return;
-            }
-
-            RunHeadless(command);
+            HeadlessRunner.WriteUsage(error);
+            Shutdown((int)AcceptanceOutcome.HarnessError);
+            return;
+        }
+        if (mode == StartupMode.Headless)
+        {
+            RunHeadless(command!);
             return;
         }
 
         ShutdownMode = ShutdownMode.OnMainWindowClose;
-        MainWindow window = new();
+        MainWindow window = new(logDirectory, isolatedUi);
         MainWindow = window;
         window.Show();
     }
@@ -161,7 +207,7 @@ public partial class App : Application
 
     private static string TryWriteCrash(Exception exception)
     {
-        string directory = AcceptanceLog.DefaultDirectory;
+        string directory = Volatile.Read(ref _crashLogDirectory) ?? AcceptanceLog.DefaultDirectory;
 
         try
         {

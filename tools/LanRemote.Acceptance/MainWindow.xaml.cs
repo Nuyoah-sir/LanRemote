@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private const int HostWindowSeconds = 180;
     private const int LogBatchSize = 200;
     private const int UiLogCharacterLimit = 160_000;
+    private readonly bool _isolatedUi;
     private readonly string _logDirectory;
     private readonly AcceptanceLog _processLog;
     private readonly List<LogCursor> _logs = new();
@@ -40,12 +41,14 @@ public partial class MainWindow : Window
     public MainWindow() : this(AcceptanceLog.DefaultDirectory) { }
 
     // 测试以独立目录承载真实WPF控件，避免覆盖正在使用的验收器日志。
-    internal MainWindow(string logDirectory)
+    internal MainWindow(string logDirectory, bool isolatedUi = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
+        _isolatedUi = isolatedUi;
         _logDirectory = logDirectory;
         _processLog = new AcceptanceLog(logDirectory, "gui.log");
         InitializeComponent();
+        if (_isolatedUi) { InitializeIsolatedUi(); }
         _logs.Add(new LogCursor(_processLog));
         _uiTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
         {
@@ -82,6 +85,7 @@ public partial class MainWindow : Window
         try
         {
             RefreshAuthentication();
+            RefreshIsolatedStatus();
             PullLogs();
             UpdateButtons();
         }
@@ -192,12 +196,14 @@ public partial class MainWindow : Window
     private void UpdateButtons()
     {
         bool idle = CanStart;
-        HostButton.IsEnabled = idle && _ready;
-        ClientButton.IsEnabled = idle && _ready;
-        PeerCodeBox.IsEnabled = idle;
-        PeerKeyBox.IsEnabled = idle;
-        PermissionBox.IsEnabled = idle;
-        SelfCheckButton.IsEnabled = idle;
+        HostButton.IsEnabled = !_isolatedUi && idle && _ready;
+        ClientButton.IsEnabled = !_isolatedUi && idle && _ready;
+        PeerCodeBox.IsEnabled = !_isolatedUi && idle;
+        PeerKeyBox.IsEnabled = !_isolatedUi && idle;
+        PermissionBox.IsEnabled = !_isolatedUi && idle;
+        SelfCheckButton.IsEnabled = !_isolatedUi && idle;
+        IsolatedActiveStopButton.IsEnabled = _isolatedUi && idle;
+        IsolatedProofMismatchButton.IsEnabled = _isolatedUi && idle;
         bool running = !_closing && !_faulted && _activeRun is { IsStopped: false } && _runTask is { IsCompleted: false };
         StopHostButton.IsEnabled = running && _activeRun!.IsHost;
         StopClientButton.IsEnabled = running && !_activeRun!.IsHost;
@@ -205,12 +211,21 @@ public partial class MainWindow : Window
         HideKeyButton.IsEnabled = _keyWork is not null || HostKeyText.Text.Length > 0;
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e) => StartBusy(RunSelfCheckAsync);
-    private void SelfCheckButton_Click(object sender, RoutedEventArgs e) => StartBusy(RunSelfCheckAsync);
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_isolatedUi) { return; }
+        StartBusy(RunSelfCheckAsync);
+    }
+
+    private void SelfCheckButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isolatedUi) { return; }
+        StartBusy(RunSelfCheckAsync);
+    }
 
     private void StartBusy(Func<Task> work)
     {
-        if (!CanStart) { return; }
+        if (_isolatedUi || !CanStart) { return; }
         _busy = true;
         // 先建立可回收任务，再做可能抛出的 UI 更新，避免留下永远为 true 的 busy。
         _busyTask = RunBusyAsync(work);
@@ -236,6 +251,7 @@ public partial class MainWindow : Window
 
     private async Task RunSelfCheckAsync()
     {
+        if (_isolatedUi) { return; }
         AcceptanceRun run = BeginRun("info");
         try
         {
@@ -262,7 +278,7 @@ public partial class MainWindow : Window
 
     private void HostButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanStart || !_ready) { return; }
+        if (_isolatedUi || !CanStart || !_ready) { return; }
         try
         {
             PeerKeyBox.Clear();
@@ -278,7 +294,7 @@ public partial class MainWindow : Window
 
     private void ClientButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanStart || !_ready) { return; }
+        if (_isolatedUi || !CanStart || !_ready) { return; }
         byte[] key = Array.Empty<byte>();
         bool transferred = false;
         try
@@ -339,8 +355,9 @@ public partial class MainWindow : Window
         ClientPendingText.Text = string.Empty;
         ApprovalStatusText.Text = "尚未提交决定。已提交不等于已授权；短码仅作人工关联。";
         ResultBanner.Visibility = Visibility.Collapsed;
-        ShowBanner(isHost
-            ? "HOST —— 启动后监听 180 秒，到时正常结算；提前停止会作废本轮。"
+        ShowBanner(_isolatedUi
+            ? "本机专项正在初始化；等待人工审批，pending 不代表认证成功。"
+            : isHost ? "HOST —— 启动后监听 180 秒，到时正常结算；提前停止会作废本轮。"
             : "CLIENT —— 正在依次跑四个场景。pending 不代表认证成功，M4 还需两机证据核对。",
             Brushes.AliceBlue, Brushes.DarkBlue);
         UpdateButtons();
@@ -407,18 +424,27 @@ public partial class MainWindow : Window
         {
             state.Run.Log.WriteLine($"[UI][RESULT][CORRECTION] outcome={settled.Code()} // 角色结算后发生故障或中止，原结论无效。");
         }
-        ShowResult(settled, state.AuthenticationFailure ?? (state.IsHost
-            ? "请配对控制端日志，核对 Host registry 实测及自然注销；不是只看连接条数。"
-            : "控制端本地观测不等于 M4 通过；请核对 [CLIENT][RESULT] 与两机交叉核对清单。"));
-        HostWindowText.Text = "本轮任务已收回；下次开始会建立独立的 180 秒监听窗口与审批收件箱。";
+        ShowResult(settled, _isolatedUi
+            ? (state.AuthenticationFailure is { } failure ? failure + "。" : string.Empty) + IsolatedScope
+            : state.AuthenticationFailure ?? (state.IsHost
+                ? "请配对控制端日志，核对 Host registry 实测及自然注销；不是只看连接条数。"
+                : "控制端本地观测不等于 M4 通过；请核对 [CLIENT][RESULT] 与两机交叉核对清单。"));
+        HostWindowText.Text = _isolatedUi
+            ? "本轮任务已收回；再次开始使用新的临时身份与审批收件箱，认证后观察最长 120 秒。"
+            : "本轮任务已收回；下次开始会建立独立的 180 秒监听窗口与审批收件箱。";
         if (!_closing && !_faulted)
         {
             ShowBanner("本轮已收尾。再次开始会创建新的 Run ID、日志与审批收件箱。", Brushes.WhiteSmoke, Brushes.DimGray);
         }
     }
 
-    private void StopHostButton_Click(object sender, RoutedEventArgs e) => StopCurrentRun("UI 提前停止监听");
-    private void StopClientButton_Click(object sender, RoutedEventArgs e) => StopCurrentRun("UI 中止控制端");
+    private void StopHostButton_Click(object sender, RoutedEventArgs e) =>
+        StopCurrentRun(_isolatedUi ? "UI 停止本机专项" : "UI 提前停止监听");
+    private void StopClientButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isolatedUi) { return; }
+        StopCurrentRun("UI 中止控制端");
+    }
 
     private void StopCurrentRun(string source)
     {

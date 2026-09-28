@@ -78,6 +78,195 @@ public sealed class AuthenticationDeadlineTests
     }
 
     [Fact]
+    public async Task Early_Timer_Rearms_Without_Cancelling_Or_Extending_The_Monotonic_Deadline()
+    {
+        ManualDeadlineClock manual = new();
+        TimerCaptureClock clock = new(manual);
+        TimeSpan budget = TimeSpan.FromMilliseconds(600);
+        using AuthenticationDeadline deadline = new(clock, budget, CancellationToken.None);
+        int callbacks = 0;
+        using CancellationTokenRegistration registration = deadline.Token.Register(() => callbacks++);
+
+        manual.Advance(TimeSpan.FromMilliseconds(200), fireTimers: false);
+        clock.FireEarlyCallback();
+        Assert.False(deadline.Token.IsCancellationRequested);
+        Assert.Equal(TimeSpan.FromMilliseconds(400), clock.LastDueTime);
+
+        manual.Advance(TimeSpan.FromMilliseconds(399.5), fireTimers: false);
+        clock.FireEarlyCallback();
+        Assert.False(deadline.Token.IsCancellationRequested);
+        Assert.False(deadline.IsExpired);
+        Assert.Equal(TimeSpan.FromMilliseconds(0.5), deadline.Remaining);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), clock.LastDueTime);
+        Assert.Equal(0, callbacks);
+
+        // 重排的最小 timer 粒度不是审批宽限：原始截止到达时，接受判据必须已经超时。
+        manual.Advance(TimeSpan.FromMilliseconds(0.5), fireTimers: false);
+        Assert.True(deadline.IsExpired);
+        Assert.Equal(TimeSpan.Zero, deadline.Remaining);
+        Assert.False(deadline.Token.IsCancellationRequested);
+        TaskCompletionSource<int> clientActivity = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.Equal(ControlAuthSession.RejectApprovalTimeout,
+            await ControlAuthSession.ApprovalStopAsync(deadline, clientActivity.Task, CancellationToken.None));
+
+        manual.Advance(TimeSpan.FromMilliseconds(0.5));
+        Assert.True(deadline.Token.IsCancellationRequested);
+        Assert.Equal(1, callbacks);
+        clock.FireCapturedCallback();
+        Assert.Equal(1, callbacks);
+        Assert.Equal(1, manual.TimerCount);
+    }
+
+    [Fact]
+    public void Synchronous_Early_Timer_During_Construction_Is_Rearmed_After_Publication()
+    {
+        ManualDeadlineClock manual = new();
+        TimerCaptureClock? clock = null;
+        clock = new(manual, () =>
+        {
+            manual.Advance(TimeSpan.FromSeconds(3), fireTimers: false);
+            clock!.FireEarlyCallback();
+        });
+        using AuthenticationDeadline deadline = new(clock, Budget, CancellationToken.None);
+
+        Assert.False(deadline.Token.IsCancellationRequested);
+        Assert.Equal(TimeSpan.FromSeconds(7), deadline.Remaining);
+        Assert.Equal(TimeSpan.FromSeconds(7), clock.LastDueTime);
+        manual.Advance(TimeSpan.FromSeconds(7));
+        Assert.True(deadline.IsExpired);
+        Assert.True(deadline.Token.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void Early_Timer_Queued_Before_Dispose_Does_Not_Rearm_Or_Cancel_After_Dispose()
+    {
+        ManualDeadlineClock manual = new();
+        TimerCaptureClock clock = new(manual);
+        using AuthenticationDeadline deadline = new(clock, Budget, CancellationToken.None);
+        CancellationToken token = deadline.Token;
+        int changes = clock.ChangeCount;
+
+        deadline.Dispose();
+        Assert.Null(Record.Exception(clock.FireCapturedCallback));
+        Assert.Equal(changes, clock.ChangeCount);
+        Assert.Equal(0, manual.TimerCount);
+        Assert.False(token.IsCancellationRequested);
+        Assert.False(deadline.IsExpired);
+    }
+
+    [Fact]
+    public void Timer_Rearm_Does_Not_Swallow_Unexpected_Change_Errors()
+    {
+        ManualDeadlineClock manual = new();
+        TimerCaptureClock clock = new(manual);
+        using AuthenticationDeadline deadline = new(clock, Budget, CancellationToken.None);
+        InvalidOperationException failure = new("受控 timer 重排故障。");
+        clock.BeforeChange = () => throw failure;
+
+        Assert.Same(failure, Assert.Throws<InvalidOperationException>(clock.FireEarlyCallback));
+        Assert.False(deadline.Token.IsCancellationRequested);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Early_Rearm_Racing_Another_Callback_Or_Dispose_Does_Not_Leave_A_Stale_Timer(bool dispose)
+    {
+        ManualDeadlineClock manual = new();
+        TimerCaptureClock clock = new(manual);
+        TimeSpan budget = TimeSpan.FromMilliseconds(600);
+        using AuthenticationDeadline deadline = new(clock, budget, CancellationToken.None);
+        CancellationToken token = deadline.Token;
+        using ManualResetEventSlim changing = new();
+        using ManualResetEventSlim release = new();
+        using ManualResetEventSlim secondStarted = new();
+        int calls = 0;
+        bool released = false;
+        clock.BeforeChange = () =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                changing.Set();
+                released = release.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        Exception? firstError = null;
+        Exception? secondError = null;
+        Thread first = new(() => firstError = Record.Exception(clock.FireEarlyCallback)) { IsBackground = true };
+        Thread second = new(() =>
+        {
+            secondStarted.Set();
+            secondError = Record.Exception(dispose ? deadline.Dispose : clock.FireCapturedCallback);
+        }) { IsBackground = true };
+
+        manual.Advance(TimeSpan.FromMilliseconds(200), fireTimers: false);
+        first.Start();
+        bool secondRunning = false;
+        try
+        {
+            Assert.True(changing.Wait(TimeSpan.FromSeconds(10)), "提前回调必须进入重排。");
+            manual.Advance(TimeSpan.FromMilliseconds(200), fireTimers: false);
+            second.Start();
+            secondRunning = true;
+            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10)), "第二个操作必须启动。");
+        }
+        finally
+        {
+            release.Set();
+            Assert.True(first.Join(TimeSpan.FromSeconds(10)), "第一个回调必须退出。");
+            if (secondRunning)
+            {
+                Assert.True(second.Join(TimeSpan.FromSeconds(10)), "第二个操作必须退出。");
+            }
+        }
+
+        Assert.True(released);
+        Assert.Null(firstError);
+        Assert.Null(secondError);
+        Assert.False(token.IsCancellationRequested);
+        if (dispose)
+        {
+            int changes = clock.ChangeCount;
+            Assert.Equal(0, manual.TimerCount);
+            Assert.Null(Record.Exception(clock.FireCapturedCallback));
+            Assert.Equal(changes, clock.ChangeCount);
+            manual.Advance(budget);
+            Assert.False(token.IsCancellationRequested);
+        }
+        else
+        {
+            Assert.Equal(2, calls);
+            Assert.Equal(TimeSpan.FromMilliseconds(200), clock.LastDueTime);
+            manual.Advance(TimeSpan.FromMilliseconds(200));
+            Assert.True(deadline.IsExpired);
+            Assert.True(token.IsCancellationRequested);
+        }
+    }
+
+    [Fact]
+    public void Timer_Cancellation_Callback_Can_Dispose_The_Deadline_From_Another_Thread()
+    {
+        ManualDeadlineClock clock = new();
+        using AuthenticationDeadline deadline = new(clock, Budget, CancellationToken.None);
+        CancellationToken token = deadline.Token;
+        bool disposed = false;
+        Exception? workerError = null;
+        using CancellationTokenRegistration registration = token.Register(() =>
+        {
+            Thread worker = new(() => workerError = Record.Exception(deadline.Dispose)) { IsBackground = true };
+            worker.Start();
+            disposed = worker.Join(TimeSpan.FromSeconds(10));
+        });
+
+        clock.Advance(Budget);
+
+        Assert.True(disposed, "通知取消不得持有重排锁，否则等待释放线程会死锁。");
+        Assert.Null(workerError);
+        Assert.True(token.IsCancellationRequested);
+        Assert.Equal(0, clock.TimerCount);
+    }
+
+    [Fact]
     public void Utc_Jumps_Do_Not_Affect_Expiration_Remaining_Or_Timer_Dispatch()
     {
         ManualDeadlineClock clock = new();
@@ -545,10 +734,15 @@ public sealed class AuthenticationDeadlineTests
     }
 
     // 捕获入口以模拟释放后才进入的回调，也可在创建返回前推进时钟。
-    private sealed class TimerCaptureClock(ManualDeadlineClock inner, Action? duringCreation = null) : TimeProvider
+    internal sealed class TimerCaptureClock(ManualDeadlineClock inner, Action? duringCreation = null) : TimeProvider
     {
         private TimerCallback? _callback;
         private object? _state;
+        private ITimer? _innerTimer;
+
+        public Action? BeforeChange { get; set; }
+        public TimeSpan LastDueTime { get; private set; }
+        public int ChangeCount { get; private set; }
 
         public override long TimestampFrequency => inner.TimestampFrequency;
 
@@ -560,12 +754,35 @@ public sealed class AuthenticationDeadlineTests
         {
             _callback = callback;
             _state = state;
-            ITimer timer = inner.CreateTimer(callback, state, dueTime, period);
+            _innerTimer = inner.CreateTimer(callback, state, dueTime, period);
+            LastDueTime = dueTime;
+            ITimer timer = new CapturedTimer(this, _innerTimer);
             duringCreation?.Invoke();
             return timer;
         }
 
+        public void FireEarlyCallback()
+        {
+            // 一次性 timer 在回调前已经停用，不能让原来的排期掩盖漏掉重排的问题。
+            _innerTimer!.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            FireCapturedCallback();
+        }
+
         public void FireCapturedCallback() => _callback!(_state);
+
+        private sealed class CapturedTimer(TimerCaptureClock owner, ITimer innerTimer) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                owner.BeforeChange?.Invoke();
+                owner.ChangeCount++;
+                owner.LastDueTime = dueTime;
+                return innerTimer.Change(dueTime, period);
+            }
+
+            public void Dispose() => innerTimer.Dispose();
+            public ValueTask DisposeAsync() => innerTimer.DisposeAsync();
+        }
     }
 
     // 精确模拟“已经取得起点，但建立 timer 前消耗了时间”，不依赖真实等待。

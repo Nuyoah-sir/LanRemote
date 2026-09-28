@@ -55,6 +55,7 @@ import zipfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROJECT = os.path.join(REPO_ROOT, "tools", "LanRemote.Acceptance", "LanRemote.Acceptance.csproj")
+ISOLATED_PROJECT = os.path.join(REPO_ROOT, "tools", "LanRemote.IsolatedAcceptance", "LanRemote.IsolatedAcceptance.csproj")
 EXCLUDED_SCRIPT_EXTENSIONS = frozenset({".ps1", ".cmd", ".bat"})
 
 
@@ -77,17 +78,19 @@ def find_dotnet() -> str:
     return os.path.join(os.path.expanduser("~"), ".dotnet", "dotnet.exe")
 
 
-def publish(publish_dir: str) -> None:
+def publish(publish_dir: str, project: str | None = None) -> None:
+    if project is None:
+        project = PROJECT
     dotnet = find_dotnet()
     if not os.path.isfile(dotnet):
         raise SystemExit(f"dotnet.exe not found (looked at {dotnet}); source scripts/env.sh first")
 
-    print(f"publishing   : {os.path.relpath(PROJECT, REPO_ROOT)}")
+    print(f"publishing   : {os.path.relpath(project, REPO_ROOT)}")
     subprocess.run(
         [
             dotnet,
             "publish",
-            PROJECT,
+            project,
             "-c", "Release",
             "-r", "win-x64",
             "--self-contained", "true",
@@ -101,6 +104,7 @@ def publish(publish_dir: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the self-contained WPF acceptance package.")
     parser.add_argument("--milestone", choices=("m4",), default="m4")
+    parser.add_argument("--isolated-ui", action="store_true", help="仅打包本机隔离窗口的 WinExe 启动器")
     parser.add_argument("--manual", help="Explicit acceptance manual for the selected milestone")
     parser.add_argument("--output-dir", default=REPO_ROOT)
     args = parser.parse_args()
@@ -123,10 +127,14 @@ def main() -> None:
     # 每次发布到独立新目录；不复用或删除任何旧发布产物，失败目录也保留。
     artifacts_dir = os.path.join(REPO_ROOT, "artifacts")
     os.makedirs(artifacts_dir, exist_ok=True)
-    publish_dir = tempfile.mkdtemp(prefix=args.milestone + "-acceptance-", dir=artifacts_dir)
-    publish(publish_dir)
+    package_kind = "isolated-ui" if args.isolated_ui else "acceptance"
+    publish_dir = tempfile.mkdtemp(prefix=f"{args.milestone}-{package_kind}-", dir=artifacts_dir)
+    if args.isolated_ui:
+        publish(publish_dir, project=ISOLATED_PROJECT)
+    else:
+        publish(publish_dir)
 
-    zip_path = os.path.join(output_dir, f"LanRemote-{version}-{args.milestone}-acceptance-win-x64.zip")
+    zip_path = os.path.join(output_dir, f"LanRemote-{version}-{args.milestone}-{package_kind}-win-x64.zip")
 
     file_count = 0
     total_bytes = 0
@@ -137,6 +145,9 @@ def main() -> None:
                 name = file_name.casefold()
                 if (os.path.splitext(name)[1] in EXCLUDED_SCRIPT_EXTENSIONS
                         or name == "start-here" or name.startswith("start-here.")):
+                    continue
+                # 隔离包保留被引用的 DLL 和资源，但不交付普通入口或快捷方式。
+                if args.isolated_ui and (name == "lanremote.acceptance.exe" or name.endswith(".lnk")):
                     continue
                 full_path = os.path.join(root, file_name)
                 rel_path = os.path.relpath(full_path, publish_dir)

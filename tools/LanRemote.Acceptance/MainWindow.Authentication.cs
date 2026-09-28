@@ -20,12 +20,12 @@ public partial class MainWindow
     private IReadOnlyList<LocalApprovalSnapshot> _displayedApprovals = Array.Empty<LocalApprovalSnapshot>();
     private RunState? _displayedApprovalOwner;
 
-    private bool CanViewHostKey() => !_closing && !_faulted && _activeRun is { IsHost: true } state
+    private bool CanViewHostKey() => !_isolatedUi && !_closing && !_faulted && _activeRun is { IsHost: true } state
         && _runTask is { IsCompleted: false } && state.GetHostContext() is not null;
 
     private void ShowKeyButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanViewHostKey() || _keyTask is not null || _keyConfirming) { return; }
+        if (_isolatedUi || !CanViewHostKey() || _keyTask is not null || _keyConfirming) { return; }
         _keyConfirming = true;
         try
         {
@@ -150,7 +150,9 @@ public partial class MainWindow
         RunState? state = _activeRun;
         if (state is { IsHost: true, IsStopped: false })
         {
-            HostWindowText.Text = $"预定监听窗口：成功监听后 180 秒；本轮已用 {Stopwatch.GetElapsedTime(state.Started).TotalSeconds:0} 秒（含初始化/清理，不是监听倒计时）。到时正常结算，提前停止作废。";
+            HostWindowText.Text = _isolatedUi
+                ? "活动专项：认证后观察最长 120 秒；停止或关窗为 INVALID_RUN。错误证明专项：批准后应拒绝并自动收尾为 FAIL。"
+                : $"预定监听窗口：成功监听后 180 秒；本轮已用 {Stopwatch.GetElapsedTime(state.Started).TotalSeconds:0} 秒（含初始化/清理，不是监听倒计时）。到时正常结算，提前停止作废。";
         }
         ControlClientApprovalPending? pending = state?.GetPending();
         ClientPendingText.Text = pending is null ? string.Empty
@@ -251,6 +253,7 @@ public partial class MainWindow
         private AcceptanceContext? _context;
         private ControlClientApprovalPending? _pending;
         private string? _authenticationFailure;
+        private string? _isolatedStatus;
         private bool _stopped;
 
         public RunState(AcceptanceRun run, CancellationTokenSource cts, bool isHost)
@@ -271,6 +274,12 @@ public partial class MainWindow
         public LocalApprovalInbox? Inbox { get; }
         public bool IsStopped { get { lock (_gate) { return _stopped; } } }
         public string? AuthenticationFailure { get { lock (_gate) { return _authenticationFailure; } } }
+
+        // 每轮只保留一份有界状态；迟到回调最多覆盖旧 state，不会向新一轮投递 UI 工作。
+        public void PublishIsolatedStatus(string status) =>
+            Volatile.Write(ref _isolatedStatus, status.Length <= 512 ? status : status[..512]);
+
+        public string? GetIsolatedStatus() => Volatile.Read(ref _isolatedStatus);
 
         public void PublishContext(AcceptanceContext context)
         {

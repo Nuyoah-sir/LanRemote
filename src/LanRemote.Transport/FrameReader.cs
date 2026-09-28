@@ -102,8 +102,15 @@ public sealed class FrameReader
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
+        using CancellationTokenSource stage = CreateStageCancellation(timeout, cancellationToken);
+        return await ReadLengthPrefixAsync(stage.Token).ConfigureAwait(false);
+    }
+
+    // 调用方已经持有绝对 deadline 时直接使用其令牌，不再建立独立系统 timer。
+    internal async Task<uint> ReadLengthPrefixAsync(CancellationToken cancellationToken)
+    {
         byte[] buffer = new byte[TransportConstants.LengthPrefixBytes];
-        await ReadExactlyAsync(buffer, timeout, cancellationToken).ConfigureAwait(false);
+        await ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
         return BinaryPrimitives.ReadUInt32BigEndian(buffer);
     }
 
@@ -121,11 +128,18 @@ public sealed class FrameReader
         CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(lengthBytes);
+        using CancellationTokenSource stage = CreateStageCancellation(timeout, cancellationToken);
+        return await ReadPayloadAsync(lengthBytes, stage.Token).ConfigureAwait(false);
+    }
 
+    // 与前缀相同，外部 deadline 覆盖整段读取；失败时仍清零整个 payload。
+    internal async Task<byte[]> ReadPayloadAsync(int lengthBytes, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(lengthBytes);
         byte[] buffer = new byte[lengthBytes];
         try
         {
-            await ReadExactlyAsync(buffer, timeout, cancellationToken).ConfigureAwait(false);
+            await ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
             return buffer;
         }
         catch
@@ -166,27 +180,34 @@ public sealed class FrameReader
         return await ReadPayloadAsync(lengthBytes, payloadTimeout, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task ReadExactlyAsync(
-        byte[] buffer,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
+    private static CancellationTokenSource CreateStageCancellation(TimeSpan timeout, CancellationToken cancellationToken)
     {
         if (timeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "读取时限必须为正。");
         }
 
-        // 这一段自己的绝对 deadline：从进入本段开始计时，中途读到多少字节都不重置。
-        using CancellationTokenSource stageCts =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationTokenSource stage = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        try
+        {
+            stage.CancelAfter(timeout);
+            return stage;
+        }
+        catch
+        {
+            stage.Dispose();
+            throw;
+        }
+    }
 
-        stageCts.CancelAfter(timeout);
-
+    private async Task ReadExactlyAsync(byte[] buffer, CancellationToken cancellationToken)
+    {
+        // 同一令牌覆盖整段，分片不能重置计时或留下超时后的后台读。
         int offset = 0;
         while (offset < buffer.Length)
         {
             int read = await _stream
-                .ReadAsync(buffer.AsMemory(offset), stageCts.Token)
+                .ReadAsync(buffer.AsMemory(offset), cancellationToken)
                 .ConfigureAwait(false);
 
             if (read == 0)

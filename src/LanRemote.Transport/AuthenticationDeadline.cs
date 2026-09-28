@@ -9,6 +9,8 @@ internal sealed class AuthenticationDeadline : IDisposable
     private readonly CancellationTokenSource _cancellation;
     private readonly ITimer? _timer;
     private readonly CancellationTokenRegistration _parentRegistration;
+    private readonly object _timerGate = new();
+    private bool _disposed;
 
     public AuthenticationDeadline(TimeProvider clock, TimeSpan budget, CancellationToken cancellationToken)
     {
@@ -19,7 +21,7 @@ internal sealed class AuthenticationDeadline : IDisposable
         _budget = budget;
         _startTimestamp = clock.GetTimestamp();
 
-        // 注册与 timer 创建均可能同步回调；必须先初始化回调唯一依赖的 CTS。
+        // 注册与 timer 创建均可能同步回调；必须先初始化截止状态和 CTS。
         _cancellation = new CancellationTokenSource();
         try
         {
@@ -30,16 +32,17 @@ internal sealed class AuthenticationDeadline : IDisposable
             TimeSpan remaining = Remaining;
             if (remaining > TimeSpan.Zero)
             {
-                _timer = clock.CreateTimer(
-                    static state => ((AuthenticationDeadline)state!).CancelFromCallback(),
+                ITimer timer = clock.CreateTimer(
+                    static state => ((AuthenticationDeadline)state!).OnTimer(),
                     this, remaining, Timeout.InfiniteTimeSpan);
+                lock (_timerGate)
+                {
+                    _timer = timer;
+                }
             }
 
-            // 零预算及初始化期间耗尽的预算不依赖 timer 派发。
-            if (remaining == TimeSpan.Zero || IsExpired)
-            {
-                Cancel();
-            }
+            // 创建可能同步触发并消耗一次性 timer；发布后按原始截止重排或立即取消。
+            OnTimer();
         }
         catch
         {
@@ -74,6 +77,31 @@ internal sealed class AuthenticationDeadline : IDisposable
         }
     }
 
+    private void OnTimer()
+    {
+        lock (_timerGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            TimeSpan remaining = Remaining;
+            if (remaining > TimeSpan.Zero)
+            {
+                // timer 可能按毫秒截断并提前唤醒；不足 1ms 时避免重排为零形成忙循环。
+                // 这里只调整通知排期，接受判据仍使用原始单调截止。
+                _timer?.Change(
+                    remaining < TimeSpan.FromMilliseconds(1) ? TimeSpan.FromMilliseconds(1) : remaining,
+                    Timeout.InfiniteTimeSpan);
+                return;
+            }
+        }
+
+        // 不在重排锁内通知任意外部回调，避免与回调中的 Dispose 相互等待。
+        CancelFromCallback();
+    }
+
     private void CancelFromCallback()
     {
         try
@@ -88,6 +116,12 @@ internal sealed class AuthenticationDeadline : IDisposable
 
     public void Dispose()
     {
+        lock (_timerGate)
+        {
+            // 先阻止重排，再在锁外释放；父取消注册的释放可能等待正在执行的回调。
+            _disposed = true;
+        }
+
         // 释放不等于取消，避免在收尾路径同步执行 gate 的取消回调。
         _timer?.Dispose();
         _parentRegistration.Dispose();

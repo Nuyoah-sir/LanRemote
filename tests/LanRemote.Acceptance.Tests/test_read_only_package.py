@@ -69,11 +69,14 @@ class M4PackageTests(unittest.TestCase):
         self.dotnet = self.root / "dotnet.exe"
         self.dotnet.write_bytes(b"test-only-placeholder")
         self.project = self.root / "tools/LanRemote.Acceptance/LanRemote.Acceptance.csproj"
+        self.isolated_project = self.root / "tools/LanRemote.IsolatedAcceptance/LanRemote.IsolatedAcceptance.csproj"
         self.package = self.root / "LanRemote-test-m4-acceptance-win-x64.zip"
+        self.isolated_package = self.root / "LanRemote-test-m4-isolated-ui-win-x64.zip"
         self.published = []
         patches = (
             mock.patch.dict(self.main.__globals__, {
                 "REPO_ROOT": str(self.root), "PROJECT": str(self.project),
+                "ISOLATED_PROJECT": str(self.isolated_project),
                 "find_dotnet": lambda: str(self.dotnet), "read_version": lambda: "test",
             }),
             mock.patch.dict(os.environ, {"LANREMOTE_M3_SKIP_PUBLISH": "0"}),
@@ -88,22 +91,29 @@ class M4PackageTests(unittest.TestCase):
         self.run = run_patch.start()
         self.addCleanup(run_patch.stop)
 
-    def _publish_artifacts(self, command, *, check, cwd):
+    def _publish_artifacts(self, command, *, check, cwd, isolated_ui=False):
         published = Path(command[command.index("-o") + 1])
+        project = self.isolated_project if isolated_ui else self.project
         self.assertEqual(command, [
-            str(self.dotnet), "publish", str(self.project), "-c", "Release",
+            str(self.dotnet), "publish", str(project), "-c", "Release",
             "-r", "win-x64", "--self-contained", "true", "-o", str(published),
         ])
         self.assertTrue(check)
         self.assertEqual(cwd, str(self.root))
         self.assertEqual(published.parent, self.artifacts)
-        self.assertTrue(published.name.startswith("m4-acceptance-"))
+        prefix = "m4-isolated-ui-" if isolated_ui else "m4-acceptance-"
+        self.assertTrue(published.name.startswith(prefix))
         self.assertTrue(published.is_dir())
         self.assertEqual(list(published.iterdir()), [])
         self.assertNotIn(published, self.published)
         self.published.append(published)
-        (published / "LanRemote.Acceptance.exe").write_bytes(
-            f"test-only-publish-{len(self.published)}".encode("ascii"))
+        entry = "LanRemote.IsolatedAcceptance.exe" if isolated_ui else "LanRemote.Acceptance.exe"
+        (published / entry).write_bytes(f"test-only-publish-{len(self.published)}".encode("ascii"))
+        if isolated_ui:
+            (published / "LanRemote.Acceptance.exe").write_bytes(b"ordinary-entry-must-not-ship")
+            for name in ("LanRemote.Acceptance.dll", "LanRemote.IsolatedAcceptance.dll",
+                         "LanRemote.IsolatedAcceptance.deps.json", "LanRemote.IsolatedAcceptance.runtimeconfig.json"):
+                (published / name).write_bytes(b"test-only-dependency")
         (published / "data.bin").write_bytes(b"keep")
         (published / "assets/nested").mkdir(parents=True)
         (published / "assets/nested/data.bin").write_bytes(b"nested-keep")
@@ -113,13 +123,19 @@ class M4PackageTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.main()
 
-    def _assert_package(self, manual_name="START-HERE.txt"):
-        with zipfile.ZipFile(self.package) as archive:
+    def _assert_package(self, manual_name="START-HERE.txt", isolated_ui=False):
+        package = self.isolated_package if isolated_ui else self.package
+        entry = "LanRemote.IsolatedAcceptance.exe" if isolated_ui else "LanRemote.Acceptance.exe"
+        dependencies = ["LanRemote.Acceptance.dll", "LanRemote.IsolatedAcceptance.dll",
+                        "LanRemote.IsolatedAcceptance.deps.json", "LanRemote.IsolatedAcceptance.runtimeconfig.json"] if isolated_ui else []
+        with zipfile.ZipFile(package) as archive:
             self.assertCountEqual(archive.namelist(), [
-                "LanRemote.Acceptance.exe", "data.bin", "assets/nested/data.bin", manual_name,
+                entry, "data.bin", "assets/nested/data.bin", manual_name, *dependencies,
             ])
+            for name in dependencies:
+                self.assertEqual(archive.read(name), b"test-only-dependency")
             self.assertEqual(archive.read(manual_name), self.manual.read_bytes())
-            self.assertEqual(archive.read("LanRemote.Acceptance.exe"),
+            self.assertEqual(archive.read(entry),
                              f"test-only-publish-{len(self.published)}".encode("ascii"))
             self.assertEqual(archive.read("data.bin"), b"keep")
             self.assertEqual(archive.read("assets/nested/data.bin"), b"nested-keep")
@@ -262,6 +278,106 @@ class M4PackageTests(unittest.TestCase):
             self._make_package()
         self.assertEqual(self.run.call_count, 1)
         archive.assert_not_called()
+        self.assertFalse(self.package.exists())
+        self.assertEqual(old_exe.read_bytes(), b"old-output-must-stay")
+        self.assertTrue(self.published[0].is_dir())
+
+    def test_publish_default_interface_and_optional_project(self):
+        publish = self.main.__globals__["publish"]
+        self.run.side_effect = None
+        with contextlib.redirect_stdout(io.StringIO()):
+            publish(str(self.root))
+            publish(str(self.root), project=str(self.isolated_project))
+        self.assertEqual(self.run.call_args_list, [
+            mock.call([str(self.dotnet), "publish", str(project), "-c", "Release",
+                       "-r", "win-x64", "--self-contained", "true", "-o", str(self.root)],
+                      check=True, cwd=str(self.root))
+            for project in (self.project, self.isolated_project)
+        ])
+
+    def test_isolated_package_uses_fresh_dedicated_output_and_preserves_normal_path(self):
+        self.run.side_effect = self._publish_artifacts
+        self._make_package()
+        self._assert_package()
+        normal_zip = self.package.read_bytes()
+        for name in ("m4-isolated-ui", "m4-isolated-ui-previous"):
+            old = self.artifacts / name
+            old.mkdir()
+            (old / "old-only.bin").write_bytes(b"old-output-must-stay")
+        preserved = {path: path.read_bytes() for path in self.artifacts.rglob("*") if path.is_file()}
+        self.run.side_effect = lambda *args, **kwargs: self._publish_artifacts(*args, isolated_ui=True, **kwargs)
+        with mock.patch.object(sys, "argv", [*sys.argv, "--isolated-ui"]):
+            for _ in range(2):
+                self._make_package()
+                self._assert_package(isolated_ui=True)
+                self.assertEqual(self.package.read_bytes(), normal_zip)
+                for path, content in preserved.items():
+                    self.assertEqual(path.read_bytes(), content)
+                preserved.update({path: path.read_bytes() for path in self.published[-1].rglob("*") if path.is_file()})
+        isolated_zip = self.isolated_package.read_bytes()
+        # 同一进程返回默认分支，项目、发布前缀、包名和普通入口仍全部保持原行为。
+        self.run.side_effect = self._publish_artifacts
+        self._make_package()
+        self._assert_package()
+        self.assertEqual(self.isolated_package.read_bytes(), isolated_zip)
+        self.assertEqual(self.run.call_count, 4)
+        self.assertEqual(len(set(self.published)), 4)
+        self.assertEqual(len(list(self.artifacts.iterdir())), 6)
+
+    def test_isolated_package_keeps_dependencies_without_scripts_shortcuts_or_ordinary_entry(self):
+        excluded = []
+
+        def publish_with_unwanted_entries(*args, **kwargs):
+            result = self._publish_artifacts(*args, isolated_ui=True, **kwargs)
+            for parent in (self.published[-1], self.published[-1] / "old/nested/deeper"):
+                parent.mkdir(parents=True, exist_ok=True)
+                for name in ("LanRemote.Acceptance.exe", "LANREMOTE.ACCEPTANCE.EXE", "START.lnk", "old.LNK",
+                             "set-lab-ip.ps1", "run.PS1", "START.cmd", "old.CMD", "setup.bat", "old.BAT",
+                             "START-HERE.txt", "start-here.md"):
+                    path = parent / name
+                    path.write_bytes(b"excluded-file-must-stay")
+                    excluded.append(path)
+            return result
+
+        self.run.side_effect = publish_with_unwanted_entries
+        with mock.patch.object(sys, "argv", [*sys.argv, "--isolated-ui"]):
+            self._make_package()
+        self._assert_package(isolated_ui=True)
+        self.assertFalse(self.package.exists())
+        self.assertEqual(self.run.call_count, 1)
+        for path in excluded:
+            self.assertEqual(path.read_bytes(), b"excluded-file-must-stay")
+
+    def test_isolated_skip_and_publish_failure_cannot_reuse_old_outputs(self):
+        old = self.artifacts / "m4-isolated-ui"
+        old.mkdir(parents=True)
+        old_exe = old / "LanRemote.IsolatedAcceptance.exe"
+        old_exe.write_bytes(b"old-output-must-stay")
+        with (
+            mock.patch.object(sys, "argv", [*sys.argv, "--isolated-ui"]),
+            mock.patch.dict(os.environ, {"LANREMOTE_M3_SKIP_PUBLISH": "1"}),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as rejected,
+        ):
+            self._make_package()
+        self.assertEqual(rejected.exception.code, 2)
+        self.run.assert_not_called()
+        self.assertEqual(list(self.artifacts.iterdir()), [old])
+
+        def fail_publish(*args, **kwargs):
+            self._publish_artifacts(*args, isolated_ui=True, **kwargs)
+            raise subprocess.CalledProcessError(1, args[0])
+
+        self.run.side_effect = fail_publish
+        with (
+            mock.patch.object(sys, "argv", [*sys.argv, "--isolated-ui"]),
+            mock.patch("zipfile.ZipFile", side_effect=AssertionError("发布失败不得生成包")) as archive,
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            self._make_package()
+        self.assertEqual(self.run.call_count, 1)
+        archive.assert_not_called()
+        self.assertFalse(self.isolated_package.exists())
         self.assertFalse(self.package.exists())
         self.assertEqual(old_exe.read_bytes(), b"old-output-must-stay")
         self.assertTrue(self.published[0].is_dir())
