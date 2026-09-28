@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（用户明确确认上一轮实屏情况都正常；原日志与实屏配齐，按既有DoD完成M4收口，见§18.25）**
+> 更新时间：**2026-09-29（M4按明确实屏确认收口；随后M5视频基础件1c710a9完成，Debug/Release各1739 PASS，见§18.25/§19）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> 认证阶段5主实现 `6c7a15b` / 测试修正 `7a9d199`；现网修复 `bc8cf48`，审批界面修正 `67c7d7e`；跨层回归及内部接缝 `608f5c6`、Debug / Release 全量各 **1336 PASS / 0 FAIL / 0 SKIP**及构建均 **0 警告 / 0 错误**属 **§18.21 历史记录**。最新代码为 `2596357`，该代码轮 Debug / Release 全量各 **1433 PASS / 0 FAIL / 0 SKIP**，构建均 **0 警告 / 0 错误**，Python打包 **14/14 PASS**，见 §18.22。此前1329是审批修正版的历史证据。
+> **最新代码：`1c710a9`（M5视频基础件）。本轮Debug/Release各1739 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：M4已按原DoD收口，继续M5视频最小闭环。** M4代码基线`2596357`双配置各1433 PASS、Python14为既有实测，本轮收口未重新build/test或重打包。用户2026-09-29原话“上一轮询问的实屏情况都正常”补齐唯一余项；不是将交接请求本身视作确认。助手桌面自动化权限未解除，不绕过；不改网，不重跑M4已通过项。
+> **下一关：M5 VideoAttach安全合同与接线，继而GDI/JPEG/渲染闭环。** 已完成有界帧队列、有效payload切片及40字节二进制读写；尚未放行视频TLS、未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -34,12 +34,12 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M4 — Access Key Challenge Auth —— 完成（2026-09-29）。** 阶段0–5实现、自动化、既定两机/GUI人工清单及两条原DoD均满足，逐项证据见§18.25。产品App尚不能看屏或控制键鼠，不能将M4完成等同于v1完成。
-- **下一步：按原计划推进M5视频最小闭环。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
+- **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
+- **下一步：VideoAttach合同与实现，再衔接采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`2596357`**（本机隔离GUI入口、真实场景及打包，认证deadline和客户端读取的截止分类修复，共20个文件）。产品App未改、网络/权限/预算合同不变；旧A/B包67c7d7e未覆盖，新隔离包见§18.22。
-- **Working tree at validation：对应随后提交为2596357的20个源码/测试/打包文件；Debug/Release各1433 PASS、0失败/0跳过，构建0警告/0错误，Python打包14/14**。证据 `outputs/m4-isolated-ui/*-validated.log`、`validated-*.trx`；新独立WinExe另行Debug build及fresh Release publish成功。publish发生在代码提交前，程序集不冒称内嵌2596357，源码归属与包SHA按§18.22关联。失败中间轮日志保留，不刷掉历史；之前1336见§18.21。
+- **Last code commit：`1c710a9`**（M5视频基础件，12文件含ADR-047；实际产品/测试11文件）。产品App、认证/hello/SessionRegistry、网络/权限/预算未改，旧包和安装目录未覆盖。
+- **Working tree at validation：对应随后提交为1c710a9的源码/测试及ADR工作树；Debug/Release各1739 PASS、0失败/0跳过，构建0警告/0错误**。主线程完整solution验证、12份TRX独立汇总一致，证据`outputs/m5-foundation/solution-*-validated.log`及`validated-*.trx`；验证后未再改源码/测试，只记账。未重新publish或打包，M4交付包仍以§18.22为准。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2645,3 +2645,44 @@ fresh源目录`artifacts/m4-isolated-ui-73x0r3z0`；包构建于代码提交前�
 **结论：M4及原21步完整完成，可以顺序推进M5。** 原日志FAIL/INVALID_RUN/UNMET均不改判；e339ed58历史到期轮不再阻断。未重跑已通过专项、未要求截图/DPI矩阵、未改网络或防护、未操控桌面、未重打旧包。v1总清单中的VideoAttach、视频持续运行、输入、多会话等属于后续里程碑，未提前标通过。
 
 **Last code commit：2596357。Working tree at validation：收口前main工作树干净且与origin/main一致，源码/测试/打包文件与§18.22已验证基线一致；本次M4收口仅文档/记忆记账，没有新build/test。** 1433和Python14明确为既有实测，包SHA及四组件归属仍以§18.22–23为准。跨会话旧任务#52/#3不存在于本轮任务列表，不臆造旧任务状态。
+
+## 19. M5 视频最小闭环（2026-09-29，进行中）
+
+M4收口记账提交`c251d21`后推进；本节不覆盖M4原日志结局。**Last code commit：`1c710a9`。Working tree at validation：该提交对应的11个源码/测试文件与ADR-047工作树；最终solution双配置验证后未改代码，提交后再次核对src/tests/tools/scripts无差异。**
+
+### 19.1 首片：帧所有权、DropOldest和二进制framing（完成）
+
+- Core `BoundedFrameQueue<T>`：容量1/2、默认2，有界排队、丢旧释放、拒绝写仍归调用方、读取移交消费者；取消不偷帧，Stop拒绝/唤醒/清空且不会误释放消费者持有的帧。释放失败可观测，先尝试所有存量帧再聚合错误。容量不包括在途帧/同步释放中的旧帧，Stop不是整个管线join。
+- Core `EncodedFrame`：保留旧构造，新增显式有效payloadLength，防止池多租尾部被当作JPEG发送；构造失败不转移owner、有效payload可小于池容量。
+- Transport `VideoFrameHeader/Reader/Writer`：internal 40字节LRVF v1、BE字段、无额外Control前缀，合法头后才租内存；无效字段、超限、截断、取消或重叠调用永久终止，不重试半帧。Writer不拥有调用方帧；Reader成功交付后消费者拥有。v1 flags/reserved、质量与时间戳范围定案ADR-047，不伪称原规格已有全部细则。
+- 未改变现有认证/hello/SessionRegistry或公开流/token访问面，VideoAttach仍未放行。没有真正JPEG编解码/采集/实屏/视频TLS接线，不将合成payload称为JPEG验证。
+
+### 19.2 审查修复与验证
+
+首次审查发现：Reader构造EncodedFrame时的第二次owner.Memory getter能先取消/停止再返回，原实现缺交付终检；owner.Dispose会覆盖主错误；Stream.Dispose失败被吞且不能观测。新增同组20项先红再修再绿，测试文件SHA未变；其中诊断接口缺失类红测不表述为“20项均复现资源泄漏”。修复为未提交帧+最终取消检查+CAS交付提交点、唯一失败清理责任、主异常原实例/类型/令牌保持、有界清理诊断（Reader最多2/Writer最多1）。只读复核解除三项阻断，未放宽断言。
+
+**主线程最终实际执行（SDK 10.0.401）：**
+
+| 项目 | Debug PASS | Release PASS |
+| --- | ---: | ---: |
+| Core | 196 | 196 |
+| Protocol | 299 | 299 |
+| Integration | 3 | 3 |
+| Security | 66 | 66 |
+| Transport | 893 | 893 |
+| Acceptance | 282 | 282 |
+| **合计** | **1739** | **1739** |
+
+- 两配置构建均0警告/0错误，测试0失败/0跳过；12份TRX用独立XML汇总核对Counters、实际结果数量及全部Passed。相对M4的1433净增306：Core+71（队列42、帧模型净增29）、Transport+235（含审查20）；重复定向运行与Python不混入总数。
+- 不在solution内的 `LanRemote.IsolatedAcceptance` 另行Debug/Release build成功，均0警告/0错误；只验证引用兼容，不启动桌面、不重跑M4操作、不publish或覆盖已核验ZIP。
+- Python标准库`struct`独立复核40字节黄金向量及各偏移；未调用生产Writer作为期望值。队列并发/取消专项曾另行5轮每轮6 PASS，仅补充证据。
+- 证据目录 `outputs/m5-foundation/`：`solution-build-{debug,release}-validated.log`、`solution-test-{debug,release}-validated.log`、12份`validated-*.trx`、`launcher-build-*-validated.log`；红绿与同断言SHA见`video-review-summary.log`及`video-review-*.trx`，黄金向量见`video-review-python-golden.log`。初始失败日志保留，outputs不自动入Git，推送不等于上传本地证据。
+
+### 19.3 后续顺序与仍未完成项
+
+1. 已完成：原有capture/encoder抽象与帧模型盘点、有效内存所有权、有界队列、二进制header/parser/reader/writer。
+2. 下一片：VideoAttach精确transcript、16字节nonce、15秒绝对有效窗口/起算点、会话注销竞态和原子验证绑定；给独立黄金向量，再接第二条TLS/pinning/同子网准入。当前`TryGetSessionToken`共享视图不等同原子attach，不能直接放行；未决实施细节须先记ADR，不靠猜测对接。
+3. 随后：GDI主屏采集、50%缩放、JPEG编码与解码/WPF显示，以5 FPS先做最小闭环；现有Control保持读不能新增并行读者，需明确会话交接。无必要不新增Video项目或改TFM。
+4. 最后验证M5 DoD：完整链路10分钟无明显持续内存增长、慢网丢旧且延迟不无限累加、断连join和资源释放。仅队列测试不代替这两条；目前均未运行。
+
+**当前无须用户重复M4人工操作；M5尚未完成。** 不改系统网络/防护、不回写原始规格，不把桌面权限限制当成可绕过的口头授权。下一步继续自主实施可自动验证部分，只有真正人工/权限依赖才提出。

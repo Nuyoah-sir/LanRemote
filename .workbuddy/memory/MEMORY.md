@@ -1,7 +1,7 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR 工作副本 `docs/DECISIONS.md`（010~046；045=现网只读；046=隔离专项/单调截止通知）；规格合同 `LanRemote_Implementation_Package/`（不回写）。
+> ADR 工作副本 `docs/DECISIONS.md`（010~047；045现网只读、046隔离/截止、047视频所有权/framing）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；2026-09-28 收尾压缩重复摘要，后续追加先核实长度。
 > 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
@@ -9,7 +9,9 @@
 
 历史包67c7d7e已过Control A31255177/Bd8fd8b0d及该轮联网/审批/短码、降权A738fbcc1/B67442a17、拒绝A66ef28d0/B8bd52649、错key A509bbe18/Bad5ed4cc（A FAIL/B UNMET符合负例预期）；B密钥六项/A输入遮挡通过，pin仅顺序关联，超时按端口。B监听关窗host1c41d46e的清理证据和用户“是自行消失了”已配齐，该无认证会话专项完整通过、不重跑；63样本/6202.419ms不是退出耗时。细节HANDOFF§18.15–20。A本机可做的应自主做，不推给B；实际桌面自动化仍受限、不绕过。通过项不外推全DPI/内存擦除；旧改网/Undo停用，SAC历史单次授权非产品功能。
 
-最新2596357：本机隔离真实TLS+专用WinExe入口（LanRemote.IsolatedAcceptance.exe），无真实vault/发现、不改网，手动审批。proof翻一位仍FAIL固定文案，活动认证后120秒可停止（先Host快照/Stop再取消客户端，INVALID_RUN）；普通保持5秒/审批60秒不变。修复timer提前回调与FrameReader重复计时导致的拒绝码竞态，确定性复现后修，不放宽断言。最终Debug/Release各1433 PASS（125/299/3/66/658/282），0警告错误失败跳过；Python14。HANDOFF§18.22/outputs/m4-isolated-ui；新包424成员/60.8MiB，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b。提交前fresh构建同源码，不冒称内嵌新hash。旧包67c7d7e未覆盖。现场b42a1553坏proof拒绝/清理、0cd5d3b8人工活动停止/清理日志均通过（停前活动1/client未完、先Host后client）；原FAIL/INVALID_RUN保留。e339ed58超时UNMET为历史。2026-09-29用户明确“上一轮询问的实屏情况都正常”，文案完整可见/停止后恢复/原控件可访问已配齐；按原两条DoD与21步收口M4，见§18.25。可顺序推进M5，不重跑M4、不加DPI；本次收口未重新build/test。
+M4最后2596357双配置1433/Python14；专用隔离WinExe无真实vault/发现，手动审批、不改网。b42a1553坏proof及0cd5d3b8人工活动停止日志均通过，原FAIL/INVALID_RUN不翻绿，e339ed58历史UNMET不阻断。2026-09-29用户明确“上一轮询问的实屏情况都正常”，文案完整可见/恢复操作/原控件可访问配齐，原DoD/21步收口M4（§18.25，记账c251d21），不重跑、不加DPI。隔离ZIP原封保留，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b，424成员；同源码提交前构建，不冒称内嵌2596357。
+
+最新代码1c710a9：M5基础片已完成（§19/ADR-047）。Core有界拥有型队列容量1/2默认2、DropOldest释放/拒绝归调用方/读取移交；EncodedFrame有效payloadLength防池尾部。Transport internal 40字节视频头及reader/writer，先uint验证再分配；v1 flags/reserved0、quality40..85、时间戳0..long.MaxValue。构造后取消终检+CAS交付，失败不重用半帧；清理错误有界可观测、不覆盖主异常，停止不代表join/关闭成功。审查同20项先红后绿，Python独立黄金向量。最终双配置各1739 PASS（196/299/3/66/893/282）、0警告错误失败跳过，独立启动器双build通过；outputs/m5-foundation。无新publish/实屏/视频TLS。下一片VideoAttach精确transcript/nonce16/15秒窗口与原子绑定，再GDI主屏50%/JPEG/5FPS渲染和十分钟慢网DoD；M5未完成，认证/hello/registry/App/原规格未改。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
@@ -56,7 +58,8 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| M5~M11 | 未开始 |
+| **M5** | 进行中：基础片`1c710a9`，双配置各1739 PASS；余attach/采集/JPEG/渲染及持续运行DoD，§19。 |
+| M6~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**；M4 阶段 3 = **`760e950`**。
 远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **helper-selector 陷阱**（源码级定论）：`git-credential-helper-selector` 每次被调必弹 GUI（无静默委托、无桌面即挂起、`--help` 也弹并写配置），「`<no helper>`+Always」= 把 `credential.helper` 写成空串（清链）。**已全局修复（2026-09-21）**：`selected = manager` + 链「空值+`manager`」（repo 级同配双保险）；机器级 fill rc=0、trace 只见 GCM；**勿裸跑 selector**。此后每轮收尾 `git push origin main`。
