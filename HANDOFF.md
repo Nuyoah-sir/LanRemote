@@ -1,7 +1,7 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-28（错密钥已被拒绝、A输入遮挡人工确认；B同轮结算尾部待补，见 §18.19）**
+> 更新时间：**2026-09-28（错密钥专项收尾证据补齐并通过，A输入遮挡通过；见 §18.19）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
@@ -12,7 +12,7 @@
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17。M4整体仍进行中。
 > 用户已授权自主推进，不再等待外部模型，不重问已采用的最小密钥交付/短码方案。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：错key A509bbe18/Bad5ed4cc已观察到auth-proof-mismatch，A输入遮挡获用户确认；只补B同轮结算尾部，不重跑（§18.19）。** B日志缺最终结果，不能预填UNMET/aborted=False/清理通过。之后仍有真实serverProof失败提示、关窗/活动会话停止等原清单剩余项；既往通过项不重跑，不先推进M5。 本轮未绕过审批、未改60秒期限或网络。§18.12/13/14保留历史事故及修复证据，当前包仍为outputs/m4-approval-ui，无须因纯记账重新下载。
+> **下一关：错key A509bbe18/Bad5ed4cc同轮收尾已补齐，专项通过；A输入遮挡人工通过（§18.19），均不重跑。** B1800样本自然结束、未中止、清理正常；A总FAIL/B总UNMET保留。仅余真实serverProof失败提示、关窗/活动会话停止等原清单剩余项；不先推进M5。 本轮未绕过审批、未改60秒期限或网络。§18.12/13/14保留历史事故及修复证据，当前包仍为outputs/m4-approval-ui，无须因纯记账重新下载。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,7 +35,7 @@
 ## 1. 当前状态
 
 - **当前里程碑：M4 — Access Key Challenge Auth —— 进行中：阶段 0–4 实现完成；阶段 5 自动化及修正版真实两机认证主流程已通过。** 2026-09-24 A `31255177` / B `d8fd8b0d`：同SessionId认证、Control授权、正采样保持与自然注销通过；三个客户端负例通过，pin的Host关联保留局限，见§18.15。不宣称完整GUI人工清单或全部M4 DoD通过。
-- **下一步：只补B错key同轮结算尾部，再继续剩余GUI项。** 正常授权、降权、拒绝及前一Control轮联网/审批/短码通过（§18.15–17）；B密钥六项人工通过（§18.18）。2026-09-28 A509bbe18/Bad5ed4cc已见auth-proof-mismatch及无认证会话，A输入遮挡人工通过；B日志尚无最终清理/结算，不把局部行为通过扩成有效整轮通过（§18.19）。仅补尾部、不重跑。之后剩真实serverProof失败提示、关窗/活动会话停止与原范围未覆盖项。仍不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo、不进入M5。
+- **下一步：继续剩余窗口生命周期及真实serverProof错误显示专项。** 正常授权、降权、拒绝及前一Control轮联网/审批/短码通过（§18.15–17）；B密钥六项人工通过（§18.18）；错key A509bbe18/Bad5ed4cc完整有效轮及A输入遮挡通过（§18.19）。通过项不再重跑，原清单剩余关窗/活动会话停止、真实serverProof失败提示与未覆盖布局仍按实际覆盖记账。下一小项是B无客户端连接的监听中关窗，仅验证该路径，不能代替活动已认证会话停止。仍不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo、不进入M5。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1** →（M4 阶段 0–4 实现；阶段 5 自动化及Control/降权/拒绝两机专项完成，完整人工清单尚有缺项）
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
 - **Last code commit：`67c7d7e`**（固定审批区、待批提示、关联日志及24项真实WPF回归）；前一拒绝提示编码 `72bfb93`、现网修复 `bc8cf48`。认证阶段5主实现 `6c7a15b`，客户端/时限修复 `bc02a0c`。
@@ -2524,7 +2524,9 @@ Control和降权不重跑、不重打包。仅补一轮有效拒绝：B开始180
 
 本次仅更新HANDOFF、记忆与任务状态；无产品代码/网络变更，无build/test或重打包。Last code commit仍为`67c7d7e`，原1329项为此前实测；继续使用现有审批修正版。
 
-### 18.19 错密钥拒绝行为符合预期；B结算尾部待补（2026-09-28）
+### 18.19 错密钥专项通过（2026-09-28，同轮B尾部已补齐）
+
+以下保留首次核对的缺口记录；本节末尾为补齐后的最终判定。
 
 **来源**：用户粘贴A info `d0d87345` / client `509bbe18`（01:56:48.358Z开始）、B info `682454e0` / host `ad5ed4cc`（01:55:38.912Z开始），并明确“输入遮挡正常”。仍为137.1/137.141同/24；日志列出的EXE与Transport两个哈希均匹配§18.14审批修正版，不声称完整安装目录复核。不是助手现场重跑。
 
@@ -2537,3 +2539,17 @@ Control和降权不重跑、不重打包。仅补一轮有效拒绝：B开始180
 **下一步**：仅索取B同一run `ad5ed4cc`从上述离线行之后到`RUN COMPLETE`的尾部；若窗口输出已丢失，取B本轮日志`C:\Users\MR\AppData\Local\Temp\lanremote-m3-acceptance\m3-host-20260928-015538-ad5ed4cc.log`的尾部。不要立即重跑或让用户补A全文。错key行为符合预期、整轮有效收尾待核；既往Control/降权/拒绝/B密钥六项和A输入遮挡均不重复。真实serverProof失败显示、关窗/活动会话停止等仍未验，不进入M5。
 
 本次只核对用户日志、更新进度与记忆；无产品代码/网络变更，无build/test、未重打包，Last code commit仍`67c7d7e`，此前1329项不冒称本次执行。
+
+#### 同轮尾部补齐后的最终判定
+
+用户随后提交B完整日志：仍为host `ad5ed4cc`，开始时间、PID15096、SessionId/ConnectionId及四条终态与首次片段一致，是补齐同一轮，不是新测试。
+
+- `authenticatedActiveBeforeStop=0`；`sessionHandled=4 active=0 sum=4 partitionOk=True`，桶为1 proof-mismatch + 1 pre-auth-eof + 2 pre-auth-timeout。
+- `registrySamples=1800 sampleSpanMs=179889.598 maxSampleGapMs=114.818`，正常完成180秒监听窗口。`trackedActive=0 trackingDropped=0 authenticatedEnded=0 qualifiedNaturalRelease=0 holdUnmet=0 hostForcedClose=0 registryViolations=0`；拒绝轮无已认证会话符合预期，不把零样本当成功保持证据。
+- `firstStopAllFinishedWithinBudget=True firstStopUnfinishedConnections=0 acceptLoopsFinished=True`；`activeHandlers=0 activeRegistry=0 pendingApprovals=0 handlerFaults=0 cleanupFault=False`。
+- B完整结算`UNMET / exitCode=2 / aborted=False / background=无故障`并有`RUN COMPLETE`；A上一条已完整结算`FAIL / exitCode=1 / aborted=False / background=无故障`。本次补齐有效自然结束和清理证据，**错密钥专项PASS**，保留原A FAIL/B UNMET标签，不重写日志。
+- A输入遮挡人工通过；实际日志已输出通用远端拒绝提示。双端错key与pin仍仅顺序关联；两个超时精确配对，局限不因补尾部而消失。原`UNOBSERVABLE`字段保留，不推断close_notify或TLS阶段拒绝计数。
+
+**后续**：不重跑错key、正常授权、降权、拒绝、B密钥六项或A输入遮挡。剩余窗口生命周期和真正serverProof错误显示按原清单补证。下一小项为B无客户端连接的监听中关窗：观察窗口正常退出并取该独立新run的持久化日志；主动关窗预期INVALID_RUN，不能作为成功认证轮，但可按取消/清理专项核对。该无会话路径不替代活动已认证会话停止。真实serverProof故障需要受控测试对端，不能让用户继续输错key代替。M4仍进行中，不进入M5。
+
+本次仍仅记录用户实测，无代码/网络变更、无build/test或重打包。交付核对摘要：`outputs/M4-错密钥核对-20260928.txt`。
