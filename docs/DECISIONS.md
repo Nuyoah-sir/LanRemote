@@ -1258,3 +1258,18 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 - ControlClientConnector已持有deadline时，FrameReader使用内部令牌入口，禁止另起独立系统CancelAfter。公共读取接口保留；错误路径同样遵循父取消>绝对截止>帧错误，不扩大预算、不接受模糊拒绝码。
 
 **Evidence / 边界**：服务端599.5/600ms提前回调在真实TLS场景、客户端399.5/400ms重复CTS在受控Stream场景分别确定性复现旧错误；不声称现场Windows timer具体提前量已采集。最终Debug/Release各1433 PASS、Python14；实际桌面窗口尚未观察，不替代原人工清单或整个M4。证书DefaultKeySet遵循既有Schannel实测，非“绝不触盘”承诺；旧A/B安装目录保留。
+
+### ADR-047 — M5 视频帧所有权、固定头实施细则与失败后永久终止
+
+**日期**：2026-09-29。**Context**：M4在HANDOFF§18.25按明确实屏确认收口后，按原M5顺序实现视频基础件。原规格给出40字节建议布局及有界管线，未定义flags/reserved细则；Core已有long时间戳、40..85质量设置与IMemoryOwner模型，但EncodedFrame将池容量当有效长度。此次补齐实施细则，不回写原始规格，也不提前放行VideoAttach。
+
+**Decision**：
+
+1. Core保留现有EncodedFrame构造，新增显式有效payloadLength重载。有效长度1..32MiB且不得超过owner容量；允许池容量更大，Payload仅暴露前段。只有构造成功才转移owner；失败由调用方释放。释放后长度0，借用视图不能跨越所有权移交/释放或与释放并发使用。
+2. BoundedFrameQueue<T>容量仅1/2、默认2，短锁+有界Queue+共享异步唤醒实现原DropOldest语义，不公开Channel端点、不设异步写队列。TryWrite返回值决定所有权：成功交队列，拒绝归调用方；丢旧在锁外精确尝试一次Dispose，异常以out参数报告，不掩盖新帧已被接受。Stop先永久拒绝/清空/唤醒，再逐项释放并聚合异常。停止不等待消费者或并发丢旧释放；后续Session必须join全部生产/消费任务，不能把队列容量或Stop返回当全管线内存/清理证明。
+3. wire直接40字节头+payload，不加Control长度前缀：LRVF、version1、codec1；flags按BE读取且v1必须0，三reserved也必须0。frameId为完整ulong，不在framing层定义初值/排序/回绕；timestamp按uint64 BE解析后限制到现模型可表示的0..long.MaxValue。width/height为1..8192；jpegQuality对齐既有40..85；payloadLength为1..32MiB，先在uint域验证再转int/分配。上述零位/范围是本ADR的v1实施决定，不伪称原建议布局已逐项规定。
+4. VideoFrameHeader/Reader/Writer留在net10.0 Transport且均internal，仅供后续认证会话内部装配，不新增public流/token旁路、不改变M4 hello/准入。Reader完整头合法后才租用，完整体读取/模型构造/最终取消检查后以1→0 CAS作为交付提交点；若Dispose的终止2先发生，不交付未提交帧。成功后owner由消费者释放。Writer在写任何字节前验证模型与有效切片，不拥有调用方帧；完整帧写完才允许下帧。
+5. 首次失败（含取消、重叠调用、错误模型）、帧首EOF或Dispose均永久终止，不重试半帧或扫描magic。首帧无数据EOF返回null，截断头/体分别报错。仅消费caller取消，无内置滑动/重复deadline；未来Session层须提供整帧绝对预算和在途join。只尝试一次底层Dispose，不承诺硬中断任意Stream。
+6. 主协议/I/O/取消异常保留原实例、类型与令牌，清理异常另以internal有界只读快照公开（Reader最多stream+owner两项、Writer最多stream一项）；直接Dispose仍可抛出关闭错误。IsTerminated只代表不再接受操作；StreamDisposeSucceeded只代表底层Dispose正常返回，不代表实际资源关闭或join完成。清理失败不静默记成功，不盲目重试释放。
+
+**Evidence / 可逆性**：实现前后使用同一组20个确定性回归，先20红再20绿，覆盖构造期取消/停止/重叠读、owner释放掩盖原错误、真正关闭前失败及稳定诊断；测试文件SHA不变。Python标准库struct独立生成40字节黄金向量，与手写测试向量一致。其余边界/分片/连帧/非法头先拒/池尾部和队列并发释放均有定向回归；全量结果见HANDOFF§19。payload测试字节不代表合法JPEG，不代表真实TLS视频/采集/显示/10分钟稳定性已验证。内部实现可后续替换但所有权、失败终止及限额不弱化；改变wire取值范围须明确兼容性决定。

@@ -98,37 +98,213 @@ public sealed class FrameModelTests
         Assert.Throws<ObjectDisposedException>(() => frame.Pixels);
     }
 
-    [Fact]
-    public void EncodedFrame_RejectsPayloadLargerThan32MiB()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(FrameLimits.MaxPayloadBytes + 1)]
+    public void EncodedFrame_RejectsInvalidLegacyPayloadWithoutDisposingOwner(int capacity)
     {
-        using IMemoryOwner<byte> owner = Rent(FrameLimits.MaxPayloadBytes + 1);
+        CountingMemoryOwner owner = new(capacity);
 
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => new EncodedFrame(VideoCodec.Jpeg, 100, 100, 1, 0, 60, owner));
+        using (owner)
+        {
+            ArgumentOutOfRangeException exception = Assert.Throws<ArgumentOutOfRangeException>(
+                () => new EncodedFrame(VideoCodec.Jpeg, 100, 100, 1, 0, 60, owner));
+
+            Assert.Equal("owner", exception.ParamName);
+            Assert.Equal(0, owner.DisposeCalls);
+            Assert.Equal(capacity, owner.Memory.Length);
+        }
+
+        Assert.Equal(1, owner.DisposeCalls);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2048)]
+    [InlineData(FrameLimits.MaxPayloadBytes)]
+    public void EncodedFrame_AcceptsPayloadWithinLimit(int capacity)
+    {
+        CountingMemoryOwner owner = new(capacity);
+
+        using (EncodedFrame frame = new(VideoCodec.Jpeg, 100, 100, 42, 999, 60, owner))
+        {
+            Assert.Equal(VideoCodec.Jpeg, frame.Codec);
+            Assert.Equal(100, frame.Width);
+            Assert.Equal(100, frame.Height);
+            Assert.Equal(42ul, frame.FrameId);
+            Assert.Equal(999, frame.TimestampUs);
+            Assert.Equal((byte)60, frame.JpegQuality);
+            Assert.Equal(capacity, frame.PayloadLength);
+            Assert.Equal((ReadOnlyMemory<byte>)owner.Memory, frame.Payload);
+            Assert.Equal(0, owner.DisposeCalls);
+        }
+
+        Assert.Equal(1, owner.DisposeCalls);
     }
 
     [Fact]
-    public void EncodedFrame_AcceptsPayloadWithinLimit()
+    public void EncodedFrame_ExplicitLength_ExposesOnlyValidPayloadWithoutCopying()
     {
-        using IMemoryOwner<byte> owner = Rent(2048);
+        CountingMemoryOwner owner = new(16);
+        byte[] expected = [0xff, 0xd8, 0xff, 0xd9];
+        owner.Memory.Span.Fill(0xcc);
+        expected.AsSpan().CopyTo(owner.Memory.Span);
 
-        using EncodedFrame frame = new(VideoCodec.Jpeg, 100, 100, 42, 999, 60, owner);
+        using (EncodedFrame frame = new(VideoCodec.Jpeg, 8, 8, 1, 0, 60, owner, payloadLength: 4))
+        {
+            Assert.Equal(4, frame.PayloadLength);
+            Assert.Equal(4, frame.Payload.Length);
+            Assert.Equal(expected, frame.Payload.ToArray());
+            Assert.True(frame.Payload.Equals((ReadOnlyMemory<byte>)owner.Memory[..4]));
 
-        Assert.Equal(VideoCodec.Jpeg, frame.Codec);
+            owner.Memory.Span[4..].Fill(0xaa);
+
+            Assert.Equal(expected, frame.Payload.ToArray());
+            Assert.Equal(0, owner.DisposeCalls);
+        }
+
+        Assert.Equal(1, owner.DisposeCalls);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(16, 16)]
+    [InlineData(FrameLimits.MaxPayloadBytes + 1, 4)]
+    [InlineData(FrameLimits.MaxPayloadBytes, FrameLimits.MaxPayloadBytes)]
+    [InlineData(FrameLimits.MaxPayloadBytes + 1, FrameLimits.MaxPayloadBytes)]
+    public void EncodedFrame_ExplicitLength_AcceptsValidLengthRegardlessOfOwnerCapacity(int capacity, int payloadLength)
+    {
+        CountingMemoryOwner owner = new(capacity);
+
+        using (EncodedFrame frame = new(VideoCodec.Jpeg, 8, 8, 1, 0, 60, owner, payloadLength))
+        {
+            Assert.Equal(capacity, owner.Memory.Length);
+            Assert.Equal(payloadLength, frame.PayloadLength);
+            Assert.Equal(payloadLength, frame.Payload.Length);
+            Assert.Equal((ReadOnlyMemory<byte>)owner.Memory[..payloadLength], frame.Payload);
+        }
+
+        Assert.Equal(1, owner.DisposeCalls);
+    }
+
+    [Theory]
+    [InlineData(16, 0)]
+    [InlineData(16, -1)]
+    [InlineData(0, 1)]
+    [InlineData(16, 17)]
+    [InlineData(FrameLimits.MaxPayloadBytes + 1, FrameLimits.MaxPayloadBytes + 1)]
+    [InlineData(16, int.MaxValue)]
+    public void EncodedFrame_ExplicitLength_RejectsInvalidLengthWithoutDisposingOwner(int capacity, int payloadLength)
+    {
+        CountingMemoryOwner owner = new(capacity);
+
+        using (owner)
+        {
+            ArgumentOutOfRangeException exception = Assert.Throws<ArgumentOutOfRangeException>(
+                () => new EncodedFrame(VideoCodec.Jpeg, 8, 8, 1, 0, 60, owner, payloadLength));
+
+            Assert.Equal("payloadLength", exception.ParamName);
+            Assert.Equal(payloadLength, exception.ActualValue);
+            Assert.Equal(0, owner.DisposeCalls);
+            Assert.Equal(capacity, owner.Memory.Length);
+        }
+
+        Assert.Equal(1, owner.DisposeCalls);
+    }
+
+    [Theory]
+    [InlineData(0, 8, false, "width")]
+    [InlineData(8, 0, false, "height")]
+    [InlineData(FrameLimits.MaxDimension + 1, 8, false, "width")]
+    [InlineData(8, FrameLimits.MaxDimension + 1, false, "height")]
+    [InlineData(0, 8, true, "width")]
+    [InlineData(8, 0, true, "height")]
+    [InlineData(FrameLimits.MaxDimension + 1, 8, true, "width")]
+    [InlineData(8, FrameLimits.MaxDimension + 1, true, "height")]
+    public void EncodedFrame_RejectsInvalidDimensionsWithoutDisposingOwner(
+        int width, int height, bool explicitLength, string parameterName)
+    {
+        CountingMemoryOwner owner = new(16);
+
+        using (owner)
+        {
+            ArgumentOutOfRangeException exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+                explicitLength
+                    ? new EncodedFrame(VideoCodec.Jpeg, width, height, 1, 0, 60, owner, payloadLength: 4)
+                    : new EncodedFrame(VideoCodec.Jpeg, width, height, 1, 0, 60, owner));
+
+            Assert.Equal(parameterName, exception.ParamName);
+            Assert.Equal(0, owner.DisposeCalls);
+            Assert.Equal(16, owner.Memory.Length);
+        }
+
+        Assert.Equal(1, owner.DisposeCalls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EncodedFrame_RejectsNullOwner(bool explicitLength)
+    {
+        ArgumentNullException exception = Assert.Throws<ArgumentNullException>(() =>
+            explicitLength
+                ? new EncodedFrame(VideoCodec.Jpeg, 8, 8, 1, 0, 60, null!, payloadLength: 4)
+                : new EncodedFrame(VideoCodec.Jpeg, 8, 8, 1, 0, 60, null!));
+
+        Assert.Equal("owner", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData((byte)0, long.MinValue, (byte)0)]
+    [InlineData((byte)255, -1L, (byte)255)]
+    [InlineData((byte)1, 999L, (byte)60)]
+    public void EncodedFrame_ExplicitLength_PreservesMetadata(byte codec, long timestampUs, byte jpegQuality)
+    {
+        CountingMemoryOwner owner = new(16);
+        using EncodedFrame frame = new((VideoCodec)codec, 8, 8, 42, timestampUs, jpegQuality, owner, payloadLength: 4);
+
+        Assert.Equal((VideoCodec)codec, frame.Codec);
+        Assert.Equal(8, frame.Width);
+        Assert.Equal(8, frame.Height);
         Assert.Equal(42ul, frame.FrameId);
-        Assert.Equal(999, frame.TimestampUs);
-        Assert.True(frame.PayloadLength > 0);
+        Assert.Equal(timestampUs, frame.TimestampUs);
+        Assert.Equal(jpegQuality, frame.JpegQuality);
     }
 
-    [Fact]
-    public void EncodedFrame_AfterDispose_AccessingPayloadThrows()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EncodedFrame_AfterDispose_AccessingPayloadThrows(bool explicitLength)
     {
-        using IMemoryOwner<byte> owner = Rent(256);
-        EncodedFrame frame = new(VideoCodec.Jpeg, 8, 8, 1, 0, 60, owner);
+        CountingMemoryOwner owner = new(256);
+        using EncodedFrame frame = explicitLength
+            ? new(VideoCodec.Jpeg, 8, 8, 1, 0, 60, owner, payloadLength: 4)
+            : new(VideoCodec.Jpeg, 8, 8, 1, 0, 60, owner);
+
+        Assert.Equal(explicitLength ? 4 : 256, frame.PayloadLength);
 
         frame.Dispose();
+        frame.Dispose();
 
+        Assert.Equal(1, owner.DisposeCalls);
         Assert.Throws<ObjectDisposedException>(() => frame.Payload);
         Assert.Equal(0, frame.PayloadLength);
+    }
+
+    private sealed class CountingMemoryOwner(int capacity) : IMemoryOwner<byte>
+    {
+        private readonly byte[] _bytes = new byte[capacity];
+        public int DisposeCalls { get; private set; }
+
+        public Memory<byte> Memory
+        {
+            get
+            {
+                ObjectDisposedException.ThrowIf(DisposeCalls != 0, this);
+                return _bytes;
+            }
+        }
+
+        public void Dispose() => DisposeCalls++;
     }
 }
