@@ -12,7 +12,7 @@
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17。M4整体仍进行中。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：核对A本机隔离专项的剩余停止记录与实屏观察，不需要B参与，不重复已通过项。** `2596357` 双配置各1433 PASS、Python14；用户现已启动新包。A `b42a1553`真正错误proof拒绝及清理的日志证据通过，固定文案实屏可见性尚未口头确认；`e339ed58`本次读取到已验证serverProof/Control及120秒保持，尚无停止/结算记录，不假记通过，见§18.23。新包未改网络、不自动审批；M4未全完，不进入M5；助手桌面自动化权限仍未解除。
+> **下一关：仅补A本机人工活动停止及原实屏确认，不需要B参与，不重复已通过项。** `2596357` 双配置各1433 PASS、Python14；用户现已启动新包。A `b42a1553`真正错误proof拒绝及清理的日志证据通过，固定文案实屏可见性尚未口头确认；`e339ed58`最终等满120秒自动收尾为UNMET，未执行人工活动停机，清理正常，见§18.23。不重跑proof，仅补活动停止操作。新包未改网络、不自动审批；M4未全完，不进入M5；助手桌面自动化权限仍未解除。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -2622,5 +2622,5 @@ fresh源目录`artifacts/m4-isolated-ui-73x0r3z0`；包构建于代码提交前�
 
 - 用户启动新隔离包，A=DESKTOP-D132BMD、PID61476，gui.log记录窗口1000×940；这证明渲染事件，不证明全部控件可见。读取用户给出的两个完整本机run日志及gui.log，不仅依赖粘贴文本；日志目录为`%TEMP%\LanRemote-Isolated\5673874ef085480d88e374a70e21fe8f\`。安装在`C:\DIYTools\LanRemote-0.1.0-m2-m4-isolated-ui-win-x64`的启动exe、启动器dll、Acceptance.dll、Transport.dll四个文件SHA-256均与§18.22交付ZIP对应成员完全一致；日志所记exe/Transport的SHA也匹配。exe version=(unknown)不作为版本相同的依据。
 - **b42a1553：错误proof拒绝及清理的日志判据通过。** 同一requestId/generation/sessionId/connectionId的手动Approved/Control之后，`flippedBits=1 registry=NOT_APPLICABLE`；真实客户端拒绝`client-server-proof-mismatch`，固定文案已进入RESULT.detail；故障对端先观测`kind=eof bytesAfterReply=0 beforeHostStop=True`，随后首次HostStop。首次停机预算内完成，handlers/client均join，registry/审批/连接相关计数全0，keyCleared/certificateDisposed=True，cleanupFault=False、background无故障、aborted=False、RUN COMPLETE。保留原FAIL及exitCode=1（通用“不符合预期”标签），不将日志改绿；registry=NOT_APPLICABLE不冒称真实Host注册认证会话。用户尚未明确确认实屏完整看见该文案。
-- **e339ed58：目前仅认证成功证据，活动停止尚未结算。** 本次完整文件读至第38行：真实客户端`serverProof=verified`、grant=Control，SessionId与HOST AUTH-BEGIN一致（`b28e4672-6c8f-4923-9dc3-7cdd4d2bd47a`），证书pin匹配；`localObjectHoldTargetMs=120000 hostRegistry=UNOBSERVED`只说明客户端进入保持，不能据此假填Host活动快照=1。尚无UI停止、HostStop、CLEANUP或RUN COMPLETE；不是已证明失败，也不能记停止通过。已提示用户若界面仍处于已双向认证状态则点击停止，等待本轮任务收回，不要求重跑proof。
+- **e339ed58：最终UNMET，未执行人工活动停机；清理正常。** 初读文件仅至第38行，后续读取已见完整结局（第56行RUN COMPLETE）。真实客户端`serverProof=verified`、grant=Control，SessionId与HOST AUTH-BEGIN一致（`b28e4672-6c8f-4923-9dc3-7cdd4d2bd47a`），证书pin匹配；随后`localObjectHeldMs=120000`、同步Dispose、clientOutcome=PASS。最终RESULT.detail明确“本地保持期限已到，未执行人工活动停机；本场景仍为UNMET”，aborted=False、background无故障。Host首次停机前活动快照=1，但clientTaskCompleted=True；这是客户端保持到期后Host收尾，与人工活动停止不同。Host记录1200个会话样本/119902.881ms跨度、hostForcedClose=True、naturalRelease=UNMET；首次停机预算内完成，所有registry/handler/审批/连接归零、双侧join、cleanupFault=False。不能用客户端PASS或最终清理全0判人工停止通过，也不将UNMET当作产品认证失败。只需重新执行活动专项并在已双向认证时点停止，不重跑proof。
 - 本轮未修改源码、网络或运行窗口，未重新build/test；1433/14仍是§18.22代码验证记录。余原实屏固定文案、活动停止及恢复操作、当前缩放下原控件可访问确认；M4未全完，不进M5。
