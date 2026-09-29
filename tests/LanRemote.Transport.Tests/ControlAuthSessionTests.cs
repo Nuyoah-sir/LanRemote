@@ -647,60 +647,144 @@ public sealed partial class ControlAuthSessionTests
             },
             new TransportHostOptions { Port = port, Timeouts = BuildAuthTimeouts() });
 
-        await using (host)
+        Exception? failure = null;
+        List<Exception> cleanupErrors = new();
+        try
         {
-            TransportHostStartResult start = host.Start();
-            Assert.True(start.IsListening);
-
-            using CancellationTokenSource stall = new();
-
-            // 连接 A：一路走到待批（gate 被调用 = 租约已拿到、approval_pending 已写出）。
-            TlsConnection connectionA = await ConnectAsync(certificate, port);
-            AuthClientProbe probeA = new();
-            Task clientA = Task.Run(() => probeA.SpeakAuthAsync(connectionA, stall.Token));
-
-            LocalApprovalRequest firstRequest = await gate.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.Equal(1, pendingLimiter.GlobalInUse);
-
-            // 连接 B：同源第二条——配额应当在此把它切掉。
-            TlsConnection connectionB = await ConnectAsync(certificate, port);
-            AuthClientProbe probeB = new();
-            Task clientB = Task.Run(() => probeB.SpeakAuthAsync(connectionB, stall.Token));
-
-            ControlAuthResult resultB = await outcomeB.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.False(resultB.Completed);
-            Assert.Equal(ControlAuthSession.RejectApprovalQuota, resultB.Rejection);
-            Assert.False(probeB.SawApprovalPending, "配额被拒的连接不该收到 approval_pending。");
-            Assert.DoesNotContain("auth_success", probeB.Frames);
-
-            // 释放 A：迟到的份额不受影响——A 正常成功。
-            firstDecision.TrySetResult(new LocalApprovalDecision(
-                firstRequest.RequestId, LocalApprovalOutcome.Approved, firstRequest.RequestedPermission));
-
-            await probeA.TerminalSeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.True(probeA.Success is not null, $"帧序列：{string.Join(",", probeA.Frames)}");
-            Assert.True(await WaitUntilAsync(() => pendingLimiter.GlobalInUse == 0));
-
-            stall.Cancel();
-            connectionA.Dispose();
-            connectionB.Dispose();
-
-            ControlAuthResult resultA = await outcomeA.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.True(resultA.Completed, resultA.Rejection);
-            Assert.Equal(0, registry.ActiveSessionCount);
-            Assert.Equal(0, pendingLimiter.GlobalInUse);
-
-            try
+            await using (host)
             {
-                await Task.WhenAll(clientA, clientB).WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            catch (Exception)
-            {
-            }
+                using CancellationTokenSource stall = new();
+                TlsConnection? connectionA = null;
+                TlsConnection? connectionB = null;
+                Task? clientA = null;
+                Task? clientB = null;
 
-            Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
-            Assert.True(await WaitUntilAsync(() => host.AdmittedConnections == 0));
+                try
+                {
+                    TransportHostStartResult start = host.Start();
+                    Assert.True(start.IsListening);
+
+                    // 连接 A：一路走到待批（gate 被调用 = 租约已拿到、approval_pending 已写出）。
+                    connectionA = await ConnectAsync(certificate, port);
+                    AuthClientProbe probeA = new();
+                    clientA = Task.Run(() => probeA.SpeakAuthAsync(connectionA, stall.Token));
+
+                    LocalApprovalRequest firstRequest = await gate.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.Equal(1, pendingLimiter.GlobalInUse);
+
+                    // 连接 B：同源第二条——配额应当在此把它切掉。
+                    connectionB = await ConnectAsync(certificate, port);
+                    AuthClientProbe probeB = new();
+                    clientB = Task.Run(() => probeB.SpeakAuthAsync(connectionB, stall.Token));
+
+                    ControlAuthResult resultB = await outcomeB.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.False(resultB.Completed);
+                    Assert.Equal(ControlAuthSession.RejectApprovalQuota, resultB.Rejection);
+                    // 服务端 outcome 不意味着客户端已经读完终帧。先 join 原 clientB，
+                    // 再检查完整帧序列，不能与 Frames.Add 并发枚举或漏掉迟到的非法帧。
+                    await clientB.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.False(probeB.SawApprovalPending, "配额被拒的连接不该收到 approval_pending。");
+                    Assert.DoesNotContain("auth_success", probeB.Frames);
+
+                    // 释放 A：迟到的份额不受影响——A 正常成功。
+                    firstDecision.TrySetResult(new LocalApprovalDecision(
+                        firstRequest.RequestId, LocalApprovalOutcome.Approved, firstRequest.RequestedPermission));
+
+                    await probeA.TerminalSeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.True(probeA.Success is not null, $"帧序列：{string.Join(",", probeA.Frames)}");
+                    Assert.True(await WaitUntilAsync(() => pendingLimiter.GlobalInUse == 0));
+
+                    stall.Cancel();
+                    await connectionA.CloseAsync();
+                    await connectionB.CloseAsync();
+
+                    ControlAuthResult resultA = await outcomeA.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.True(resultA.Completed, resultA.Rejection);
+                    Assert.Equal(0, registry.ActiveSessionCount);
+                    Assert.Equal(0, pendingLimiter.GlobalInUse);
+
+                    try
+                    {
+                        await Task.WhenAll(clientA, clientB).WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        cleanupErrors.Add(ex);
+                    }
+                    catch (Exception)
+                    {
+                        // 原任务的异常留到 finally 分别观察，不抢后续断言的优先级。
+                    }
+
+                    Assert.True(await WaitUntilAsync(() => host.ActiveConnections == 0));
+                    Assert.True(await WaitUntilAsync(() => host.AdmittedConnections == 0));
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+                finally
+                {
+                    firstDecision.TrySetCanceled();
+                    try
+                    {
+                        stall.Cancel();
+                    }
+                    catch (Exception ex)
+                    {
+                        cleanupErrors.Add(ex);
+                    }
+
+                    // 逐条关闭并读取诊断；一条失败不能跳过另一条，也不重放 Dispose 错误。
+                    foreach (TlsConnection? connection in new[] { connectionA, connectionB })
+                    {
+                        if (connection is null) continue;
+                        try
+                        {
+                            await connection.CloseAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            cleanupErrors.Add(ex);
+                        }
+                        finally
+                        {
+                            cleanupErrors.AddRange(connection.CleanupErrors);
+                        }
+                    }
+
+                    // 即使前面的 guard 超时，也必须 join 两个原任务，不能丢弃仍在运行的脚本。
+                    foreach (Task? client in new[] { clientA, clientB })
+                    {
+                        if (client is null) continue;
+                        try
+                        {
+                            await client;
+                        }
+                        catch (Exception ex)
+                        {
+                            if (!ReferenceEquals(ex, failure) && !cleanupErrors.Contains(ex))
+                                cleanupErrors.Add(ex);
+                        }
+                    }
+                }
+            }
         }
+        catch (Exception ex)
+        {
+            // await using 的 Host 收尾也不能覆盖已发生的断言失败。
+            if (failure is null) failure = ex;
+            else cleanupErrors.Add(ex);
+        }
+
+        if (failure is not null)
+        {
+            if (cleanupErrors.Count > 0)
+                failure.Data["CleanupErrors"] = new AggregateException("配额测试清理失败。", cleanupErrors);
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+        if (cleanupErrors.Count > 0)
+            throw new AggregateException("配额测试清理失败。", cleanupErrors);
     }
 
     // ═══════════════════════════ 数值与 DoD 负例 ═══════════════════════════

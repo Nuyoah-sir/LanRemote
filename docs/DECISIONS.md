@@ -1326,3 +1326,18 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Decision**：移除AuthenticatedControlSession的internal SessionToken getter，新增internal `CreateVideoAttachProof(nonce, actualVideoPin, cancellationToken)`，只返回32字节proof。状态检查、caller取消、nonce16/pin32长度、控制expected/presented与第二pin匹配、MAC及末次caller检查均在同一私有锁内；校验和MAC使用同一nonce/pin栈快照。失败时已生成但未交付proof清零，退出清栈快照；成功proof所有权交调用方。Dispose同锁置空连接并清零原token，锁外关闭TLS，避免持有秘密锁执行IO。已释放优先拒绝，等待锁期间取消在进入操作后被观察。
 
 **Evidence与界限**：独立83字节transcript/HMAC黄金、输入绑定/严格拒绝、原token数组清零、锁外TLS释放和入口锁并发回归；测试专用反射仅观测原秘密存储，不向生产恢复getter。既有双TLS独立proof oracle不改成调用被测方法。Python标准库独立核对83字节及黄金602656EA…78B7A3A。并发测试仅锁入口边界，不声称暂停MAC内部；失败proof清零有finally，但尚无直接持有该失败数组的确定性后置取消观察。复制不保证调用方恶意并发改写原数组时原子快照；传入pin必须由后继连接器取实际第二TLS身份，此同步方法不自行证明pin来源。不施加本地TTL/一次性附着、不提供客户端连接器/唯一交付/迟到回收/父子join，完整验证见HANDOFF§19.7。
+
+### ADR-052 — 客户端共享关闭与真实视频流适配器
+
+**日期**：2026-09-29。**Context**：TlsConnection原Dispose以普通bool判重，SSL释放抛错会跳过TCP，重复调用不会补收。后继VideoFrameReader拥有传入Stream，不能用空Dispose或leaveOpen逃避实际关闭，也不能把关闭完成冒称原读写已join。
+
+**Decision**：
+1. TlsConnection的internal CloseAsync在短锁内发布关闭状态与唯一Task，worker依次独立尝试TCP、SSL释放；先断TCP解堵，不在请求线程执行释放、不在锁内等待。Task成功完成表示两项尝试结束，不表示物理释放必然成功。CleanupErrors为固定两槽的独立只读快照，顺序TCP、SSL，保留原异常实例。
+2. public Dispose仍同步等待该Task。首个public Dispose调用者单错EDI重抛原实例、双错Aggregate保留两项；后续调用同样等待但不重放异常，避免重复finally覆盖已翻译的认证异常。CloseAsync/adapter不消费首次错误报告权。首调用者在并发下由Interlocked认领，不承诺哪个线程先返回。既有AuthenticatedControlSession重复Dispose仍只做幂等逻辑释放，不自动继承此等待合同。
+3. internal ClientOwnedVideoStream转发所有同步/异步SSL读写、flush和timeout，不转移最终TCP/SSL所有权。同步Dispose仅请求关闭，DisposeAsync等待同一个Task；高层仍须查看连接CleanupErrors并持有、join原read/write任务。Reader的StreamDisposeSucceeded只证明请求发出成功。
+4. 请求发布后拒绝再次获取Stream/CreateVideoStream，所有既有adapter也经连接状态检查后才能开始新操作；已经取得原流或已经在途的操作不在此强行夺回。无独占reader登记、无父子状态机、无高层ACK交付。public接口未增加。
+5. 测试中秘密锁检查改用跨线程Monitor.TryEnter，不能在worker用IsEntered假证调用线程已放锁。专用Dispose线程只保存一次等待态观测，不二次读取瞬时ThreadState；这只是受控入口等待证据，不是内部精确探针。旧审批配额测试须先join原clientB，再读完整Frames/待批事实，不能把服务端outcome当客户端终帧读取完成。
+
+**Evidence**：旧实现两项确定性释放故障测试运行期全红（TCP未尝试、第二错误丢失），再修生产；新增组件26、真实回环TLS11及这两项回归共39例。实际计数、最终双配置证据以HANDOFF§19.8为准。回环TLS使用产品连接器与实际证书pin，验证双向字节和本端关闭使两端原读退出；不冒称视频附着、JPEG或两机实屏。
+
+**Limits**：任意同步Dispose不合作时仍可永久阻塞，不提供硬截止；CloseAsync成功不代表清理成功或I/O完成。public Dispose首次清理错误仍可能覆盖调用者的既有主错误，该外层owner问题未在本片修复。TlsClientConnector返回前失败finally仍是独立待修缺口。LocalEndPoint原有并发关闭观察窗口不作为授权判据；本片不新增其同步保证。未改TLS/pinning/认证安全、系统网络、产品默认Control-only或M4物料。

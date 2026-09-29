@@ -172,7 +172,10 @@ public sealed class AuthenticatedControlSessionVideoProofTests
         bool? tokenClearedAtTlsDispose = null;
         transport.Disposing = () =>
         {
-            gateHeldAtTlsDispose = Monitor.IsEntered(gate);
+            // TLS 释放现在由另一个线程执行：IsEntered 只能看当前线程，不能证明锁已释放。
+            bool acquired = Monitor.TryEnter(gate, Guard);
+            gateHeldAtTlsDispose = !acquired;
+            if (acquired) Monitor.Exit(gate);
             tokenClearedAtTlsDispose = ownedToken.All(value => value == 0);
         };
 
