@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（M4已收口；M5服务端双TLS路由/ACK及生命周期片完成，最新5a03ab1，Debug/Release各2196 PASS；下一片客户端高层附着，见§19.6）**
+> 更新时间：**2026-09-29（7afface封闭proof片，各2224 PASS；高层附着/M5未完成，§19.7）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`5a03ab1`（服务端双TLS显式路由、ACK、Host关闭授权/任务join，ADR-050）。本轮Debug/Release各2196 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19.6。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
+> **最新代码：`7afface`客户端封闭proof片（ADR-051），双配置各2224 PASS，见§19.7；前片`5a03ab1`各2196保留于§19.6。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：客户端高层安全附着，再GDI/JPEG/渲染。** 服务端真实双TLS、严格ACK、单次sender及Host共享关闭/join已接通；显式internal装配，不改变产品默认Control-only入口。客户端现只有测试手工第二TLS，没有高层交付/父子生命周期。未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
+> **下一关：先客户端共享关闭/流adapter，再高层安全附着，详见§19.7方案。** 服务端双TLS已接通，默认Control-only不变；客户端封闭proof尚未高层真实TLS使用，父子生命周期/安全交付未完成。未采集/显示或跑十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：客户端高层附着、父子生命周期与安全交付，再采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
+- **下一步：TlsConnection共享CloseAsync/客户端video stream adapter优先，再高层附着与父子join（§19.7，仅方案）。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`5a03ab1`**（服务端双TLS与生命周期，26文件含ADR-050）。改动Host及传输层/测试，默认Control-only入口、产品App、系统网络/权限未改，旧包/安装目录未覆盖。
-- **Working tree at validation：对应5a03ab1的源码/测试工作树；Debug/Release各2196 PASS、0失败/0跳过，定向各225 PASS，构建0警告/0错误**。12份TRX独立核对计数和每条Passed；solution及独立启动器双build，证据`outputs/m5-dual-tls/frozen-*.log`及`frozen-*.trx`。验证后未改源码/测试，只记账；未publish/打包，M4旧包保持§18.22。
+- **Last code commit：`7afface`**（客户端封闭proof片，7files/+445/-18，ADR-051已记）；前片`5a03ab1`服务端双TLS见§19.6。
+- **Working tree at validation：7afface源码/测试，验证后未变；双配置各2224 PASS/0失败/0跳过。** 主线程已解析12份`outputs/m5-client-proof/full-*.trx`，四build零警告错误（§19.7）。代码提交后仅三份文档记账；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2761,3 +2761,17 @@ M4收口记账提交`c251d21`后推进；本节不覆盖M4原日志结局。**La
 **真实TLS覆盖边界**：13项，使用生产Control/TLS客户端、实际证书pin验证、独立HMAC/ACK/wire断言；覆盖成功、错proof不消费、重复附着、Control撤销、视频断连、Host停机、忽略取消源、回调故障、非法上行、旧Control-only拒绝及跨信封/附着TTL仍可发后续帧。测试payload为不透明五字节，不是JPEG图像。组件测试覆盖严格ACK、首帧/登记/ACK边界与所有权/收尾，不声称全网络组合或硬中断任意本机代码。
 
 **下一片**：客户端高层安全附着，先处理AuthenticatedControlSession共享SessionToken视图与Dispose同步，再实际第二pin/proof、严格ACK验证、唯一交付/迟到成功回收、父子撤销与join；随后GDI主屏50%缩放/JPEG/5FPS/WPF显示及10分钟内存稳定DoD。M5仍进行中，M4不重开。
+
+### 19.7 客户端封闭proof片（完成，7afface）
+
+7afface（7files/+445/-18），ADR-051已记；源码验证后未变。前片5a03ab1/§19.6历史2196保留。
+
+- `AuthenticatedControlSession.CreateVideoAttachProof(nonce,actualPin,caller)`代替共享`SessionToken`；MAC/Dispose同锁、TLS Dispose锁外、失败proof finally清零。
+- 测试专用反射保留原秘密数组观察清零及独立TLS oracle；无后置取消直接持有失败proof原数组的确定性观察。并发仅入口锁、不暂停MAC；新方法未高层真实TLS使用。
+- 主线程已实际解析12份`outputs/m5-client-proof/full-*.trx`：Debug/Release各**2224 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport1378/Acceptance282）；定向各125含新28，不重复累加。solution/IsolatedAcceptance四build零警告错误；Python独立83字节HMAC黄金已核，非打包Python重跑。
+- 本片已改生产与测试；验证之后仅文档记账。无新包/GUI/M4重跑/改网。
+
+**下一步仅已只读定位，未完成：**
+1. 先`TlsConnection`共享`CloseAsync`/客户端video stream adapter；现Dispose普通bool判重，SSL抛会跳过client清理；`TlsClientConnector`失败finally同为独立待修缺口。
+2. success收齐`receivedAt`/`TimeProvider`元数据（目前丢弃）、本地hint上限15s、父撤销/子登记join、实际第二pin/严格ACK唯一交付及迟到成功回收。
+3. 再采集/JPEG/渲染及十分钟DoD；默认Control-only/安全硬约束不变，非全客户端或M5完成。
