@@ -12,7 +12,7 @@ namespace LanRemote.Transport.Auth;
 /// <para>字段集以权威规格 <c>04_PROTOCOL_AND_SECURITY.md</c> §9 的样本为准：
 /// <c>type</c> / <c>grantedPermission</c>（<c>view</c> | <c>control</c>）/
 /// <c>serverProof</c>（base64 canonical，32 字节）/ <c>sessionToken</c>（base64 canonical，
-/// 32 字节）/ <c>videoAttachExpiresInMs</c>（M5 视频重连窗口，毫秒）。</para>
+/// 32 字节）/ <c>videoAttachExpiresInMs</c>（M5 首次视频附着窗口，毫秒）。</para>
 /// <para><b>客户端必须先验 serverProof 再使用 sessionToken</b>（规格 04 §9：验证失败立即断开、
 /// UI 显示「远端身份验证失败」、不发送输入）。验证逻辑（重建 grant 档 + HMAC +
 /// FixedTimeEquals）在阶段 4；本帧只负责「字段存在且是 canonical 形状」。</para>
@@ -57,7 +57,7 @@ public sealed class AuthSuccessFrame
     /// <param name="grantedPermission">实际授予的权限。</param>
     /// <param name="serverProof">32 字节 HMAC-SHA256 证明（绑 grant transcript）。</param>
     /// <param name="sessionToken">32 字节会话令牌。</param>
-    /// <param name="videoAttachExpiresInMs">视频重连窗口（毫秒，必须为正）。</param>
+    /// <param name="videoAttachExpiresInMs">首次视频附着窗口（毫秒，必须为正）。</param>
     /// <exception cref="ArgumentException">proof 或 token 长度不是 32 字节。</exception>
     /// <exception cref="ArgumentOutOfRangeException">窗口不是正数，或权限枚举未定义。</exception>
     public AuthSuccessFrame(
@@ -107,7 +107,7 @@ public sealed class AuthSuccessFrame
     /// <summary>客户端验证失败或复制入会话后清理帧内 token，不扩展公开 API。</summary>
     internal void ClearSessionToken() => CryptographicOperations.ZeroMemory(_sessionToken);
 
-    /// <summary>视频重连窗口（毫秒）。</summary>
+    /// <summary>首次视频附着窗口（毫秒）。</summary>
     public int VideoAttachExpiresInMs { get; }
 
     /// <summary>

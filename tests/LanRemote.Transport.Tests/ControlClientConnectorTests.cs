@@ -88,8 +88,42 @@ public sealed partial class ControlClientConnectorTests
         ReadOnlyMemory<byte> tokenView = session.SessionToken;
         Assert.Equal(32, tokenView.Length);
         Assert.Contains(tokenView.ToArray(), value => value != 0);
-        Assert.True(context.SessionRegistry.TryGetSessionToken(session.SessionId, out ReadOnlyMemory<byte> serverToken));
-        Assert.Equal(serverToken.ToArray(), tokenView.ToArray());
+        // 仅用测试私有反射持有登记表原数组，保留逐字节一致性与注销清零证据；不新增生产 getter。
+        var entries = (System.Collections.IDictionary)typeof(SessionRegistry)
+            .GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(context.SessionRegistry)!;
+        object entry = entries[session.SessionId]!;
+        byte[] serverToken = (byte[])entry.GetType().GetProperty("SessionToken")!.GetValue(entry)!;
+        Assert.Equal(serverToken, tokenView.ToArray());
+
+        // 控制链路是真实 TLS；这是同 IP/pin、不同 ConnectionId 的合成第二视频上下文，不是第二条 TLS 测试。
+        byte[] videoPin = session.Identity.PresentedCertSha256.ToArray();
+        ConnectionSecurityContext syntheticVideo = new(
+            IPAddress.Loopback, summary.RemoteAddress, 0, SslProtocols.None, videoPin);
+        Assert.NotEqual(summary.ConnectionId, syntheticVideo.ConnectionId);
+        byte[] attachNonce = RandomNumberGenerator.GetBytes(16);
+        // 独立拼装 UTF8 域（含尾 NUL）19 + UUID 网络序 16 + nonce 16 + pin 32，不调用生产 helper。
+        byte[] transcript = new byte[83];
+        byte[] domain = Encoding.UTF8.GetBytes("LANREMOTE-VIDEO-V1\0");
+        Assert.Equal(19, domain.Length);
+        domain.CopyTo(transcript, 0);
+        Convert.FromHexString(session.SessionId.ToString("N")).CopyTo(transcript, 19);
+        attachNonce.CopyTo(transcript, 35);
+        videoPin.CopyTo(transcript, 51);
+        byte[] attachProof;
+        using (HMACSHA256 hmac = new(tokenView.ToArray()))
+        {
+            attachProof = hmac.ComputeHash(transcript);
+        }
+        Assert.Equal(VideoAttachStatus.Attached, context.SessionRegistry.TryAttachVideo(
+            session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? lease));
+        Assert.NotNull(lease);
+        Assert.Equal(session.SessionId, lease.SessionId);
+        Assert.Equal(syntheticVideo.ConnectionId, lease.VideoConnectionId);
+        Assert.False(lease.Revoked.IsCompleted);
+        Assert.Equal(VideoAttachStatus.AlreadyAttached, context.SessionRegistry.TryAttachVideo(
+            session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? duplicate));
+        Assert.Null(duplicate);
+        Assert.False(lease.Revoked.IsCompleted);
         Assert.Equal(15_000, session.VideoAttachExpiresInMsHint);
         Assert.Equal(0, context.FailedAuthLimiter.CountRecentFailures(IPAddress.Loopback));
 
@@ -104,8 +138,13 @@ public sealed partial class ControlClientConnectorTests
         Assert.Equal(ControlSessionState.Authenticated, result.State);
         Assert.Equal(session.SessionId, result.SessionId);
         Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
-        Assert.False(context.SessionRegistry.TryGetSessionToken(session.SessionId, out _));
-        Assert.All(serverToken.ToArray(), value => Assert.Equal((byte)0, value));
+        await lease.Revoked.WaitAsync(Guard);
+        Assert.True(lease.Revoked.IsCompletedSuccessfully);
+        // 使用断开前保存的有效 proof，不从已清零的 token 重算。
+        Assert.Equal(VideoAttachStatus.Unavailable, context.SessionRegistry.TryAttachVideo(
+            session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? stale));
+        Assert.Null(stale);
+        Assert.All(serverToken, value => Assert.Equal((byte)0, value));
     }
 
     [Fact(Timeout = 30_000)]
@@ -129,7 +168,13 @@ public sealed partial class ControlClientConnectorTests
         Assert.Equal(ControlSessionState.Closed, result.State);
         Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
         Assert.Empty(context.SessionRegistry.Snapshot());
-        Assert.False(context.SessionRegistry.TryGetSessionToken(result.SessionId, out _));
+        // 仅合成视频安全上下文，验证失败会话不可绑定；没有第二条 TLS 连接。
+        ConnectionSecurityContext syntheticVideo = new(
+            IPAddress.Loopback, IPAddress.Loopback, 0, SslProtocols.None,
+            scenario.Target.ExpectedCertSha256.Span);
+        Assert.Equal(VideoAttachStatus.Unavailable, context.SessionRegistry.TryAttachVideo(
+            result.SessionId, syntheticVideo, new byte[16], new byte[32], default, out VideoAttachLease? lease));
+        Assert.Null(lease);
         Assert.Equal(0, gate.RequestCount);
         Assert.Equal(1, context.FailedAuthLimiter.CountRecentFailures(IPAddress.Loopback));
     }

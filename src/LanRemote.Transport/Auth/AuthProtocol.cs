@@ -92,7 +92,7 @@ public static class AuthProtocol
     /// <summary>字段名：<c>sessionToken</c>（base64 canonical，32 字节随机）。</summary>
     public const string FieldSessionToken = "sessionToken";
 
-    /// <summary>字段名：<c>videoAttachExpiresInMs</c>（M5 视频重连窗口）。</summary>
+    /// <summary>字段名：<c>videoAttachExpiresInMs</c>（M5 首次视频附着窗口）。</summary>
     public const string FieldVideoAttachExpiresInMs = "videoAttachExpiresInMs";
 
     /// <summary>字段名：<c>expiresInMs</c>（challenge 有效期提示）。</summary>
@@ -131,7 +131,7 @@ public static class AuthProtocol
     /// </remarks>
     public const int ChallengeExpiresInMs = 15_000;
 
-    /// <summary>视频重连窗口的初值（M5 用；规格 04 §10 的 <c>videoAttachExpiresInMs</c>）。</summary>
+    /// <summary>首次视频附着窗口的初值（M5 用；规格 04 §10 的 <c>videoAttachExpiresInMs</c>）。</summary>
     public const int VideoAttachExpiresInMs = 15_000;
 
     /// <summary>失败限流的观察窗口（规格 04 §14：10 分钟）。</summary>

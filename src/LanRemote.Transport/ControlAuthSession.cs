@@ -307,42 +307,75 @@ public sealed class ControlAuthSession
             byte[] grantTranscript =
                 AuthTranscriptBuilder.BuildGrantTranscript(clientTranscript, grantedPermission);
             byte[] serverProof = AuthTranscriptBuilder.ComputeServerProof(accessKeyBytes, grantTranscript);
+            // proof 已生成，保持连接不再需要访问密钥；不要把它留到 holding 结束。
+            CryptographicOperations.ZeroMemory(accessKeyBytes);
+            accessKeyBytes = null;
             byte[] sessionToken = RandomNumberGenerator.GetBytes(AuthProtocol.SessionTokenByteLength);
-
-            AuthSuccessFrame success = new(
-                grantedPermission, serverProof, sessionToken, Context.Options.VideoAttachExpiresInMs);
-
+            AuthSuccessFrame? success = null;
+            byte[]? successPayload = null;
+            SessionRegistry.SessionRegistration? registration = null;
+            bool successWriteFailed = false;
             try
             {
-                await FrameWriter.WriteFrameAsync(
-                    _stream,
-                    success.Serialize(),
-                    TransportConstants.MaxPreAuthMessageBytes,
-                    _timeouts.LengthPrefixTimeout,
-                    cancellationToken).ConfigureAwait(false);
+                success = new AuthSuccessFrame(
+                    grantedPermission, serverProof, sessionToken, Context.Options.VideoAttachExpiresInMs);
+                successPayload = success.Serialize();
+                // ADR-048：写前起算，写/flush/登记调度都消耗窗口；登记不能重置起点。
+                VideoAttachWindow attachWindow = new(Context.TimeProvider, Context.Options.VideoAttachExpiresInMs);
+                try
+                {
+                    await FrameWriter.WriteFrameAsync(
+                        _stream,
+                        successPayload,
+                        TransportConstants.MaxPreAuthMessageBytes,
+                        _timeouts.LengthPrefixTimeout,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    successWriteFailed = true;
+                }
+                catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException)
+                {
+                    // 本地写出失败：不登记、不保持。先清秘密，再 best-effort 发送失败帧。
+                    successWriteFailed = true;
+                }
+
+                if (!successWriteFailed)
+                {
+                    // ⑧ 仍然只有 success 本地写出成功，才登记已认证 Control。
+                    State = ControlSessionState.Authenticated;
+                    registration = Context.SessionRegistry.Register(
+                        SessionId,
+                        Security.ConnectionId,
+                        response.ClientDeviceId,
+                        response.ClientName,
+                        grantedPermission,
+                        Security.RemoteAddress,
+                        Security.RemotePort,
+                        sessionToken,
+                        attachWindow,
+                        Security.ServerCertificateSha256.Span,
+                        cancellationToken);
+                }
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            finally
+            {
+                // 只声明擦除本方法拥有的数组，不承诺 DTO 字符串/FrameWriter/TLS 内部副本。
+                CryptographicOperations.ZeroMemory(sessionToken);
+                success?.ClearSessionToken();
+                if (successPayload is not null)
+                {
+                    CryptographicOperations.ZeroMemory(successPayload);
+                }
+            }
+
+            if (successWriteFailed)
             {
                 return await FailAsync(RejectSuccessNotDelivered, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException)
-            {
-                // 本地写出失败：不登记、不保持。写出成功也不等于对端已经接收/接受。
-                return await FailAsync(RejectSuccessNotDelivered, cancellationToken).ConfigureAwait(false);
-            }
 
-            // ⑧ 登记 + 保持（#45：决定已转移、success 本地写出成功，才登记 session）。
-            State = ControlSessionState.Authenticated;
-
-            using (SessionRegistry.SessionRegistration registration = Context.SessionRegistry.Register(
-                SessionId,
-                Security.ConnectionId,
-                response.ClientDeviceId,
-                response.ClientName,
-                grantedPermission,
-                Security.RemoteAddress,
-                Security.RemotePort,
-                sessionToken))
+            using (registration)
             {
                 await HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken).ConfigureAwait(false);
             }

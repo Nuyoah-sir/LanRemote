@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using LanRemote.Core.Models;
+using LanRemote.Transport.Auth;
 
 namespace LanRemote.Transport;
 
@@ -79,78 +80,206 @@ public sealed class SessionRegistry
         SessionPermission grantedPermission,
         IPAddress remoteAddress,
         int remotePort,
-        ReadOnlySpan<byte> sessionToken)
+        ReadOnlySpan<byte> sessionToken,
+        VideoAttachWindow attachWindow,
+        ReadOnlySpan<byte> controlCertificateSha256,
+        CancellationToken controlCancellationToken)
     {
-        Entry entry = new(
-            new ControlSessionSummary(
-                sessionId,
-                connectionId,
-                clientDeviceId,
-                clientName,
-                grantedPermission,
-                remoteAddress,
-                remotePort,
-                DateTimeOffset.UtcNow),
-            sessionToken.ToArray());
-
-        lock (_gate)
+        ArgumentNullException.ThrowIfNull(attachWindow);
+        ArgumentNullException.ThrowIfNull(remoteAddress);
+        if (sessionToken.Length != 32)
         {
-            // 会话 id 冲突 = 编程错误（每会话一个 Guid）；Add 会抛，不静默覆盖。
-            _sessions.Add(sessionId, entry);
+            throw new ArgumentException("会话 token 必须恰好 32 字节。", nameof(sessionToken));
         }
 
-        return new SessionRegistration(this, sessionId);
-    }
-
-    /// <summary>
-    /// 读取登记中的 sessionToken（<b>仅程序集内部</b>：M5 的 video attach 校验用；
-    /// 绝不出公开面、绝不落日志）。
-    /// </summary>
-    internal bool TryGetSessionToken(Guid sessionId, out ReadOnlyMemory<byte> token)
-    {
-        lock (_gate)
+        if (controlCertificateSha256.Length != 32)
         {
-            if (_sessions.TryGetValue(sessionId, out Entry? entry))
+            throw new ArgumentException("控制连接证书摘要必须恰好 32 字节。", nameof(controlCertificateSha256));
+        }
+
+        byte[] ownedToken = sessionToken.ToArray();
+        bool registered = false;
+        try
+        {
+            Entry entry = new(
+                new ControlSessionSummary(
+                    sessionId,
+                    connectionId,
+                    clientDeviceId,
+                    clientName,
+                    grantedPermission,
+                    remoteAddress,
+                    remotePort,
+                    DateTimeOffset.UtcNow),
+                ownedToken,
+                attachWindow,
+                controlCertificateSha256.ToArray(),
+                controlCancellationToken);
+            // 先构造句柄，避免入表后构造失败却无人持有注销责任。
+            SessionRegistration registration = new(this, sessionId, entry);
+            lock (_gate)
             {
-                token = entry.SessionToken;
-                return true;
+                // 只登记成功写出的控制会话；已过期的窗口不阻止控制登记，也不重置起点。
+                _sessions.Add(sessionId, entry);
+                registered = true;
             }
 
-            token = default;
-            return false;
+            return registration;
+        }
+        finally
+        {
+            if (!registered)
+            {
+                CryptographicOperations.ZeroMemory(ownedToken);
+            }
         }
     }
 
-    private void Unregister(Guid sessionId)
+    /// <summary>在登记表内验证视频证明并原子消费一次性资格，不导出共享 token。</summary>
+    internal VideoAttachStatus TryAttachVideo(
+        Guid sessionId,
+        ConnectionSecurityContext videoSecurity,
+        ReadOnlySpan<byte> attachNonce,
+        ReadOnlySpan<byte> attachProof,
+        CancellationToken cancellationToken,
+        out VideoAttachLease? lease)
     {
-        Entry? entry;
+        lease = null;
         lock (_gate)
         {
-            if (_sessions.TryGetValue(sessionId, out entry))
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return VideoAttachStatus.Cancelled;
+            }
+
+            if (!_sessions.TryGetValue(sessionId, out Entry? entry))
+            {
+                return VideoAttachStatus.Unavailable;
+            }
+
+            VideoAttachStatus? unavailable = CheckAvailability(sessionId, entry, cancellationToken);
+            if (unavailable is not null)
+            {
+                return unavailable.Value;
+            }
+
+            if (videoSecurity is null || attachNonce.Length != 16 || attachProof.Length != 32)
+            {
+                return VideoAttachStatus.InvalidInput;
+            }
+
+            Span<byte> remoteAddress = stackalloc byte[4];
+            if (videoSecurity.ConnectionId == entry.Summary.ConnectionId ||
+                !videoSecurity.RemoteAddress.TryWriteBytes(remoteAddress, out int addressLength) ||
+                addressLength != remoteAddress.Length ||
+                !remoteAddress.SequenceEqual(entry.ControlRemoteAddress) ||
+                !CryptographicOperations.FixedTimeEquals(
+                    videoSecurity.ServerCertificateSha256.Span, entry.ControlCertificateSha256))
+            {
+                return VideoAttachStatus.IdentityMismatch;
+            }
+
+            byte[] expectedProof = VideoAttachProof.ComputeProof(
+                entry.SessionToken, sessionId, attachNonce, videoSecurity.ServerCertificateSha256.Span);
+            try
+            {
+                bool proofMatches = CryptographicOperations.FixedTimeEquals(expectedProof, attachProof);
+                VideoAttachLease? candidate = proofMatches
+                    ? new VideoAttachLease(sessionId, videoSecurity.ConnectionId, entry.Revoked.Task)
+                    : null;
+
+                // 错误 proof 也必须先服从最终取消/截止，不能抢先返回 InvalidProof。
+                unavailable = CheckAvailability(sessionId, entry, cancellationToken);
+                if (unavailable is not null)
+                {
+                    return unavailable.Value;
+                }
+
+                if (!proofMatches)
+                {
+                    return VideoAttachStatus.InvalidProof;
+                }
+
+                entry.VideoAttached = true;
+                lease = candidate;
+                return VideoAttachStatus.Attached;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(expectedProof);
+            }
+        }
+    }
+
+    // 仅在 _gate 内调用。生产 TimeProvider 必须快速且可信；不承诺中断阻塞的本机时钟。
+    private VideoAttachStatus? CheckAvailability(Guid sessionId, Entry entry, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested || entry.ControlCancellationToken.IsCancellationRequested)
+        {
+            return VideoAttachStatus.Cancelled;
+        }
+
+        bool expired = entry.AttachWindow.IsExpired;
+        // 取时可以被测试时钟重入：其后不得只检查缓存的 entry / 未消费状态。
+        if (cancellationToken.IsCancellationRequested || entry.ControlCancellationToken.IsCancellationRequested)
+        {
+            return VideoAttachStatus.Cancelled;
+        }
+
+        if (!_sessions.TryGetValue(sessionId, out Entry? current) || !ReferenceEquals(current, entry))
+        {
+            return VideoAttachStatus.Unavailable;
+        }
+
+        if (expired)
+        {
+            return VideoAttachStatus.Expired;
+        }
+
+        return entry.VideoAttached ? VideoAttachStatus.AlreadyAttached : null;
+    }
+
+    private void Unregister(Guid sessionId, object entryIdentity)
+    {
+        lock (_gate)
+        {
+            if (_sessions.TryGetValue(sessionId, out Entry? entry) && ReferenceEquals(entry, entryIdentity))
             {
                 _sessions.Remove(sessionId);
+                CryptographicOperations.ZeroMemory(entry.SessionToken);
+                // TCS 强制异步 continuation；锁内不调用取消源或任何 handler。
+                entry.Revoked.TrySetResult();
             }
-        }
-
-        // 会话断开立即废弃：token 当场清零（放在锁外也无妨——条目已摘除，外人拿不到引用）。
-        if (entry is not null)
-        {
-            CryptographicOperations.ZeroMemory(entry.SessionToken);
         }
     }
 
-    /// <summary>登记条目：非秘密摘要 + 内存中的 token 副本。</summary>
+    /// <summary>全部可变状态由登记表锁保护；token 仅在本私有条目内借用。</summary>
     private sealed class Entry
     {
-        public Entry(ControlSessionSummary summary, byte[] sessionToken)
+        public Entry(
+            ControlSessionSummary summary,
+            byte[] sessionToken,
+            VideoAttachWindow attachWindow,
+            byte[] controlCertificateSha256,
+            CancellationToken controlCancellationToken)
         {
             Summary = summary;
             SessionToken = sessionToken;
+            AttachWindow = attachWindow;
+            ControlCertificateSha256 = controlCertificateSha256;
+            // 固化控制端 IPv4 字节，比较时不调用可覆写的 IPAddress.Equals。
+            ControlRemoteAddress = summary.RemoteAddress.GetAddressBytes();
+            ControlCancellationToken = controlCancellationToken;
         }
 
         public ControlSessionSummary Summary { get; }
-
         public byte[] SessionToken { get; }
+        public VideoAttachWindow AttachWindow { get; }
+        public byte[] ControlCertificateSha256 { get; }
+        public byte[] ControlRemoteAddress { get; }
+        public CancellationToken ControlCancellationToken { get; }
+        public bool VideoAttached { get; set; }
+        public TaskCompletionSource Revoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>
@@ -162,12 +291,14 @@ public sealed class SessionRegistry
     {
         private readonly SessionRegistry _registry;
         private readonly Guid _sessionId;
+        private readonly object _entryIdentity;
         private int _released;
 
-        internal SessionRegistration(SessionRegistry registry, Guid sessionId)
+        internal SessionRegistration(SessionRegistry registry, Guid sessionId, object entryIdentity)
         {
             _registry = registry;
             _sessionId = sessionId;
+            _entryIdentity = entryIdentity;
         }
 
         /// <summary>本句柄对应的会话 id。</summary>
@@ -178,7 +309,7 @@ public sealed class SessionRegistry
         {
             if (Interlocked.Exchange(ref _released, 1) == 0)
             {
-                _registry.Unregister(_sessionId);
+                _registry.Unregister(_sessionId, _entryIdentity);
             }
         }
     }

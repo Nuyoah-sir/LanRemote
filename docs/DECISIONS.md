@@ -972,7 +972,7 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 直接映射一个具体失败模式：「本地 success 写出失败却登记了 session」（不等于能证明远端收到）/「垃圾帧触发密钥
 路径」/「窗口因解析耗时漂移」/「把 60 s 封禁误读成 10 min 锁死或反之」/「审批期两个读者
 抢一条流」/「越权授予」/「短码被当成认证凭据」。
-**Consequence**：M5 video attach 校验复用 `SessionRegistry.TryGetSessionToken`（internal）；
+**Consequence（该项被 ADR-048 取代）**：旧计划复用 `SessionRegistry.TryGetSessionToken`；共享视图不满足注销与附着的原子性，M5 改用登记表内部验证并绑定，不再导出 token。
 `ControlAuthOptions` 是**测试缩放形态**（全部时限可调）——产品默认值单点定义在
 `AuthProtocol`，不得被测试缩放误导；阶段 4 客户端的 serverProof 独立重算与高层连接所有权见 ADR-043。
 短码可计算不等于批准前双端展示已接线。阶段 3/4 时过程 API 尚未定案；2026-09-23 已按 ADR-044 实现非秘密通知与验收器接线，人工双端展示仍待验收。步骤 19 的 Transport 文案与会话边界见 ADR-043。
@@ -1273,3 +1273,17 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 6. 主协议/I/O/取消异常保留原实例、类型与令牌，清理异常另以internal有界只读快照公开（Reader最多stream+owner两项、Writer最多stream一项）；直接Dispose仍可抛出关闭错误。IsTerminated只代表不再接受操作；StreamDisposeSucceeded只代表底层Dispose正常返回，不代表实际资源关闭或join完成。清理失败不静默记成功，不盲目重试释放。
 
 **Evidence / 可逆性**：实现前后使用同一组20个确定性回归，先20红再20绿，覆盖构造期取消/停止/重叠读、owner释放掩盖原错误、真正关闭前失败及稳定诊断；测试文件SHA不变。Python标准库struct独立生成40字节黄金向量，与手写测试向量一致。其余边界/分片/连帧/非法头先拒/池尾部和队列并发释放均有定向回归；全量结果见HANDOFF§19。payload测试字节不代表合法JPEG，不代表真实TLS视频/采集/显示/10分钟稳定性已验证。内部实现可后续替换但所有权、失败终止及限额不弱化；改变wire取值范围须明确兼容性决定。
+
+### ADR-048 — VideoAttach 固定字节证明、写前绝对窗口与一次性原子绑定
+
+**日期**：2026-09-29。**范围**：M5 安全基础片；以下是原规格 04 §10 的实施细化，不是用户额外指定的重连策略，也不表示第二 TLS 路由已经接入。取代 ADR-041 的共享 token 查询计划；M4 的 success 写后才登记、单读者与审批均不变。
+
+1. **精确 transcript**：UTF-8 `LANREMOTE-VIDEO-V1` + 单字节 NUL（共19字节），紧接 UUID 的 RFC/network-order 16 字节、解码后的 nonce 16 字节、实际视频 TLS 证书 DER 的 SHA-256 原始32字节，共83字节，无额外分隔/终止符。UUID 不用 Guid 默认混合端序；HMAC-SHA256 的 key 是32字节 sessionToken，proof为32字节，FixedTimeEquals 比较。独立 Python uuid/hmac 黄金向量检验端序与长度；不复用 M4 的32字节nonce或文本transcript。
+2. **严格 video hello**：只接受原六字段，type/channel/protocol 精确为 channel_hello/video/1；sessionId为小写D规范UUID，nonce/proof为规范base64且精确16/32字节。拒绝重复/未知/缺失/null/错类型/非法UTF-8/多余值/注释/尾逗号，payload上限4KiB。解析器和proof内部可用不等于默认Control入口放行video；旧HelloFrame与ControlPreAuthSession不放宽。
+3. **单调窗口**：序列化success之后、首次write调用前捕获同一TimeProvider起点，权威预算为min(配置提示,15000ms)，必须正值。write/flush、写后调度和登记等待均计入；仅本地success写成功后Register，登记不重置。MAC前及最终提交前均要求elapsed < budget（负elapsed也拒绝）；timer派发和UTC无关。写成功但窗口已过仍可登记Control，仅视频资格失效；成功附着后不因15秒到点撤销已有视频。
+4. **原子一次性消费**：Register防御复制token并保存Control取消令牌、原始窗口和原Control证书pin。TryAttachVideo只接受冻结视频TLS事实；须为不同ConnectionId、同一远端IPv4地址、与Control相同pin。登记表同一锁内校验活动entry、控制/调用取消、窗口、未消费资格，计算MAC并在最终时间/取消/entry身份复核后提交。错误proof不消耗资格；并发正确proof至多一个成功。不导出token视图/副本/回调。锁内无网络I/O、日志委托、Cancel或await；TimeProvider为可信快速时钟，不可用普通锁承诺中断阻塞本机实现。
+5. **撤销与所有权**：成功返回内部VideoAttachLease，仅关联ID与RunContinuationsAsynchronously的Revoked任务，不持有流，不提供恢复资格的Release。注销按entry对象身份防ABA，同锁摘表、清零私有token、完成撤销通知。调用方收到成功时lease可能已撤销；后续handler必须观察撤销并在锁外关闭/取消/join。撤销通知不等于socket已关闭或任务已退出。附着后视频断开/初始化失败/取消都不恢复资格；v1本片不支持同Control会话内重连，需重新认证，避免回滚/重放状态机及无界nonce表。
+6. **暂不可见与后续接线**：success被客户端收到与Register可见不是同一时刻。本片查不到entry立即fail closed，无预注册占位/暗中批准。后续显式首帧路由若补注册间隙等待，只可在同一未授权TLS连接、既有准入和pre-auth绝对预算内有界处理；精确等待/接受确认规则需在接线时另定，不能盲目重连或把一次成功退回未消费。第二TLS仍须同子网/RFC1918/原pinning；禁止对外公开流/token和改系统网络。
+7. **秘密清理边界**：注册失败清零未转移的token副本，不动调用方和现有entry；success写出/注册后立即清理本方法的token、success对象token及可控序列化字节，失败亦同。访问key不延长到保持阶段。DTO字符串、FrameWriter/TLS内部副本不能保证擦除；客户端旧internal SessionToken借用面留待客户端附着同步改造，不能声称全Transport已无共享秘密视图。
+
+**验证状态**：最终自动化结果、审查修复与未接线范围统一记入HANDOFF§19.4；独立复核已确认三项变异分别2/2/4红、精确恢复后同组8绿。success失败后的三份原秘密现先清理再尝试失败帧I/O，同一回归修复前4红/1绿、修复后双配置各5绿。注册冲突时失败新副本清零有生产finally覆盖，但尚无直接持有该失败副本的断言；不把该漏测表述为现有泄漏。不将registry或合成视频上下文测试当第二条真实TLS验证。
