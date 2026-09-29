@@ -1357,3 +1357,18 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Evidence**：TLS owner先51/60运行期红；Control纠正OCE Task状态测试预期后22/80红；Acceptance分类96/144红、收尾补充5/151红，修后通过。最终双配置各2514 PASS（较上片+251），四build零警告错误；详细证据见HANDOFF§19.9。mock identity仅组件证据，真实TLS/pinning由原生产连接器回归承担。
 
 **Limits / next**：Control已取得连接后的认证失败finally与Verify新session后置终检的清理仍可能覆盖认证主错，下一片先做逻辑撤销清零和外层异步owner收尾；不把本片称为全部客户端清理完成。success时间元数据/附着TTL、父子撤销join、ACK唯一交付、采集显示及十分钟DoD均未完成。未改系统网络、默认Control-only、M4物料或原安全门禁。
+
+### ADR-054 — 未交付控制会话的秘密撤销与异步 owner 收尾
+
+**日期**：2026-09-29。**Context**：认证已经取得TLS后，外层finally的同步Dispose会覆盖认证主错并阻塞调用线程；Verify在构造session后终检失败时立即Dispose，既推迟临时秘密清零，也可把超时覆盖成IOException并再次翻译成连接关闭。
+
+**Decision**：
+1. AuthenticatedControlSession提取同锁RevokeCore，internal void RevokeForOwnerCleanup仅逻辑失效、清零原token，不触发网络I/O。只有已经持有原连接且负责关闭的owner可用。public Dispose仍由取到连接者在锁外同步关闭；重复session Dispose幂等返回，不改变底层连接的重复等待/首报错合同。
+2. Verify构造后终检失败仅撤销未交付session后重抛；认证各层finally清理parsed token、transcript、expectedProof/grantTranscript。外层catch先采样caller取消状态、清零私有key并撤销已取得session，才await原连接共享CloseAsync；finally只作key清零兜底。
+3. 无cleanup错误沿用catch入口取消快照和原复合异常保真规则，清理期间才到的取消不追溯改写主错。有cleanup错误合成Aggregate(primary,Aggregate(TCP/SSL原槽))一次；不调用public Dispose再重复收集、不Flatten、不用错误是否曾被public报告过来判断有无清理故障。
+4. 成功移交前终检仍保留；成功路径将两个owner引用清空，不回收已交付session。关闭任务完成不等于清理成功或所有外部I/O已join，任意不合作本机代码仍无硬中断。
+5. 测试观察接缝仅internal构造参数/private readonly实例callback，public默认null；在真实session new后、受撤销catch保护且终检前调用，无public token/stream扩张。真实构造事件驱动到期，不以目标终检的第N次取时自证构造。observer自身异常仍受既有认证类别翻译，不能承诺任意类别原样返回。
+
+**Evidence**：owner旧实现190例144红，旧构造后22例18红；修复后加强至26例，并新增11例撤销原语。实际删除外层/Verify撤销调用分别10/14红（各26例），原构造、到期与取消事件不删；精确恢复源码后26绿。最终再加强构造时持有session token原数组并检查非零前态、闸前同一数组全零，避免清零副本假证。最终双配置证据见HANDOFF§19.10。
+
+**Limits / next**：测试直观测key/client transcript/parsed token/session自有token；expectedProof/grantTranscript只有代码finally顺序证据，JSON字符串/TLS内部副本不承诺擦除。受控SSL夹具不是实际TLS，真实TLS由未放宽的原用例提供。success原receivedAt/clock与附着TTL、父子生命周期/ACK后唯一交付、采集/JPEG/显示/十分钟DoD仍未完成；系统网络、M4、产品默认Control-only不动。

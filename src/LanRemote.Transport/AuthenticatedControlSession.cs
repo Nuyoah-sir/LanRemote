@@ -106,19 +106,26 @@ public sealed class AuthenticatedControlSession : IDisposable
     /// <summary>清零私有 token 并关闭连接；可重复调用。</summary>
     public void Dispose()
     {
-        TlsConnection? connection;
+        // TLS 关闭可能执行 I/O，不得占用密钥锁；public 首调用仍同步等待。
+        RevokeCore()?.Dispose();
+    }
+
+    /// <summary>
+    /// 未交付会话的 owner 撤销：仅失效并清零，不关闭或等待网络。
+    /// 调用方必须已持有原连接，并负责 await CloseAsync 及消费 CleanupErrors。
+    /// </summary>
+    internal void RevokeForOwnerCleanup() => _ = RevokeCore();
+
+    private TlsConnection? RevokeCore()
+    {
         lock (_gate)
         {
-            connection = Interlocked.Exchange(ref _connection, null);
-            if (connection is null)
+            TlsConnection? connection = Interlocked.Exchange(ref _connection, null);
+            if (connection is not null)
             {
-                return;
+                CryptographicOperations.ZeroMemory(_sessionToken);
             }
-
-            CryptographicOperations.ZeroMemory(_sessionToken);
+            return connection;
         }
-
-        // TLS 关闭可能执行 I/O，不得占用密钥锁。
-        connection.Dispose();
     }
 }

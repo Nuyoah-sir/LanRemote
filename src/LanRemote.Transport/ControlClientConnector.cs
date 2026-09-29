@@ -10,6 +10,7 @@ public sealed class ControlClientConnector
 {
     private readonly Func<ConnectionTarget, TransportTimeouts, TimeProvider,
         CancellationToken, Task<TlsConnection>> _connectTls;
+    private readonly Action<AuthenticatedControlSession>? _sessionConstructed;
 
     public ControlClientConnector()
         : this((target, timeouts, clock, token) =>
@@ -17,10 +18,12 @@ public sealed class ControlClientConnector
 
     /// <summary>实例级接缝仅供测试；生产入口固定使用真实 TLS 连接器。</summary>
     internal ControlClientConnector(Func<ConnectionTarget, TransportTimeouts, TimeProvider,
-        CancellationToken, Task<TlsConnection>> connectTls)
+        CancellationToken, Task<TlsConnection>> connectTls,
+        Action<AuthenticatedControlSession>? sessionConstructed = null)
     {
         ArgumentNullException.ThrowIfNull(connectTls);
         _connectTls = connectTls;
+        _sessionConstructed = sessionConstructed;
     }
 
     /// <summary>成功才移交独占连接的会话；失败或取消均关闭连接。</summary>
@@ -89,7 +92,7 @@ public sealed class ControlClientConnector
 
             session = await AuthenticateConnectedAsync(
                 connection, target, clientDeviceId, clientName, key, requestedPermission,
-                authOptions, budget, effectiveClock, cancellationToken).ConfigureAwait(false);
+                authOptions, budget, effectiveClock, cancellationToken, _sessionConstructed).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
             AuthenticatedControlSession result = session;
@@ -97,22 +100,34 @@ public sealed class ControlClientConnector
             connection = null;
             return result;
         }
-        catch (Exception error) when (cancellationToken.IsCancellationRequested && !ContainsAggregate(error))
+        catch (Exception primary)
         {
-            // 普通 I/O 保留取消语义；主错加清理错的复合故障不可被取消翻译丢弃。
-            throw new OperationCanceledException(cancellationToken);
+            // 保留失败到达 owner 时的取消裁决；清理期间新发生的取消不追溯改写主错。
+            bool callerCanceled = cancellationToken.IsCancellationRequested;
+            // 在任何可能阻塞的网络释放之前先撤销/清零；finally 只做秘密兜底。
+            CryptographicOperations.ZeroMemory(key);
+            session?.RevokeForOwnerCleanup();
+            if (connection is not null)
+            {
+                await connection.CloseAsync().ConfigureAwait(false);
+                IReadOnlyList<Exception> errors = connection.CleanupErrors;
+                if (errors.Count != 0)
+                {
+                    // 只消费连接的稳定诊断一次，不把 public Dispose 的同一错误重复加进来。
+                    throw new AggregateException("控制认证失败且连接清理失败。", primary,
+                        new AggregateException("控制连接资源清理失败。", errors));
+                }
+            }
+
+            if (callerCanceled && !ContainsAggregate(primary))
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+            throw;
         }
         finally
         {
             CryptographicOperations.ZeroMemory(key);
-            try
-            {
-                session?.Dispose();
-            }
-            finally
-            {
-                connection?.Dispose();
-            }
         }
     }
 
@@ -135,7 +150,8 @@ public sealed class ControlClientConnector
         ControlClientAuthOptions options,
         TransportTimeouts timeouts,
         TimeProvider clock,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<AuthenticatedControlSession>? sessionConstructed)
     {
         string timeoutRejection = "client-hello-timeout";
         byte[]? clientTranscript = null;
@@ -204,7 +220,7 @@ public sealed class ControlClientConnector
                 {
                     return VerifyAndCreateSession(
                         connection, success, clientTranscript, key, requestedPermission,
-                        sessionId, shortCode, challengeWindow);
+                        sessionId, shortCode, challengeWindow, sessionConstructed);
                 }
             }
 
@@ -230,7 +246,7 @@ public sealed class ControlClientConnector
                 reader, approvalWindow, timeouts, allowPending: false, approval: true).ConfigureAwait(false);
             return VerifyAndCreateSession(
                 connection, success!, clientTranscript, key, requestedPermission,
-                sessionId, shortCode, approvalWindow);
+                sessionId, shortCode, approvalWindow, sessionConstructed);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -365,7 +381,8 @@ public sealed class ControlClientConnector
         SessionPermission requestedPermission,
         Guid sessionId,
         string shortCode,
-        ClientAuthWindow window)
+        ClientAuthWindow window,
+        Action<AuthenticatedControlSession>? sessionConstructed)
     {
         bool grantAllowed = success.GrantedPermission == requestedPermission
             || (requestedPermission == SessionPermission.Control
@@ -394,12 +411,14 @@ public sealed class ControlClientConnector
                 success.SessionToken.Span, success.VideoAttachExpiresInMs);
             try
             {
+                sessionConstructed?.Invoke(session);
                 _ = window.GetRemaining();
                 return session;
             }
             catch
             {
-                session.Dispose();
+                // 原连接仍归最外层 owner；这里只撤销秘密，不让同步网络释放覆盖末检失败。
+                session.RevokeForOwnerCleanup();
                 throw;
             }
         }
