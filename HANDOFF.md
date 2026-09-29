@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（6d6a496连接器失败清理，各2514 PASS；高层附着/M5未完成，§19.9）**
+> 更新时间：**2026-09-29（1bb9063认证owner收尾，各2741 PASS；高层附着/M5未完成，§19.10）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`6d6a496`连接器失败清理/复合故障分类（ADR-053），双配置各2514 PASS，见§19.9；共享关闭、封闭proof与服务端历史保留于§19.8/19.7/19.6。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`1bb9063`认证owner收尾与秘密撤销（ADR-054），双配置各2741 PASS，见§19.10；建连清理、共享关闭、封闭proof与服务端历史保留于§19.9–19.6。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：Control已接管连接后的失败收尾/秘密撤销，再success元数据与高层安全附着，详见§19.9。** 共享关闭/流adapter已实现；默认Control-only不变，父子生命周期/安全交付未完成。未采集/显示或跑十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：success原收齐时刻/同源clock与本地附着预算，再高层安全附着，详见§19.10。** 共享关闭/流adapter已实现；默认Control-only不变，父子生命周期/安全交付未完成。未采集/显示或跑十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：Control已持有连接的认证失败owner收尾、未交付session撤销清零，再success原时刻/TTL、高层附着与父子join（§19.9）。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：保留success原payload收齐时刻/clock及≤15秒本地预算，再高层附着与父子join（§19.10）。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`6d6a496`**（连接器失败清理片，7files/+1821/-104，ADR-053）；前片894f294等历史保留。
-- **Working tree at validation：6d6a496源码/测试，验证后未变；双配置各2514 PASS/0失败/0跳过。** 主线程已解析12份`outputs/m5-connector-cleanup/verified-{Debug,Release}_*.trx`，四build零警告错误（§19.9）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
+- **Last code commit：`1bb9063`**（认证owner收尾片，6files/+2224/-26，ADR-054）；前片6d6a496等历史保留。
+- **Working tree at validation：1bb9063源码/测试，验证后未变；双配置各2741 PASS/0失败/0跳过。** 主线程已解析12份`outputs/m5-control-owner/verified-{Debug,Release}_*.trx`，四build零警告错误（§19.10）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2806,3 +2806,17 @@ Control只对传入复合故障避开caller取消翻译；实例readonly委托�
 **Last code commit：6d6a496（7files/+1821/-104）。Working tree at validation：该提交源码/测试，最终验证后未变，之后仅文档记账。** `outputs/m5-connector-cleanup/verified-{Debug,Release}_*.trx`共12份已由主线程XML解析核对所有结果：各**2514 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport1557/Acceptance393）。solution和IsolatedAcceptance双配置四build均0警告/0错误。定向中间Transport241、最终Acceptance151通过；全量覆盖最终同树。无GUI/打包/M4重跑/改网。
 
 **下一片**：Control已取得连接后的认证失败finally仍会覆盖主错，Verify构造session后终检的session.Dispose也可能将超时变成连接关闭。先提取同锁逻辑撤销清零，不在秘密锁/请求线程等网络释放，由外层owner await共享CloseAsync并组合一次诊断；保持public Dispose合同。随后success原收齐时刻/clock/≤15秒TTL、父子撤销join、第二TLS实际pin+ACK唯一交付、采集显示和十分钟DoD。本片不是全客户端生命周期完成，M5继续。
+
+### 19.10 Control 认证 owner 收尾与未交付会话撤销（2026-09-29）
+
+**实现/合同**：ADR-054。AuthenticatedControlSession同锁RevokeCore负责失效与清零，internal void RevokeForOwnerCleanup不触发网络；public Dispose仍锁外同步关闭、重复幂等。Verify构造后的终检失败只撤销，由外层owner等共享CloseAsync。外层catch在慢清理前记录caller快照、清零私有key、撤销session，关闭结束后将原主错与CleanupErrors组合一次；无清理错维持普通取消/复合错误规则。清理期间才发生的取消不追溯改写原失败，成功移交不被finally回收。
+
+**证据与纠正**：
+- `before-fix.*`旧owner190例144红；`post-success-red.*`原22例18红。真实Control公开方法消费受控SSL中的严格帧，实际MAC由独立oracle验证，不将mock identity冒称TLS证据。
+- 初版构造后测试仅用第N次取时命名且只见parsed token，独立审查发现无法证明真实session撤销。新增internal实例readonly构造观察（public默认null），真实new后事件推进deadline；观察真实session自有token，与parsed token分开。最终测试保存构造时非零原数组，TCP关闭闸前同一数组全零、Stream/proof失效、测试尚未兜底Dispose。
+- 两处单点变异：外层撤销删一行10/26红；Verify撤销删一行14/26红，均精确命中自有token未清零/proof仍可用而非编译或超时失败；独立构造/到期事实不随目标删除。变异前源码快照SHA256 `d52b54ca7f377e84690e634f946924d0c780035eb6d44e56a08978afb4987bfa`，主线程核对恢复源码逐字节一致；恢复后26绿。最终同一原数组前后身份断言在此后加强，并纳入最终全量。
+- 新增227例：owner190、构造后26、撤销原语11。中间定向415绿；最终全量含全部加强项。key/client transcript/parsed token/session token有原数组观测；expectedProof/grantTranscript仍只有代码finally顺序证据，不宣称所有秘密副本已擦除。
+
+**Last code commit：1bb9063（6files/+2224/-26）。Working tree at validation：该提交源码/测试，最终验证后未变，之后仅文档记账。** 主线程逐条解析`outputs/m5-control-owner/verified-{Debug,Release}_*.trx`共12份：每配置**2741 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport1784/Acceptance393）。solution及IsolatedAcceptance双配置四build均0警告/0错误。未改原真实TLS用例断言、系统网络、M4物料或产品App；未GUI/打包/M4重跑。
+
+**下一片（已只读设计，未实现）**：ReadReplyAsync当前丢弃success原ReceivedAt而返回0；保留原完整payload收齐时刻和同源clock传入session，pending仍保留原严格解析接受时刻，不混用。本地hint封顶15秒、elapsed>=预算拒绝、重复查询不续期，TTL到期不关闭Control。客户端锚点只是本地等待上界，不能冒称准确服务端写前TTL。之后再父子登记/撤销/join、第二TLS实际pin/严格ACK唯一交付与迟到回收、采集/JPEG/显示/十分钟DoD，M5仍进行中。

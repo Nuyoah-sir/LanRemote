@@ -1,7 +1,7 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至053建连清理；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至054认证收尾；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-09-29，优先于下方历史记录）
@@ -10,8 +10,8 @@ M4历史两机Control/降权/拒绝/错key、联网/审批/短码、B密钥六�
 
 M4最后2596357双配置1433/Python14；专用隔离WinExe无真实vault/发现，手动审批、不改网。b42a1553坏proof及0cd5d3b8人工活动停止日志均通过，原FAIL/INVALID_RUN不翻绿，e339ed58历史UNMET不阻断。2026-09-29用户明确“上一轮询问的实屏情况都正常”，文案完整可见/恢复操作/原控件可访问配齐，原DoD/21步收口M4（§18.25，记账c251d21），不重跑、不加DPI。隔离ZIP原封保留，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b，424成员；同源码提交前构建，不冒称内嵌2596357。
 
-最新6d6a496/§19.9/ADR053：建连单owner，caller三终检；失败worker TCP→SSL独立释放，Aggregate(primary,Aggregate(cleanup))保原树。Control复合错不被取消吞；顶层OCE保树仍Canceled。Acceptance复合HARNESS_ERROR/UNOBSERVED，取消整轮INVALID_RUN保故障；footer错记账原抛不重试。新增251，双配置各2514 PASS（196/299/3/66/1557/393），12TRX核对/四build零警告错误。TLS51红、Control修正预期后22红、Acceptance96红及收尾5红均修。
-历史894f294共享close、7afface封闭proof、5a03ab1服务端见§19.8/7/6。close固定2错，public Dispose首报/重复等不重放，adapter同Task，原I/O另join；关闭≠成功/join，CTS不硬中断。下一修Control已持连接finally及Verify后置释放覆盖主错：同锁撤销清零、外层异步关闭；再success原receivedAt/clock、hint≤15s、父子join/第二pin/ACK唯一交付迟到回收、采集显示/十分钟DoD。资格不回滚/不续期，默认Control-only；秘密数组漏测保留。无新包/GUI/M4/改网，M5未完。
+最新1bb9063/§19.10/ADR054：未交付session同锁撤销清零无I/O，Verify末检失败只撤销；外层catch先取消快照/key清零/撤销，再await共享close组合原主错+清理错一次，public Dispose合同不变。新增227；旧缺陷144/18红后修。真实new事件驱动超时、原token非零→TCP闸前清零；外层/Verify撤销变异10/14红并恢复。双配置各2741 PASS（196/299/3/66/1784/393），12TRX逐条核对/四build零警告错误。
+6d6a496建连清理/复合故障保真、894f294共享close、封闭proof/服务端见§19.9–6。Aggregate保原树；顶层OCE仍Canceled；Acceptance复合HARNESS_ERROR，取消整轮INVALID_RUN保故障，footer不重试。关闭≠成功/join，CTS不硬中断。下一success原payload receivedAt/clock、hint≤15s本地预算不续期且到期不关Control，再父子join/第二pin/ACK唯一交付迟到回收、采集显示/十分钟DoD。expectedProof/grantTranscript仅finally顺序证据。资格不回滚/不续期、默认Control-only，无新包/GUI/M4/改网，M5未完。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
@@ -58,7 +58,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：`6d6a496`建连清理，各2514 PASS；Control认证owner/高层附着/采集显示/十分钟DoD未完，§19.9。 |
+| **M5** | 进行中：`1bb9063`认证owner，各2741 PASS；success时刻/TTL、高层附着/采集显示/十分钟DoD未完，§19.10。 |
 | M6~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**；M4 阶段 3 = **`760e950`**。
