@@ -140,7 +140,7 @@ public sealed partial class ControlClientConnectorTests
         if (outcome == "success")
         {
             using AuthenticatedControlSession session = await clientTask.WaitAsync(Guard);
-            Assert.Contains(session.SessionToken.ToArray(), value => value != 0);
+            Assert.Contains(TestOnlyControlSessionSecrets.GetOwnedToken(session), value => value != 0);
             Assert.Equal(changedKey, callerKey);
             session.Dispose();
             await scenario.AssertServerFinishedAsync();
@@ -308,7 +308,7 @@ public sealed partial class ControlClientConnectorTests
         byte[] expectedToken = sourceToken.ToArray();
         Assert.Contains(expectedToken, value => value != 0);
         Assert.All(frame.SessionToken.ToArray(), value => Assert.Equal((byte)0, value));
-        ReadOnlyMemory<byte> sessionToken = session.SessionToken;
+        byte[] sessionToken = TestOnlyControlSessionSecrets.GetOwnedToken(session);
         // 客户端返回前自己的 parsed success 也已在 finally 清理；此处仍须保有独立 token。
         Assert.Equal(expectedToken, sessionToken.ToArray());
         frame.ClearSessionToken();

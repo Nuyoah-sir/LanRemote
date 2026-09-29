@@ -116,7 +116,7 @@ public sealed partial class VideoAttachTlsTests
         Assert.Null(await video.Server.Finished.Task.WaitAsync(Guard));
         await scenario.WaitForConnectionCountAsync(1);
         scenario.AssertControlAlive(control);
-        Assert.Contains(control.SessionToken.ToArray(), value => value != 0);
+        Assert.Contains(TestOnlyControlSessionSecrets.GetOwnedToken(control), value => value != 0);
 
         // 视频断开也不能恢复一次性资格；同一个活 Control 的重附着仍为 AlreadyAttached。
         VideoPeer retry = await scenario.OpenVideoAsync();

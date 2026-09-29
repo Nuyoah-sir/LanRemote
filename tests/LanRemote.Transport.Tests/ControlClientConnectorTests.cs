@@ -85,7 +85,7 @@ public sealed partial class ControlClientConnectorTests
             Assert.Null(gate.LastRequest);
         }
 
-        ReadOnlyMemory<byte> tokenView = session.SessionToken;
+        byte[] tokenView = TestOnlyControlSessionSecrets.GetOwnedToken(session);
         Assert.Equal(32, tokenView.Length);
         Assert.Contains(tokenView.ToArray(), value => value != 0);
         // 仅用测试私有反射持有登记表原数组，保留逐字节一致性与注销清零证据；不新增生产 getter。
@@ -130,7 +130,7 @@ public sealed partial class ControlClientConnectorTests
         session.Dispose();
         session.Dispose();
         Assert.All(tokenView.ToArray(), value => Assert.Equal((byte)0, value));
-        Assert.Throws<ObjectDisposedException>(() => session.SessionToken);
+        Assert.Throws<ObjectDisposedException>(() => session.CreateVideoAttachProof(attachNonce, videoPin));
         Assert.Throws<ObjectDisposedException>(() => session.Stream);
         await scenario.AssertServerFinishedAsync();
         Assert.NotNull(result);
@@ -217,7 +217,7 @@ public sealed partial class ControlClientConnectorTests
         Assert.Equal(peer.SessionId, session.SessionId);
         Assert.Equal(granted, session.GrantedPermission);
         Assert.Equal(peer.ActualPin, session.Identity.PresentedCertSha256.ToArray());
-        ReadOnlyMemory<byte> tokenView = session.SessionToken;
+        byte[] tokenView = TestOnlyControlSessionSecrets.GetOwnedToken(session);
         Assert.Equal(peer.Token, tokenView.ToArray());
         Assert.False(scenario.ServerFinished.Task.IsCompleted);
         session.Dispose();
@@ -515,7 +515,7 @@ public sealed partial class ControlClientConnectorTests
         ControlClientAuthenticationException error = await Assert.ThrowsAsync<ControlClientAuthenticationException>(async () =>
         {
             returned = await client.WaitAsync(wait ?? Guard);
-            returnedToken = returned.SessionToken;
+            returnedToken = TestOnlyControlSessionSecrets.GetOwnedToken(returned);
         });
         Assert.Equal(rejection, error.Rejection);
         Assert.Equal(message, error.DisplayMessage);

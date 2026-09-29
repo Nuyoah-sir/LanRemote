@@ -1318,3 +1318,11 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Evidence**：Router异常保留11项先运行期全红，修复后全绿；source OCE先发生、Host Stop后到的真实双TLS交错1红后修复；子deadline正常取消归属3红后修复。最终定向双配置各225 PASS、solution各2196 PASS、四次build均0警告错误，见HANDOFF§19.6及outputs/m5-dual-tls。其余边界为受控SSL/手动时钟组件证据；真实TLS用例13项采用实际pin验证、独立proof/ACK/wire断言，不冒称截图、JPEG解码、两机现场或M5十分钟DoD。
 
 **Limits**：关闭失败、任意同步Dispose/gate/source/取消回调可能阻塞，CTS不能硬中断本机任意代码；留表与join确保不遗弃，不提供无条件硬截止。测试payload仅为不透明黄金字节。无客户端安全交付、无GDI/JPEG/WPF显示；默认产品App、系统网络、防火墙、M4物料均不变。
+
+### ADR-051 — 客户端会话内封闭VideoAttach证明与密钥释放互斥
+
+**日期**：2026-09-29。**Context**：客户端后续第二TLS入口不得获取可跨Dispose存活的共享token视图。ADR-048证明合同不变，本片仅实现安全同步操作，不提前实现握手/ACK交付或父子生命周期。
+
+**Decision**：移除AuthenticatedControlSession的internal SessionToken getter，新增internal `CreateVideoAttachProof(nonce, actualVideoPin, cancellationToken)`，只返回32字节proof。状态检查、caller取消、nonce16/pin32长度、控制expected/presented与第二pin匹配、MAC及末次caller检查均在同一私有锁内；校验和MAC使用同一nonce/pin栈快照。失败时已生成但未交付proof清零，退出清栈快照；成功proof所有权交调用方。Dispose同锁置空连接并清零原token，锁外关闭TLS，避免持有秘密锁执行IO。已释放优先拒绝，等待锁期间取消在进入操作后被观察。
+
+**Evidence与界限**：独立83字节transcript/HMAC黄金、输入绑定/严格拒绝、原token数组清零、锁外TLS释放和入口锁并发回归；测试专用反射仅观测原秘密存储，不向生产恢复getter。既有双TLS独立proof oracle不改成调用被测方法。Python标准库独立核对83字节及黄金602656EA…78B7A3A。并发测试仅锁入口边界，不声称暂停MAC内部；失败proof清零有finally，但尚无直接持有该失败数组的确定性后置取消观察。复制不保证调用方恶意并发改写原数组时原子快照；传入pin必须由后继连接器取实际第二TLS身份，此同步方法不自行证明pin来源。不施加本地TTL/一次性附着、不提供客户端连接器/唯一交付/迟到回收/父子join，完整验证见HANDOFF§19.7。

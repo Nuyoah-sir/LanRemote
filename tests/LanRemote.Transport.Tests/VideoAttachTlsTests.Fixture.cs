@@ -51,7 +51,7 @@ public sealed partial class VideoAttachTlsTests
         networkUuid.CopyTo(transcript, 19);
         nonce.CopyTo(transcript, 35);
         proofPin.CopyTo(transcript, 51);
-        byte[] token = control.SessionToken.ToArray();
+        byte[] token = TestOnlyControlSessionSecrets.GetOwnedToken(control).ToArray();
         byte[] proof;
         try
         {
@@ -286,7 +286,7 @@ public sealed partial class VideoAttachTlsTests
             AssertControlAlive(control);
             Assert.Equal(1, _approval.RequestCount);
             Assert.Equal(control.SessionId, Assert.IsType<LocalApprovalRequest>(_approval.Request).SessionId);
-            Assert.Equal(32, control.SessionToken.Length);
+            Assert.Equal(32, TestOnlyControlSessionSecrets.GetOwnedToken(control).Length);
             Assert.True(control.Identity.PinsMatch);
             Assert.Equal(Target.ExpectedCertSha256.ToArray(), control.Identity.PresentedCertSha256.ToArray());
             return control;

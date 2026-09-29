@@ -1,5 +1,7 @@
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using LanRemote.Core.Models;
+using LanRemote.Transport.Auth;
 
 namespace LanRemote.Transport;
 
@@ -9,6 +11,7 @@ namespace LanRemote.Transport;
 /// </remarks>
 public sealed class AuthenticatedControlSession : IDisposable
 {
+    private readonly object _gate = new();
     private TlsConnection? _connection;
     private readonly byte[] _sessionToken;
 
@@ -46,13 +49,54 @@ public sealed class AuthenticatedControlSession : IDisposable
         (Volatile.Read(ref _connection)
             ?? throw new ObjectDisposedException(nameof(AuthenticatedControlSession))).Stream;
 
-    /// <summary>仅供未来 Transport 视频附加使用；释放会话后已有视图也被清零。</summary>
-    internal ReadOnlyMemory<byte> SessionToken
+    /// <summary>绑定控制会话与第二 TLS 实际指纹，只返回 proof；不消费附加资格或施加本地 TTL。</summary>
+    internal byte[] CreateVideoAttachProof(
+        ReadOnlySpan<byte> attachNonce,
+        ReadOnlySpan<byte> actualVideoPin,
+        CancellationToken cancellationToken = default)
     {
-        get
+        lock (_gate)
         {
-            ObjectDisposedException.ThrowIf(Volatile.Read(ref _connection) is null, this);
-            return _sessionToken;
+            ObjectDisposedException.ThrowIf(_connection is null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (attachNonce.Length != VideoAttachProof.NonceByteLength)
+            {
+                throw new ArgumentException("attachNonce 必须是 16 字节。", nameof(attachNonce));
+            }
+
+            if (actualVideoPin.Length != CertificatePin.LengthBytes)
+            {
+                throw new ArgumentException("actualVideoPin 必须是 32 字节。", nameof(actualVideoPin));
+            }
+
+            Span<byte> nonce = stackalloc byte[VideoAttachProof.NonceByteLength];
+            Span<byte> pin = stackalloc byte[CertificatePin.LengthBytes];
+            byte[]? proof = null;
+            try
+            {
+                // 校验和 MAC 共用私有快照；不保证调用方并行改写原数组时的复制原子性。
+                attachNonce.CopyTo(nonce);
+                actualVideoPin.CopyTo(pin);
+                if (!Identity.PinsMatch || !CertificatePin.Matches(Identity.PresentedCertSha256.Span, pin))
+                {
+                    throw new AuthenticationException("视频 TLS 实际证书指纹与控制会话冻结身份不一致。");
+                }
+
+                proof = VideoAttachProof.ComputeProof(_sessionToken, SessionId, nonce, pin);
+                cancellationToken.ThrowIfCancellationRequested();
+                byte[] result = proof;
+                proof = null;
+                return result;
+            }
+            finally
+            {
+                if (proof is not null)
+                {
+                    CryptographicOperations.ZeroMemory(proof);
+                }
+                CryptographicOperations.ZeroMemory(nonce);
+                CryptographicOperations.ZeroMemory(pin);
+            }
         }
     }
 
@@ -62,13 +106,19 @@ public sealed class AuthenticatedControlSession : IDisposable
     /// <summary>清零私有 token 并关闭连接；可重复调用。</summary>
     public void Dispose()
     {
-        TlsConnection? connection = Interlocked.Exchange(ref _connection, null);
-        if (connection is null)
+        TlsConnection? connection;
+        lock (_gate)
         {
-            return;
+            connection = Interlocked.Exchange(ref _connection, null);
+            if (connection is null)
+            {
+                return;
+            }
+
+            CryptographicOperations.ZeroMemory(_sessionToken);
         }
 
-        CryptographicOperations.ZeroMemory(_sessionToken);
+        // TLS 关闭可能执行 I/O，不得占用密钥锁。
         connection.Dispose();
     }
 }
