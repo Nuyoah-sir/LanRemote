@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（7afface封闭proof片，各2224 PASS；高层附着/M5未完成，§19.7）**
+> 更新时间：**2026-09-29（894f294客户端共享关闭，各2263 PASS；高层附着/M5未完成，§19.8）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`7afface`客户端封闭proof片（ADR-051），双配置各2224 PASS，见§19.7；前片`5a03ab1`各2196保留于§19.6。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`894f294`客户端共享关闭/流adapter（ADR-052），双配置各2263 PASS，见§19.8；封闭proof与服务端历史保留于§19.7/19.6。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：先客户端共享关闭/流adapter，再高层安全附着，详见§19.7方案。** 服务端双TLS已接通，默认Control-only不变；客户端封闭proof尚未高层真实TLS使用，父子生命周期/安全交付未完成。未采集/显示或跑十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：连接器交付前失败清理与异常分类，再高层安全附着，详见§19.8。** 共享关闭/流adapter已实现；默认Control-only不变，父子生命周期/安全交付未完成。未采集/显示或跑十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：TlsConnection共享CloseAsync/客户端video stream adapter优先，再高层附着与父子join（§19.7，仅方案）。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：TlsClientConnector交付前失败清理/终检与调用者复合错误分类，再高层附着与父子join（§19.8）。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`7afface`**（客户端封闭proof片，7files/+445/-18，ADR-051已记）；前片`5a03ab1`服务端双TLS见§19.6。
-- **Working tree at validation：7afface源码/测试，验证后未变；双配置各2224 PASS/0失败/0跳过。** 主线程已解析12份`outputs/m5-client-proof/full-*.trx`，四build零警告错误（§19.7）。代码提交后仅三份文档记账；无新包/GUI/M4重跑/改网。
+- **Last code commit：`894f294`**（客户端共享关闭片，8files/+1738/-58，ADR-052）；前片7afface/5a03ab1历史保留。
+- **Working tree at validation：894f294源码/测试，验证后未变；双配置各2263 PASS/0失败/0跳过。** 主线程已解析12份`outputs/m5-client-close/verified-{Debug,Release}_*.trx`，定向各74，四build零警告错误（§19.8）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2775,3 +2775,18 @@ M4收口记账提交`c251d21`后推进；本节不覆盖M4原日志结局。**La
 1. 先`TlsConnection`共享`CloseAsync`/客户端video stream adapter；现Dispose普通bool判重，SSL抛会跳过client清理；`TlsClientConnector`失败finally同为独立待修缺口。
 2. success收齐`receivedAt`/`TimeProvider`元数据（目前丢弃）、本地hint上限15s、父撤销/子登记join、实际第二pin/严格ACK唯一交付及迟到成功回收。
 3. 再采集/JPEG/渲染及十分钟DoD；默认Control-only/安全硬约束不变，非全客户端或M5完成。
+
+### 19.8 客户端共享关闭与视频流适配器
+
+本片基于7afface源码，实施ADR-052。TlsConnection新增internal共享CloseAsync/固定CleanupErrors/CreateVideoStream，新增ClientOwnedVideoStream；public接口不扩大。worker先TCP解堵，再独立尝试SSL。首个public Dispose同步等待并报告单错原实例或双错聚合，重复调用等待但不重放；adapter同步Dispose只请求、异步等待同Task，不能把Reader的StreamDisposeSucceeded当物理关闭成功。关闭任务与原I/O任务分别join。
+
+**红绿与范围**：
+- `before-fix-debug.*`两项真实运行期红测：SSL错误时TCP释放次数0、双错丢client错误；生产修改后通过。
+- 新增39项：关闭组件26、真实回环TLS11、原缺陷2。真实TLS使用产品连接器/严格实际pin，覆盖双向各重载字节、主动关闭后本端和对侧原读取退出。不是视频附着或JPEG/屏幕验收。
+- `targeted-debug.log`为测试lambda误选异步重载编译错（并有nullable警告），已显式Action/nullable泛型修正；不计产品红测。`targeted-fixed-debug.*`一项ThreadState二次瞬时读取假失败，改成入口信号+保存一次等待态；未降低Dispose同步等待判据。
+- 首次全量`test-debug.log/full-debug_*.trx`抓到旧审批配额夹具并发枚举List；新增先join原clientB再观察原Frames/待批断言，并补两连接/两client任务的finally收尾。原断言/配额/审批预算不放宽；失败优先保原异常，附属cleanup仅在该测试Data记录（报告未必自动显示），无主错则清理错使测试失败。
+- 秘密锁断言改为跨线程TryEnter，避免worker上的IsEntered假证；专用线程等待态是入口观测、非内部线性化点。组件close已结束但read仍未完成的反例保留，显式放行再join。非合作同步Dispose无硬截止。
+
+**Last code commit：894f294（8files/+1738/-58，ADR052）。Working tree at validation：该提交源码/测试，最终验证后未变，之后仅文档记账。** 主线程已独立解析`outputs/m5-client-close/verified-Debug_*.trx`与`verified-Release_*.trx`共12份：各**2263 PASS/0失败/0跳过**（196/299/3/66/1417/282），逐条outcome与计数一致；定向各74，solution与IsolatedAcceptance双配置四build均0警告错误。此前`frozen-*`虽各2263通过，但在最后finally改动前，不作为最终树凭证。未打包/GUI/改网/M4/Python打包重跑。
+
+**下一片（仅只读定位，未实装）**：先修TlsClientConnector返回前失败finally（SSL抛会跳过client/覆盖主错）和caller交付终检。主错/清理错需完整保留，正常无清理错保持原异常；如果引入Aggregate，必须同步核对ControlClientConnector取消翻译和Acceptance分类，不能吞清理错或把cross-subnet复合故障判PASS。不要扩成共享LastErrors或放宽TLS/pinning。之后才是success原receivedAt/clock、hint≤15秒、父子撤销/登记/join、严格ACK唯一交付与迟到回收，再采集/JPEG/显示及十分钟DoD。默认Control-only、M4物料和系统网络不动，M5仍未完成。
