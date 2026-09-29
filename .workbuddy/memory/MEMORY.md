@@ -1,9 +1,8 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（010~048；045现网只读、047视频帧、048原子附着）；原始规格 `LanRemote_Implementation_Package/` 不回写。
-> 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；2026-09-28 收尾压缩重复摘要，后续追加先核实长度。
-> 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
+> ADR `docs/DECISIONS.md`（010~049；045现网只读、047帧、048附着、049停机跟踪）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-09-29，优先于下方历史记录）
 
@@ -11,7 +10,8 @@ M4历史两机Control/降权/拒绝/错key、联网/审批/短码、B密钥六�
 
 M4最后2596357双配置1433/Python14；专用隔离WinExe无真实vault/发现，手动审批、不改网。b42a1553坏proof及0cd5d3b8人工活动停止日志均通过，原FAIL/INVALID_RUN不翻绿，e339ed58历史UNMET不阻断。2026-09-29用户明确“上一轮询问的实屏情况都正常”，文案完整可见/恢复操作/原控件可访问配齐，原DoD/21步收口M4（§18.25，记账c251d21），不重跑、不加DPI。隔离ZIP原封保留，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b，424成员；同源码提交前构建，不冒称内嵌2596357。
 
-最新8e1785a：M5 VideoAttach安全基础片（§19.4/ADR048），双配置全量各1948 PASS（196/299/3/66/1102/282），solution/独立启动器0警告错误；outputs/m5-video-attach。transcript83=域19+UUID网络序16+nonce16+实际pin32；success序列化后首次write前起15s封顶窗口，登记不续期。同锁MAC+终检+一次消费，注销清零/撤销防ABA；不导出registry token，客户端旧视图待改。失败帧I/O前清局部3份原秘密，同回归4红/1绿→双配置5绿；3变异2/2/4红，恢复8绿/SHA一致。注册失败副本清零有finally、直接持有观测漏测保留。旧Control入口仍拒video，第二TLS未接线，无新包/实屏，M5未完成。先修ConnectionRegistry超时清表导致重复Stop漏报，再Router/ACK/客户端join，后GDI主屏50%/JPEG/5FPS/十分钟DoD。前片1c710a9/ADR047：队列容量1/2默认2、有效payload、40字节LRVF、CAS交付，清理诊断有界；停止不等于关闭/join。
+最新546d02a/§19.5/ADR049：停机超时保留entry/CTS，重复Stop不漏报，每entry强制释放只认领一次，根取消与CTS解绑互斥，force在途不报完成；完成TCS先于摘表。4红→11绿，再审查1红1绿→最终双配置全量各1954 PASS（196/299/3/66/1108/282），solution/独立启动器0警告错误；outputs/m5-stop-tracking。同步取消/Dispose阻塞和Host清理异常/join仍待接线片，不声称整个Stop硬截止。
+前片8e1785a/§19.4/ADR048：VideoAttach transcript83=域19+UUID网络序16+nonce16+实际pin32；success序列化后首次write前起15s封顶窗口，登记不续期。同锁MAC+终检+一次消费，注销清零/撤销防ABA；无registry token导出，客户端旧视图待改。失败帧I/O前清3份秘密，4红/1绿→双5绿；3变异2/2/4红→恢复8绿。失败注册副本清零直接观察漏测保留。第二TLS/ACK未接线、无新包/实屏，M5未完。后续Host关闭授权/取消任务/join→Router/ACK/客户端→GDI50%/JPEG/5FPS/十分钟DoD。1c710a9/ADR047帧基础片已过；停止≠关闭/join。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 

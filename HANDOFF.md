@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（M4已收口；M5 VideoAttach安全基础片8e1785a完成，Debug/Release各1948 PASS，第二TLS待接线，见§19.4）**
+> 更新时间：**2026-09-29（M4已收口；M5 VideoAttach及停机跟踪前置修复完成，最新546d02a，Debug/Release各1954 PASS，第二TLS未接线，见§19.4–5）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`8e1785a`（M5 VideoAttach安全基础片）。本轮Debug/Release各1948 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19.4。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
+> **最新代码：`546d02a`（停机跟踪前置修复；VideoAttach基础片8e1785a）。本轮Debug/Release各1954 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19.5。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：第二TLS显式路由/ACK与生命周期，再GDI/JPEG/渲染。** 帧基础件、严格video hello/proof、原子一次性附着/撤销及写前窗口已完成；尚未接入第二TLS。接线前先修复停机超时清表使重复Stop漏报的前置问题。未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
+> **下一关：第二TLS显式路由/ACK与生命周期，再GDI/JPEG/渲染。** 帧基础件、严格video hello/proof、原子一次性附着/撤销及写前窗口已完成；尚未接入第二TLS。停机超时清表/令牌失效/重复释放已修，Host窄关闭授权与取消任务/清理异常/join仍待接线片处理。未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：停机跟踪前置修复、第二TLS Router/ACK、客户端附着生命周期，再采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
+- **下一步：Host关闭授权与可观察生命周期、第二TLS Router/ACK、客户端附着，再采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`8e1785a`**（VideoAttach安全基础片，17文件含ADR-048和独立Python向量）。修改认证秘密清理/窗口传递及registry原子绑定；默认Control-only入口、产品App、系统网络/权限未改，旧包/安装目录未覆盖。
-- **Working tree at validation：对应8e1785a的源码/测试工作树；Debug/Release各1948 PASS、0失败/0跳过，构建0警告/0错误**。12份TRX独立核对计数和每条Passed；solution及独立启动器双build，证据`outputs/m5-video-attach/*-validated.log`和`validated-*.trx`。验证后未改源码/测试，只记账；未publish/打包，M4旧包保持§18.22。
+- **Last code commit：`546d02a`**（停机跟踪，2个源码/测试文件+ADR-049；前片8e1785a为VideoAttach）。默认Control-only入口、产品App、Host、系统网络/权限未改，旧包/安装目录未覆盖。
+- **Working tree at validation：对应546d02a的源码/测试工作树；Debug/Release各1954 PASS、0失败/0跳过，构建0警告/0错误**。12份TRX独立核对计数和每条Passed；solution及独立启动器双build，证据`outputs/m5-stop-tracking/*-validated.log`和`validated-*.trx`。验证后未改源码/测试，只记账；未publish/打包，M4旧包保持§18.22。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2681,7 +2681,7 @@ M4收口记账提交`c251d21`后推进；本节不覆盖M4原日志结局。**La
 ### 19.3 后续顺序与仍未完成项
 
 1. 已完成：原有capture/encoder抽象与帧模型盘点、有效内存所有权、有界队列、二进制header/parser/reader/writer。
-2. VideoAttach安全基础片已完成见§19.4：83字节transcript、16字节nonce、写前15秒绝对窗口、原子消费/撤销；旧registry token getter已删除。下一片接第二条TLS/pinning/同子网准入，先处理超时清表的停机跟踪前置缺陷；ACK/等待/生命周期实施细节另记ADR，不把只读建议当已冻结协议。
+2. VideoAttach安全基础片已完成见§19.4：83字节transcript、16字节nonce、写前15秒绝对窗口、原子消费/撤销；旧registry token getter已删除。下一片接第二条TLS/pinning/同子网准入，超时清表的停机跟踪前置缺陷已修见§19.5；ACK/等待/生命周期实施细节另记ADR，不把只读建议当已冻结协议。
 3. 随后：GDI主屏采集、50%缩放、JPEG编码与解码/WPF显示，以5 FPS先做最小闭环；现有Control保持读不能新增并行读者，需明确会话交接。无必要不新增Video项目或改TFM。
 4. 最后验证M5 DoD：完整链路10分钟无明显持续内存增长、慢网丢旧且延迟不无限累加、断连join和资源释放。仅队列测试不代替这两条；目前均未运行。
 
@@ -2716,3 +2716,23 @@ M4收口记账提交`c251d21`后推进；本节不覆盖M4原日志结局。**La
 - 真实Control TLS测试中视频安全上下文为合成对象，受控I/O窗口测试也不是第二TLS。未publish/打包、无真实视频/采集/JPEG/实屏或十分钟DoD。旧M4包/安装目录不动，outputs不上传。
 
 **后续**：第二TLS Router/ACK/有界登记间隙及客户端生命周期仍待实施；规划时发现`ConnectionRegistry.StopAllAsync`超时后清空未完成entry，重复Stop可能误报0，先补红测修复该前置条件，再接线。不把规划中的100ms/40ms或ACK字段当成已经定案或实现。
+
+### 19.5 第二TLS前置：停机超时跟踪修复（完成，546d02a）
+
+**Last code commit：546d02a。Working tree at validation：本提交源码/测试完整工作树，最终全方案验证后未改代码。**
+
+**范围**：仅ConnectionRegistry与对应测试，ADR-049。接线前自主修复真实发现，不重跑M4现场/人工项，不改网络、默认装配或认证安全策略。
+
+1. Stop超时不再清空未完成entry/释放其CTS；重复Stop继续返回真实未完成数，尚在运行的registration仍可取得原取消令牌。
+2. 每entry的强制释放在锁内检查/认领、锁外执行；并发/重复Stop登记表至多尝试一次，合作handler已经完成的旧snapshot跳过。force-inflight期间即使租约已完成也保留跟踪。
+3. CTS回收与根取消使用互斥认领：根取消只发起一次，取消期间完成的handler不立即同步解绑linked CTS，由原取消finally回收；避免取消回调等handler而handler等父取消回调。普通完成回收期间仍留表，首Stop先等其解绑；无新增清理后台线程。
+4. 审查修复先发布租约完成TCS，再允许CTS清理/摘表；旧快照不会仍缺完成通知而新Stop已经得到空表。内部TCS均异步continuation。
+
+**已执行的红绿证据**：
+- 新增4项：重复Stop保留Count、超时后令牌可用、并发Stop强制释放一次、合作handler资源不再释放；旧实现4/4运行期FAIL，第一版修复后登记表Debug/Release各11 PASS。首批测试文件SHA=e9a0d56d44f22a22f55655139b9334041f0860aae694948bcd3e0b009cfad89b。
+- 审查新增2项：完成先于摘表1红、force未返回不提前报告完成1绿；前者直接调用内部Remove接缝并持有真实完成TCS，非概率调度或真实TLS竞态声称。修复仅将完成发布前移，测试文件SHA=64f48262460ab72a9ee5acc1692e8523be8df340b62d934907767a3f3b2c7716，最终验证后相同，未放宽断言。
+- 原始红测分别`outputs/m5-stop-tracking/red-debug.*`和`review-red-debug.*`，第一版绿测`green-{debug,release}.*`，不得将11当最终新用例总数。
+
+**最终实际验证**：solution Debug/Release各**1954 PASS / 0 FAIL / 0 SKIP**（Core196/Protocol299/Integration3/Security66/Transport1108/Acceptance282），其中登记表当前13项；12份TRX逐项Passed和Counters独立核对。solution与独立IsolatedAcceptance的双配置build均0警告/0错误。证据`outputs/m5-stop-tracking/solution-*-validated.log`、`launcher-build-*-validated.log`及12份`validated-*.trx`。验证后源码/测试未再改；最后只读复核解除完成窗口阻断。较§19.4净增6项，不把重复专项或首次未完的5份TRX算一次全量。
+
+**未扩大保证**：本片不修复任意同步取消/Dispose/CTS解绑阻塞或所有清理异常聚合；不承诺Stop能硬中断本机任意实现。登记表至多一次force不代表handler自行Dispose与force之间全局exactly-once。第二TLS接线还须实现Host绑定的窄关闭授权、清理异常可见、跟踪取消回调和完整join，不能用本片留表替代；Router/ACK/客户端安全附着仍未实现。
