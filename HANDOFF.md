@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（M4已收口；M5 VideoAttach及停机跟踪前置修复完成，最新546d02a，Debug/Release各1954 PASS，第二TLS未接线，见§19.4–5）**
+> 更新时间：**2026-09-29（M4已收口；M5服务端双TLS路由/ACK及生命周期片完成，最新5a03ab1，Debug/Release各2196 PASS；下一片客户端高层附着，见§19.6）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`546d02a`（停机跟踪前置修复；VideoAttach基础片8e1785a）。本轮Debug/Release各1954 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19.5。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
+> **最新代码：`5a03ab1`（服务端双TLS显式路由、ACK、Host关闭授权/任务join，ADR-050）。本轮Debug/Release各2196 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19.6。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：第二TLS显式路由/ACK与生命周期，再GDI/JPEG/渲染。** 帧基础件、严格video hello/proof、原子一次性附着/撤销及写前窗口已完成；尚未接入第二TLS。停机超时清表/令牌失效/重复释放已修，Host窄关闭授权与取消任务/清理异常/join仍待接线片处理。未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
+> **下一关：客户端高层安全附着，再GDI/JPEG/渲染。** 服务端真实双TLS、严格ACK、单次sender及Host共享关闭/join已接通；显式internal装配，不改变产品默认Control-only入口。客户端现只有测试手工第二TLS，没有高层交付/父子生命周期。未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：Host关闭授权与可观察生命周期、第二TLS Router/ACK、客户端附着，再采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
+- **下一步：客户端高层附着、父子生命周期与安全交付，再采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`546d02a`**（停机跟踪，2个源码/测试文件+ADR-049；前片8e1785a为VideoAttach）。默认Control-only入口、产品App、Host、系统网络/权限未改，旧包/安装目录未覆盖。
-- **Working tree at validation：对应546d02a的源码/测试工作树；Debug/Release各1954 PASS、0失败/0跳过，构建0警告/0错误**。12份TRX独立核对计数和每条Passed；solution及独立启动器双build，证据`outputs/m5-stop-tracking/*-validated.log`和`validated-*.trx`。验证后未改源码/测试，只记账；未publish/打包，M4旧包保持§18.22。
+- **Last code commit：`5a03ab1`**（服务端双TLS与生命周期，26文件含ADR-050）。改动Host及传输层/测试，默认Control-only入口、产品App、系统网络/权限未改，旧包/安装目录未覆盖。
+- **Working tree at validation：对应5a03ab1的源码/测试工作树；Debug/Release各2196 PASS、0失败/0跳过，定向各225 PASS，构建0警告/0错误**。12份TRX独立核对计数和每条Passed；solution及独立启动器双build，证据`outputs/m5-dual-tls/frozen-*.log`及`frozen-*.trx`。验证后未改源码/测试，只记账；未publish/打包，M4旧包保持§18.22。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2736,3 +2736,28 @@ M4收口记账提交`c251d21`后推进；本节不覆盖M4原日志结局。**La
 **最终实际验证**：solution Debug/Release各**1954 PASS / 0 FAIL / 0 SKIP**（Core196/Protocol299/Integration3/Security66/Transport1108/Acceptance282），其中登记表当前13项；12份TRX逐项Passed和Counters独立核对。solution与独立IsolatedAcceptance的双配置build均0警告/0错误。证据`outputs/m5-stop-tracking/solution-*-validated.log`、`launcher-build-*-validated.log`及12份`validated-*.trx`。验证后源码/测试未再改；最后只读复核解除完成窗口阻断。较§19.4净增6项，不把重复专项或首次未完的5份TRX算一次全量。
 
 **未扩大保证**：本片不修复任意同步取消/Dispose/CTS解绑阻塞或所有清理异常聚合；不承诺Stop能硬中断本机任意实现。登记表至多一次force不代表handler自行Dispose与force之间全局exactly-once。第二TLS接线还须实现Host绑定的窄关闭授权、清理异常可见、跟踪取消回调和完整join，不能用本片留表替代；Router/ACK/客户端安全附着仍未实现。
+
+### 19.6 服务端双TLS路由与生命周期片（完成，5a03ab1）
+
+**Last code commit：5a03ab1。Working tree at validation：本提交对应源码/测试，最终frozen证据后未改源码/测试。** 26文件，新增5847/删除69行（含ADR-050），主要是确定性与真实TLS测试。不等于完成M5；未改产品默认装配、App、系统网络、防火墙、旧M4包或安装目录。
+
+**实际实现**：
+- internal单次FirstFrameRouter仅消费一次严格首帧；Control直接交既有认证，Video使用独立TLS和ADR-048资格。原public pre-auth仍拒绝完整合法video hello。Host提供显式CreateWithChannelRouter，集成测试使用显式handler抓取诊断，未直接覆盖factory本身。
+- 仅初始NotRegistered最多100ms/3次/40ms间隔重试；最终entry失效或ABA为Unavailable不重试。ACK严格四字段video_attach_ack，4字节BE前缀；ACK write+flush及检查完成前不取帧，之后直接LRVF+有效payload。ACK默认2秒、整帧写默认5秒；保持期不受首帧信封或15秒附着窗口误取消。已消费资格失败后不恢复。
+- Host绑定原Security/Stream的关闭能力，public两参/替换引用副本无授权。共享close任务分别尝试socket/SSL，回收迟到SSL；adapter真实转发，Dispose请求同一close。Host按关闭尝试→准入→登记收尾，七类首错有界保留；未登记拒绝由accept持有，已登记并发由registry持有。
+- source串行返回拥有型帧，sender等write结束再释放，迟到帧也回收；视频持有transfer/唯一上行read/CancelAsync/close全部join。Control复用原审批read/decision并join，不新增reader。不合作源会持续出现在重复Stop未完成报告中，不强行翻绿。
+
+**修复与证据链（均未弱化断言）**：
+1. 继承首次定向175 PASS实际取回；新增Router边界35 PASS。独立审查发现来源IO/ODE/OCE被误吞、finally覆盖主体、WhenAll await丢多故障；同组11项运行期全红，修复保存来源首错、主体与收尾统一聚合及完整原任务异常后，全套221 PASS。
+2. 真实双TLS中source未取消先抛OCE，取消回调gate保持Router收尾，Host随后取消：新增1项红（Host诊断为空）。Host取消豁免收窄至异常token==registration token后，相关83 PASS。
+3. 收窄后子deadline的正常取消误报，prefix/payload/NotRegistered等待三项先3红/35绿；Router仅在首帧/附着受控边界归一caller token，视频来源保持独立。最终七类定向Debug/Release各225 PASS。最后只读复核无本片可证实剩余阻断，不外推任意handler伪造同token的取消分类。
+4. Host未登记关闭与Control迟到decision等待此前为静态证实后修复，并在本轮组件测试通过；没有声称这两项已有独立红测。未登记Stop门槛是组件接缝测试，不冒称真实网络拒绝端到端复现。
+
+**最终验证**：solution Debug/Release各 **2196 PASS / 0 FAIL / 0 SKIP**，分别Core196、Protocol299、Integration3、Security66、Transport1350、Acceptance282。共12份`frozen-*.trx`按XML计数及每个UnitTestResult=Passed独立核对，solution和IsolatedAcceptance双配置4次build均0警告/0错误；`git diff --check`通过。原始证据均在`outputs/m5-dual-tls/`，不上传原始日志：
+- 修复前：`router-regression-before-fix-debug.*`（11红/35绿）、`host-oce-before-fix-debug.*`（1红/12绿）、`stage-cancel-before-fix-debug.*`（3红/35绿）。
+- 最终定向：`final-targeted-{debug,release}.*`；最终全量：`frozen-test-{debug,release}.log`和对应TRX；构建：`frozen-build-*`/`frozen-isolated-build-*`。
+- `initial-*`、`router-regression-after-*`、`host-oce-after-*`、`final-test-*`、`validated-*`是中间工作树证据，不冒称最终树。未重新运行Python打包或M4实屏。
+
+**真实TLS覆盖边界**：13项，使用生产Control/TLS客户端、实际证书pin验证、独立HMAC/ACK/wire断言；覆盖成功、错proof不消费、重复附着、Control撤销、视频断连、Host停机、忽略取消源、回调故障、非法上行、旧Control-only拒绝及跨信封/附着TTL仍可发后续帧。测试payload为不透明五字节，不是JPEG图像。组件测试覆盖严格ACK、首帧/登记/ACK边界与所有权/收尾，不声称全网络组合或硬中断任意本机代码。
+
+**下一片**：客户端高层安全附着，先处理AuthenticatedControlSession共享SessionToken视图与Dispose同步，再实际第二pin/proof、严格ACK验证、唯一交付/迟到成功回收、父子撤销与join；随后GDI主屏50%缩放/JPEG/5FPS/WPF显示及10分钟内存稳定DoD。M5仍进行中，M4不重开。
