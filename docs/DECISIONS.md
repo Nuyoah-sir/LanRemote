@@ -1341,3 +1341,19 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Evidence**：旧实现两项确定性释放故障测试运行期全红（TCP未尝试、第二错误丢失），再修生产；新增组件26、真实回环TLS11及这两项回归共39例。实际计数、最终双配置证据以HANDOFF§19.8为准。回环TLS使用产品连接器与实际证书pin，验证双向字节和本端关闭使两端原读退出；不冒称视频附着、JPEG或两机实屏。
 
 **Limits**：任意同步Dispose不合作时仍可永久阻塞，不提供硬截止；CloseAsync成功不代表清理成功或I/O完成。public Dispose首次清理错误仍可能覆盖调用者的既有主错误，该外层owner问题未在本片修复。TlsClientConnector返回前失败finally仍是独立待修缺口。LocalEndPoint原有并发关闭观察窗口不作为授权判据；本片不新增其同步保证。未改TLS/pinning/认证安全、系统网络、产品默认Control-only或M4物料。
+
+### ADR-053 — 建连失败的单一 owner 与复合故障保真
+
+**日期**：2026-09-29。**Context**：TlsClientConnector原失败finally先SSL后TCP，前项抛错会漏收后项、覆盖主错；返回前缺caller终检。新增复合异常若仍沿用高层广泛取消翻译及验收cross-subnet分类，会丢故障甚至负例误PASS。
+
+**Decision**：
+1. 生产ConnectAsync经internal ConnectOwnedAsync逐调用单owner执行TCP连接、SSL创建、握手/身份建立；没有可变全局factory或公开替换validator。选whole-owner而非已连接接缝，以确定性覆盖connect/create早期TCP-only失败。三个委托只借用资源，不释放/转交；factory在返回前内部失败时仍须自行处理未返回资源。
+2. owner进入、connect原任务结束后、authenticate原任务结束后的交付前检查caller；不以代理取消任务取代原Task。检查与return之间不承诺原子取消。创建SSL期间或原操作不合作时，不承诺硬截止。
+3. 失败以一个被实际await的worker先TCP后SSL独立释放；清理不链接caller。无清理错误直接throw保留主实例；有错固定为Aggregate(primary, Aggregate(cleanupErrors))，清理内部1~2项按TCP/SSL顺序，保留原实例/嵌套，不Flatten、不使用共享LastErrors或Exception.Data。既有pin拒绝包装保留，primary是operation向owner交出的异常，不冒称底层SSL异常始终位于顶层。
+4. Control的实例readonly建连接缝用于失败路径测试；生产默认仍真实TLS。取消归一化不得替换含Aggregate的异常树（沿普通InnerException链查至Aggregate即止）。原最外层OCE仍按async builder形成Canceled，保留其异常树/token；低层生成的外层Aggregate形成Faulted，不能为统一状态篡改原异常。
+5. Acceptance复合故障先于取消/TCP/pin/cross-subnet分类：场景HARNESS_ERROR、连接UNOBSERVED，脱敏记录故障；即便整轮操作员取消优先为INVALID_RUN，仍保留场景错误和故障记账。普通OCE的重抛延至cleanup完成后，以免复合cleanup绕过尾部判定。普通非复合错误既有取消语义保持。
+6. footer不是事务：日志先写后回调。复合日志回调失败只记账后原样抛出，不整段重试Complete，避免两套结果/重复RUN COMPLETE；已写标记不证明方法成功。日志不输出任意异常正文/stack/inner。
+
+**Evidence**：TLS owner先51/60运行期红；Control纠正OCE Task状态测试预期后22/80红；Acceptance分类96/144红、收尾补充5/151红，修后通过。最终双配置各2514 PASS（较上片+251），四build零警告错误；详细证据见HANDOFF§19.9。mock identity仅组件证据，真实TLS/pinning由原生产连接器回归承担。
+
+**Limits / next**：Control已取得连接后的认证失败finally与Verify新session后置终检的清理仍可能覆盖认证主错，下一片先做逻辑撤销清零和外层异步owner收尾；不把本片称为全部客户端清理完成。success时间元数据/附着TTL、父子撤销join、ACK唯一交付、采集显示及十分钟DoD均未完成。未改系统网络、默认Control-only、M4物料或原安全门禁。

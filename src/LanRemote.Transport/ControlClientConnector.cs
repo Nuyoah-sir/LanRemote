@@ -8,6 +8,21 @@ namespace LanRemote.Transport;
 /// <summary>从冻结目标建立 TLS 并完成双向访问密钥认证，不向调用方交出中间连接。</summary>
 public sealed class ControlClientConnector
 {
+    private readonly Func<ConnectionTarget, TransportTimeouts, TimeProvider,
+        CancellationToken, Task<TlsConnection>> _connectTls;
+
+    public ControlClientConnector()
+        : this((target, timeouts, clock, token) =>
+            new TlsClientConnector().ConnectAsync(target, timeouts, clock, token)) { }
+
+    /// <summary>实例级接缝仅供测试；生产入口固定使用真实 TLS 连接器。</summary>
+    internal ControlClientConnector(Func<ConnectionTarget, TransportTimeouts, TimeProvider,
+        CancellationToken, Task<TlsConnection>> connectTls)
+    {
+        ArgumentNullException.ThrowIfNull(connectTls);
+        _connectTls = connectTls;
+    }
+
     /// <summary>成功才移交独占连接的会话；失败或取消均关闭连接。</summary>
     /// <param name="target">连接前冻结的目标。</param>
     /// <param name="clientDeviceId">本机设备号，不得为空。</param>
@@ -64,8 +79,8 @@ public sealed class ControlClientConnector
             TimeProvider effectiveClock = clock ?? TimeProvider.System;
 
             // TLS 的 AuthenticationException 不经过下面的认证异常翻译。
-            connection = await new TlsClientConnector()
-                .ConnectAsync(target, budget, effectiveClock, cancellationToken).ConfigureAwait(false);
+            connection = await _connectTls(target, budget, effectiveClock, cancellationToken)
+                .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             if (!connection.Identity.PinsMatch)
             {
@@ -82,9 +97,9 @@ public sealed class ControlClientConnector
             connection = null;
             return result;
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        catch (Exception error) when (cancellationToken.IsCancellationRequested && !ContainsAggregate(error))
         {
-            // 取消同时表现为 I/O 失败时仍保留调用方取消语义，不携带可能含载荷的内层异常。
+            // 普通 I/O 保留取消语义；主错加清理错的复合故障不可被取消翻译丢弃。
             throw new OperationCanceledException(cancellationToken);
         }
         finally
@@ -99,6 +114,15 @@ public sealed class ControlClientConnector
                 connection?.Dispose();
             }
         }
+    }
+
+    private static bool ContainsAggregate(Exception error)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+        {
+            if (current is AggregateException) { return true; }
+        }
+        return false;
     }
 
     private static async Task<AuthenticatedControlSession> AuthenticateConnectedAsync(

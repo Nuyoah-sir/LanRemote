@@ -49,26 +49,21 @@ public sealed class TlsClientConnector
         TransportTimeouts budget = timeouts ?? TransportTimeouts.Default;
         TimeProvider effectiveClock = clock ?? TimeProvider.System;
 
-        TcpClient? client = null;
-        SslStream? stream = null;
-
         // 回调里捕获的结果：presentedPin 是 M3 必须交给 M4 的交付物（ADR-028）。
         byte[]? presentedPin = null;
         string? rejection = null;
 
-        try
-        {
-            client = new TcpClient(target.RemoteAddress.AddressFamily);
-
-            using (CancellationTokenSource connectCts =
-                   CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        return await ConnectOwnedAsync(
+            new TcpClient(target.RemoteAddress.AddressFamily),
+            async (client, token) =>
             {
+                using CancellationTokenSource connectCts =
+                    CancellationTokenSource.CreateLinkedTokenSource(token);
                 connectCts.CancelAfter(budget.ConnectTimeout);
                 await client.ConnectAsync(target.RemoteAddress, target.Port, connectCts.Token)
                     .ConfigureAwait(false);
-            }
-
-            stream = new SslStream(
+            },
+            client => new SslStream(
                 client.GetStream(),
                 leaveInnerStreamOpen: false,
                 userCertificateValidationCallback: (_, certificate, _, _) =>
@@ -83,50 +78,88 @@ public sealed class TlsClientConnector
                     presentedPin = pin;
                     rejection = accepted ? null : reason;
                     return accepted;
-                });
-
-            SslClientAuthenticationOptions options = CreateClientOptions();
-
-            using (CancellationTokenSource handshakeCts =
-                   CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                }),
+            async (stream, token) =>
             {
-                handshakeCts.CancelAfter(budget.HandshakeTimeout);
-                await stream.AuthenticateAsClientAsync(options, handshakeCts.Token)
-                    .ConfigureAwait(false);
-            }
+                try
+                {
+                    SslClientAuthenticationOptions options = CreateClientOptions();
+                    using (CancellationTokenSource handshakeCts =
+                           CancellationTokenSource.CreateLinkedTokenSource(token))
+                    {
+                        handshakeCts.CancelAfter(budget.HandshakeTimeout);
+                        await stream.AuthenticateAsClientAsync(options, handshakeCts.Token)
+                            .ConfigureAwait(false);
+                    }
 
-            if (presentedPin is null || presentedPin.Length != CertificatePin.LengthBytes)
-            {
-                // 走到这里说明握手成功但回调没跑——pinning 根本没发生，必须 fail closed。
-                throw new AuthenticationException(
-                    "TLS 握手完成但证书校验回调未产生 32 字节指纹，已按失败处理。");
-            }
+                    if (presentedPin is null || presentedPin.Length != CertificatePin.LengthBytes)
+                    {
+                        // 握手成功但回调没跑——pinning 根本没发生，必须 fail closed。
+                        throw new AuthenticationException(
+                            "TLS 握手完成但证书校验回调未产生 32 字节指纹，已按失败处理。");
+                    }
 
-            if (!ConnectionIdentity.TryCreate(target, presentedPin, out ConnectionIdentity? identity)
-                || identity is null)
-            {
-                throw new AuthenticationException("无法构造连接身份上下文，已按失败处理。");
-            }
+                    if (!ConnectionIdentity.TryCreate(target, presentedPin, out ConnectionIdentity? identity)
+                        || identity is null)
+                    {
+                        throw new AuthenticationException("无法构造连接身份上下文，已按失败处理。");
+                    }
+                    return identity;
+                }
+                catch (AuthenticationException ex) when (rejection is not null)
+                {
+                    // 保持既有 pin 拒绝包装；owner 保留这个主异常及其内层原异常。
+                    throw new AuthenticationException($"对端证书未通过校验（{rejection}）。", ex);
+                }
+            }, cancellationToken).ConfigureAwait(false);
+    }
 
-            TlsConnection connection = new(identity, client, stream);
-
-            // 交给返回值，finally 不再释放。
-            client = null;
-            stream = null;
-            return connection;
-        }
-        catch (AuthenticationException ex) when (rejection is not null)
+    /// <summary>逐调用资源 owner；生产传入真实 TCP/TLS 操作，测试可控制各阶段与释放故障。</summary>
+    internal static async Task<TlsConnection> ConnectOwnedAsync(
+        TcpClient client,
+        Func<TcpClient, CancellationToken, Task> connect,
+        Func<TcpClient, SslStream> createStream,
+        Func<SslStream, CancellationToken, Task<ConnectionIdentity>> authenticate,
+        CancellationToken cancellationToken)
+    {
+        SslStream? stream = null;
+        try
         {
-            // 把回调的拒绝原因带出来给本地日志；不要把它发给对端。
-            throw new AuthenticationException(
-                $"对端证书未通过校验（{rejection}）。",
-                ex);
+            cancellationToken.ThrowIfCancellationRequested();
+            await connect(client, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            stream = createStream(client);
+            ConnectionIdentity identity = await authenticate(stream, cancellationToken).ConfigureAwait(false);
+            // 接受判据在原操作完成之后；忽略取消的迟到成功也不能交付。
+            cancellationToken.ThrowIfCancellationRequested();
+            return new TlsConnection(identity, client, stream);
         }
-        finally
+        catch (Exception primary)
         {
-            stream?.Dispose();
-            client?.Dispose();
+            // 不将 caller token 传给清理；不让同步 Dispose 阻塞请求/UI 线程。
+            // 必须等待两项实际尝试结束，不能用超时代理遗弃释放任务。
+            AggregateException? failure = await Task.Run(() => CleanupFailure(primary, client, stream))
+                .ConfigureAwait(false);
+            if (failure is not null) { throw failure; }
+            throw;
         }
+    }
+
+    private static AggregateException? CleanupFailure(Exception primary, TcpClient client, SslStream? stream)
+    {
+        Exception? clientError = null;
+        Exception? streamError = null;
+        try { client.Dispose(); }
+        catch (Exception error) { clientError = error; }
+        try { stream?.Dispose(); }
+        catch (Exception error) { streamError = error; }
+
+        if (clientError is null && streamError is null) { return null; }
+        Exception[] errors = clientError is null ? [streamError!]
+            : streamError is null ? [clientError] : [clientError, streamError];
+        // 不 Flatten：主错和各清理错均保留原实例；局部固定两槽，无跨调用共享诊断。
+        return new AggregateException("连接建立失败且资源清理失败。", primary,
+            new AggregateException("连接资源清理失败。", errors));
     }
 
     /// <summary>

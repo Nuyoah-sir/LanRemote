@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Security.Authentication;
 using LanRemote.Core.Models;
 using LanRemote.Discovery;
@@ -93,9 +94,7 @@ internal static class ClientRole
         }
 
         AcceptanceContext? context = null;
-        ScenarioOutcome outcome;
-        bool cleanupFault = false;
-        try
+        return await RunAsync(run, cancellationToken, async () =>
         {
             context = new AcceptanceContext(LogLevel.Warning, run.Log.WriteLine);
             await context.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -105,42 +104,64 @@ internal static class ClientRole
             TargetResolution resolution = await ResolveTargetAsync(
                 run, context, scenario, deviceCode, address, pinHex, port, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            outcome = resolution.Target is null
+            return resolution.Target is null
                 ? resolution.Failure!
                 : await ExecuteAsync(run, context, scenario, resolution.Target, cancellationToken,
                     accessKey, requestedPermission, approvalPending).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        }, () => context?.DisposeAsync() ?? ValueTask.CompletedTask).ConfigureAwait(false);
+    }
+
+    internal static async Task<ScenarioOutcome> RunAsync(
+        AcceptanceRun run,
+        CancellationToken cancellationToken,
+        Func<Task<ScenarioOutcome>> execute,
+        Func<ValueTask> cleanup)
+    {
+        ScenarioOutcome outcome;
+        ExceptionDispatchInfo? cancellation = null;
+        bool cleanupFault = false;
+        bool compositeCleanupFault = false;
+        try
         {
-            // 交给 run owner 标记 operator abort；不能当作 TLS 拒绝或对端关闭。
-            throw;
+            outcome = await execute().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested && !ContainsAggregate(ex))
+        {
+            // 等清理完成再决定是否重抛，避免复合清理故障被普通取消遮蔽。
+            cancellation = ExceptionDispatchInfo.Capture(ex);
+            outcome = UnobservedFailure(AcceptanceOutcome.InvalidRun, "控制端场景被操作员取消，连接观测不完整。");
         }
         catch (Exception ex)
         {
             ReportFault(run, "Client 场景执行", ex);
-            outcome = UnobservedFailure(AcceptanceOutcome.HarnessError, "控制端场景执行异常，连接观测不完整。");
+            outcome = UnobservedFailure(AcceptanceOutcome.HarnessError, "控制端场景执行异常，连接观测不完整。")
+                with { HasCompositeFailure = ContainsAggregate(ex) };
         }
         finally
         {
-            if (context is not null)
+            try
             {
-                try
-                {
-                    await context.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    cleanupFault = true;
-                    ReportFault(run, "Client Discovery/context 释放", ex);
-                }
+                await cleanup().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                cleanupFault = true;
+                compositeCleanupFault = ContainsAggregate(ex);
+                ReportFault(run, "Client Discovery/context 释放", ex);
             }
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        // 复合故障先交给循环输出；整轮仍由 owner 标记操作员中止，不能只剩 INVALID_RUN。
+        if (!outcome.HasCompositeFailure && !compositeCleanupFault)
+        {
+            cancellation?.Throw();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         return cleanupFault
             ? outcome with
             {
                 Outcome = AcceptanceOutcome.HarnessError,
+                HasCompositeFailure = outcome.HasCompositeFailure || compositeCleanupFault,
                 Detail = outcome.Detail + " 资源清理失败，不能给 PASS。",
             }
             : outcome;
@@ -152,7 +173,7 @@ internal static class ClientRole
     /// pending 不是认证成功；UI 在本方法成功、失败或取消收尾后负责清理等待状态。
     /// accessKey 由调用方保管和清零，客户端不日志、不持久化，也不从命令行取得密钥。
     /// </remarks>
-    public static async Task<AcceptanceOutcome> RunAllAsync(
+    public static Task<AcceptanceOutcome> RunAllAsync(
         AcceptanceRun run,
         IReadOnlyList<string> scenarios,
         string? deviceCode,
@@ -162,7 +183,16 @@ internal static class ClientRole
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> accessKey = default,
         SessionPermission requestedPermission = SessionPermission.Control,
-        Action<ControlClientApprovalPending>? approvalPending = null)
+        Action<ControlClientApprovalPending>? approvalPending = null) =>
+        RunAllAsync(run, scenarios, cancellationToken, scenario => RunAsync(
+            run, scenario, deviceCode, address, pinHex, port, cancellationToken,
+            accessKey, requestedPermission, approvalPending));
+
+    internal static async Task<AcceptanceOutcome> RunAllAsync(
+        AcceptanceRun run,
+        IReadOnlyList<string> scenarios,
+        CancellationToken cancellationToken,
+        Func<string, Task<ScenarioOutcome>> runScenario)
     {
         List<ScenarioOutcome> outcomes = new();
         AcceptanceOutcome loopOutcome = AcceptanceOutcome.Pass;
@@ -179,9 +209,7 @@ internal static class ClientRole
                 run.Log.WriteLine("---------------- 场景 " + scenario + " ----------------");
                 run.Log.WriteLine($"[CLIENT] scenario    = {scenario}");
 
-                ScenarioOutcome outcome = await RunAsync(
-                    run, scenario, deviceCode, address, pinHex, port, cancellationToken,
-                    accessKey, requestedPermission, approvalPending).ConfigureAwait(false);
+                ScenarioOutcome outcome = await runScenario(scenario).ConfigureAwait(false);
                 outcome = outcome with { Scenario = scenario };
                 outcomes.Add(outcome);
                 activeScenario = null;
@@ -189,7 +217,7 @@ internal static class ClientRole
                 run.Log.WriteLine($"---------------- 场景 {scenario} 结束：{outcome.Outcome.Code()}（{outcome.Outcome.Describe()}）----------------");
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested && !ContainsAggregate(ex))
         {
             loopOutcome = AcceptanceOutcome.InvalidRun;
             detail = "控制端运行被操作员取消，未完成的观测不能作为通过证据。";
@@ -218,17 +246,7 @@ internal static class ClientRole
             ReportFault(run, "Client 证据汇总", ex);
         }
 
-        if (cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                run.MarkOperatorAbort("控制端场景循环或资源收尾");
-            }
-            catch (Exception ex)
-            {
-                ReportFault(run, "Client 中止日志", ex);
-            }
-        }
+        MarkOperatorAbortIfRequested(run, cancellationToken);
         if (scenarios.Count == 0 && loopOutcome == AcceptanceOutcome.Pass)
         {
             loopOutcome = AcceptanceOutcome.PreconditionUnmet;
@@ -237,7 +255,30 @@ internal static class ClientRole
         detail += " 场景结果：" + (outcomes.Count == 0 ? "未完成任何场景"
             : string.Join("，", outcomes.Select(item => $"{item.Scenario}={item.Outcome.Code()}"))) + "。";
         AcceptanceOutcome combined = outcomes.Select(item => item.Outcome).Append(loopOutcome).Combine();
-        return run.Complete(combined, detail);
+        try
+        {
+            return run.Complete(combined, detail);
+        }
+        catch (Exception ex) when (ContainsAggregate(ex))
+        {
+            // 日志先写后回调；不能重放已写的 footer，也不能返回虚假的完成结果。
+            ReportFault(run, "Client 完成日志", ex);
+            MarkOperatorAbortIfRequested(run, cancellationToken);
+            throw;
+        }
+    }
+
+    private static void MarkOperatorAbortIfRequested(AcceptanceRun run, CancellationToken cancellationToken)
+    {
+        if (!cancellationToken.IsCancellationRequested || run.AbortedByOperator) { return; }
+        try
+        {
+            run.MarkOperatorAbort("控制端场景循环或资源收尾");
+        }
+        catch (Exception ex)
+        {
+            ReportFault(run, "Client 中止日志", ex);
+        }
     }
 
     internal static string? ValidateSuccessConfiguration(
@@ -267,8 +308,9 @@ internal static class ClientRole
         try
         {
             // UI 回调可能接触密钥；不把任意异常正文、堆栈或 inner exception 传给日志。
+            string type = ContainsAggregate(exception) ? nameof(AggregateException) : exception.GetType().Name;
             run.ReportBackgroundFault(source,
-                new InvalidOperationException($"{exception.GetType().Name}（异常正文未输出，避免秘密进入日志）"));
+                new InvalidOperationException($"{type}（异常正文未输出，避免秘密进入日志）"));
         }
         catch (Exception)
         {
@@ -371,7 +413,7 @@ internal static class ClientRole
     // -----------------------------------------------------------------------
     // 执行
     // -----------------------------------------------------------------------
-    private static async Task<ScenarioOutcome> ExecuteAsync(
+    internal static async Task<ScenarioOutcome> ExecuteAsync(
         AcceptanceRun run,
         AcceptanceContext context,
         string scenario,
@@ -379,7 +421,8 @@ internal static class ClientRole
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> accessKey,
         SessionPermission requestedPermission,
-        Action<ControlClientApprovalPending>? approvalPending)
+        Action<ControlClientApprovalPending>? approvalPending,
+        Func<ConnectionTarget, CancellationToken, Task<TlsConnection>>? connect = null)
     {
         // 高层自己建立且独占 TLS；必须先分流，不能先建低层连接再做第二次认证连接。
         if (scenario == ScenarioSuccess)
@@ -388,17 +431,17 @@ internal static class ClientRole
                 approvalPending, cancellationToken).ConfigureAwait(false);
         }
 
-        TlsClientConnector connector = new();
+        connect ??= (frozen, token) => new TlsClientConnector().ConnectAsync(
+            frozen, AcceptanceProfile.Timeouts, null, token);
 
         TlsConnection connection;
         try
         {
-            connection = await connector.ConnectAsync(
-                target, AcceptanceProfile.Timeouts, null, cancellationToken);
+            connection = await connect(target, cancellationToken);
         }
         catch (Exception ex)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (!ContainsAggregate(ex)) { cancellationToken.ThrowIfCancellationRequested(); }
             return ClassifyHandshakeFailure(run, scenario, ex);
         }
 
@@ -536,6 +579,7 @@ internal static class ClientRole
     /// <summary>高层认证失败先于 TLS 异常分类；只输出产品固定展示文案和非秘密拒绝短码。</summary>
     internal static ScenarioOutcome ClassifyAuthenticationFailure(Exception exception, CancellationToken cancellationToken)
     {
+        if (ContainsAggregate(exception)) { return CompositeFailure(); }
         cancellationToken.ThrowIfCancellationRequested();
         // 该异常继承 AuthenticationException，顺序颠倒会把错误密码误判成 TLS 失败。
         if (exception is ControlClientAuthenticationException auth)
@@ -661,6 +705,13 @@ internal static class ClientRole
                 await connection.Stream.WriteAsync(prefix.AsMemory(index, 1), cancellationToken);
                 await connection.Stream.FlushAsync(cancellationToken);
             }
+            catch (Exception ex) when (ContainsAggregate(ex))
+            {
+                ReportFault(run, "Client 慢滴写入", ex);
+                // 先观察已启动的读取任务；复合写故障不能变成对端收尾证据。
+                await closeTask;
+                return CompositeFailure();
+            }
             catch (OperationCanceledException)
             {
                 // 本机取消：不算对端收尾，交给结算逻辑判成 INVALID_RUN。
@@ -669,7 +720,7 @@ internal static class ClientRole
             catch (Exception ex)
             {
                 run.Log.WriteLine($"[CLIENT] 第 {index + 1} 字节写出失败：" +
-                                  $"{ex.GetType().Name}: {ex.Message}");
+                                  $"{ex.GetType().Name}（异常正文未输出）");
                 closedAt = clock.ElapsedMilliseconds;
                 break;
             }
@@ -750,13 +801,18 @@ internal static class ClientRole
     /// <b>绝不允许把「没测到」报成 PASS</b>。TCP 层没连上（对端没跑 host、地址写错、
     /// 防火墙拦掉）时同子网闸门与 pinning 一行都没跑到，那是前置条件不满足。
     /// </remarks>
-    private static ScenarioOutcome ClassifyHandshakeFailure(
+    internal static ScenarioOutcome ClassifyHandshakeFailure(
         AcceptanceRun run,
         string scenario,
         Exception exception)
     {
+        if (ContainsAggregate(exception))
+        {
+            ReportFault(run, "Client TLS 连接", exception);
+            return CompositeFailure();
+        }
         string type = exception.GetType().FullName ?? exception.GetType().Name;
-        run.Log.WriteLine($"[CLIENT] handshake failed: {type}: {exception.Message}");
+        run.Log.WriteLine($"[CLIENT] handshake failed: {type}（异常正文未输出）");
 
         if (HasSocketError(
                 exception,
@@ -854,6 +910,20 @@ internal static class ClientRole
         return null;
     }
 
+    private static ScenarioOutcome CompositeFailure() =>
+        UnobservedFailure(AcceptanceOutcome.HarnessError, "连接或清理发生复合故障，不能作为场景通过或前置条件不足的证据。")
+            with { HasCompositeFailure = true };
+
+    private static bool ContainsAggregate(Exception exception)
+    {
+        // 普通包装也可能包住复合故障；遇到 Aggregate 即止，不 Flatten、不读取异常正文或子树。
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is AggregateException) { return true; }
+        }
+        return false;
+    }
+
     private static bool HasSocketError(Exception exception, params SocketError[] errors)
     {
         for (Exception? current = exception; current is not null; current = current.InnerException)
@@ -904,6 +974,10 @@ internal static class ClientRole
                     "unexpected-data",
                     $"未发完整 hello 就收到对端 {read} 字节——低层超时专项不应收到后续数据");
         }
+        catch (Exception ex) when (ContainsAggregate(ex))
+        {
+            throw;
+        }
         catch (TimeoutException)
         {
             return new CloseObservation(false, "still-open", "读预算内对端没有关闭连接");
@@ -917,7 +991,7 @@ internal static class ClientRole
         catch (Exception ex)
         {
             string type = ex.GetType().FullName ?? ex.GetType().Name;
-            return new CloseObservation(true, "reset", $"{type}: {ex.Message}");
+            return new CloseObservation(true, "reset", $"{type}（异常正文未输出）");
         }
     }
 
@@ -1114,7 +1188,7 @@ internal static class ClientRole
                 }
             }
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && !ContainsAggregate(ex))
         {
             // 只有本地发现预算到期是 UNMET；调用方取消必须交给 run owner。
         }
@@ -1173,6 +1247,9 @@ internal static class ClientRole
         bool TlsStageRejection = false,
         bool ConnectionObservationUnknown = false)
     {
+        /// <summary>仅复合故障越过单场景尾部取消检查，普通错误仍保留取消优先。</summary>
+        internal bool HasCompositeFailure { get; init; }
+
         /// <summary>场景名；由 <see cref="RunAllAsync"/> 回填。</summary>
         public string Scenario { get; init; } = string.Empty;
     }

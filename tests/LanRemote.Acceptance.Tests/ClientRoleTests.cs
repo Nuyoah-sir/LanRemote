@@ -1,13 +1,15 @@
 using System.IO;
+using System.Net;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text;
 using LanRemote.Core.Models;
 using LanRemote.Transport;
+using Xunit.Abstractions;
 
 namespace LanRemote.Acceptance.Tests;
 
-public sealed class ClientRoleTests : IDisposable
+public sealed class ClientRoleTests(ITestOutputHelper output) : IDisposable
 {
     private readonly string _logDirectory = Path.Combine(
         Path.GetTempPath(), "LanRemote.ClientRoleTests", Guid.NewGuid().ToString("N"));
@@ -317,6 +319,502 @@ public sealed class ClientRoleTests : IDisposable
 
         Assert.Equal(AcceptanceOutcome.PreconditionUnmet, result);
         AssertFooter(run, result);
+    }
+
+    private const string SensitiveFailure = "不得输出的主失败清理失败包装正文与堆栈";
+
+    public static IEnumerable<object[]> CompositeHandshakeCases() =>
+        from shape in CompositeShapes()
+        from scenario in ClientRole.KnownScenarios
+        select new object[] { shape, scenario };
+
+    public static IEnumerable<object[]> CompositeCancellationCases() =>
+        from shape in CompositeShapes()
+        from cancelled in new[] { false, true }
+        select new object[] { shape, cancelled };
+
+    private static string[] CompositeShapes() =>
+        ["direct", "io-wrapper", "auth-wrapper", "cancel-wrapper", "deep-wrapper", "secondary-tree", "empty", "single", "unreadable"];
+
+    [Theory]
+    [MemberData(nameof(CompositeHandshakeCases))]
+    public void Composite_Handshake_Is_Always_Unobserved_Harness_Error(string shape, string scenario)
+    {
+        AcceptanceRun run = CreateRun();
+        Exception failure = CompositeFailure(shape);
+
+        ClientRole.ScenarioOutcome outcome = ClientRole.ClassifyHandshakeFailure(run, scenario, failure);
+
+        AssertHarnessFailure(outcome);
+        Assert.True(run.HasBackgroundFaults);
+        AssertSanitized(run);
+        Assert.Contains("AggregateException", run.BackgroundFaultSummary);
+    }
+
+    [Theory]
+    [MemberData(nameof(CompositeCancellationCases))]
+    public void Composite_Authentication_Is_Not_Masked_By_Caller_Cancellation(string shape, bool cancelled)
+    {
+        using CancellationTokenSource caller = new();
+        if (cancelled) { caller.Cancel(); }
+
+        ClientRole.ScenarioOutcome outcome = ClientRole.ClassifyAuthenticationFailure(
+            CompositeFailure(shape), caller.Token);
+
+        AssertHarnessFailure(outcome);
+    }
+
+    [Theory]
+    [InlineData(ClientRole.ScenarioPinMismatch, AcceptanceOutcome.Pass)]
+    [InlineData(ClientRole.ScenarioCrossSubnet, AcceptanceOutcome.Pass)]
+    [InlineData(ClientRole.ScenarioTimeout, AcceptanceOutcome.Fail)]
+    public void Ordinary_Handshake_Retains_Its_Verdict_Without_Logging_Payload(
+        string scenario, AcceptanceOutcome expected)
+    {
+        AcceptanceRun run = CreateRun();
+        AuthenticationException failure = new(
+            SensitiveFailure + PeerCertificateValidator.RejectionPinMismatch, new IOException(SensitiveFailure));
+
+        ClientRole.ScenarioOutcome outcome = ClientRole.ClassifyHandshakeFailure(run, scenario, failure);
+
+        Assert.Equal(expected, outcome.Outcome);
+        Assert.True(outcome.TlsStageRejection);
+        Assert.False(outcome.ConnectionObservationUnknown);
+        Assert.False(run.HasBackgroundFaults);
+        Assert.DoesNotContain(SensitiveFailure, Describe(outcome));
+        AssertSanitized(run);
+    }
+
+    [Theory]
+    [InlineData(SocketError.ConnectionRefused)]
+    [InlineData(SocketError.HostUnreachable)]
+    [InlineData(SocketError.NetworkUnreachable)]
+    [InlineData(SocketError.NetworkDown)]
+    [InlineData(SocketError.TimedOut)]
+    [InlineData(SocketError.AddressNotAvailable)]
+    public void Ordinary_Wrapped_Socket_Handshake_Remains_Unmet(SocketError error)
+    {
+        AcceptanceRun run = CreateRun();
+        ClientRole.ScenarioOutcome outcome = ClientRole.ClassifyHandshakeFailure(run,
+            ClientRole.ScenarioCrossSubnet, new IOException(SensitiveFailure, new SocketException((int)error)));
+
+        Assert.Equal(AcceptanceOutcome.PreconditionUnmet, outcome.Outcome);
+        Assert.Equal("tcp", Field(outcome, "stage"));
+        Assert.False(outcome.ReachedWire);
+        Assert.False(outcome.ConnectionObservationUnknown);
+        Assert.False(run.HasBackgroundFaults);
+        AssertSanitized(run);
+    }
+
+    [Theory]
+    [MemberData(nameof(CompositeCancellationCases))]
+    public async Task Composite_Connect_Failure_Survives_Execute_Run_And_Final_Combination(
+        string shape, bool cancelled)
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<TlsConnection> connecting = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<string> trace = new();
+        int scenarioCalls = 0;
+        run.Log.LineWritten += line =>
+        {
+            if (line.StartsWith("[HARNESS][FAULT]", StringComparison.Ordinal)) { trace.Add("fault"); }
+            if (line.StartsWith("[CLIENT][RESULT]", StringComparison.Ordinal)) { trace.Add("result"); }
+            if (line == "RUN COMPLETE") { trace.Add("complete"); }
+        };
+
+        Task<AcceptanceOutcome> running = ClientRole.RunAllAsync(run,
+            cancelled ? [ClientRole.ScenarioCrossSubnet, ClientRole.ScenarioPinMismatch] : [ClientRole.ScenarioCrossSubnet],
+            caller.Token, scenario =>
+            {
+                scenarioCalls++;
+                return ClientRole.RunAsync(run, caller.Token,
+                    () => ClientRole.ExecuteAsync(run, null!, scenario, Target(), caller.Token,
+                        default, SessionPermission.Control, null, (_, token) =>
+                        {
+                            Assert.Equal(caller.Token, token);
+                            trace.Add("connect");
+                            entered.SetResult();
+                            return connecting.Task;
+                        }),
+                    () => { trace.Add("cleanup"); return ValueTask.CompletedTask; });
+            });
+        AcceptanceOutcome result;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (cancelled) { caller.Cancel(); }
+            connecting.SetException(CompositeFailure(shape));
+            result = await running.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            connecting.TrySetCanceled();
+            try { await running; }
+            catch (Exception)
+            {
+                // 主断言路径负责报告失败；这里始终放闸并观察原任务，避免超时后遗弃任务。
+            }
+        }
+
+        Assert.Equal(cancelled ? AcceptanceOutcome.InvalidRun : AcceptanceOutcome.HarnessError, result);
+        Assert.Equal(cancelled, run.AbortedByOperator);
+        Assert.Equal(1, scenarioCalls);
+        Assert.True(run.HasBackgroundFaults);
+        Assert.Contains("scenario=cross-subnet clientOutcome=HARNESS_ERROR", run.Log.All);
+        Assert.Contains("connection=UNOBSERVED", run.Log.All);
+        Assert.Contains("不能给出整轮 sessionHandled 确定区间", run.Log.All);
+        Assert.Contains("AggregateException", run.BackgroundFaultSummary);
+        Assert.True(trace.IndexOf("connect") < trace.IndexOf("fault"));
+        Assert.True(trace.IndexOf("fault") < trace.IndexOf("cleanup"));
+        Assert.True(trace.IndexOf("cleanup") < trace.IndexOf("result"));
+        Assert.True(trace.IndexOf("result") < trace.IndexOf("complete"));
+        AssertSanitized(run);
+        AssertFooter(run, result);
+        output.WriteLine($"trace={string.Join(" -> ", trace)}; scenario=HARNESS_ERROR; " +
+            $"final={result.Code()}; aborted={run.AbortedByOperator}; fault={run.HasBackgroundFaults}");
+        output.WriteLine(run.BackgroundFaultSummary);
+    }
+
+    [Theory]
+    [InlineData("auth")]
+    [InlineData("io")]
+    [InlineData("cancel")]
+    public async Task Ordinary_Execute_Failure_Still_Prefers_Caller_Cancellation(string kind)
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        Exception failure = kind switch
+        {
+            "auth" => new AuthenticationException(PeerCertificateValidator.RejectionPinMismatch),
+            "io" => new IOException(SensitiveFailure),
+            _ => new OperationCanceledException(SensitiveFailure),
+        };
+
+        OperationCanceledException observed = await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            ClientRole.ExecuteAsync(run, null!, ClientRole.ScenarioCrossSubnet, Target(), caller.Token,
+                default, SessionPermission.Control, null, (_, _) =>
+                {
+                    caller.Cancel();
+                    return Task.FromException<TlsConnection>(failure);
+                }));
+
+        Assert.Equal(caller.Token, observed.CancellationToken);
+        Assert.Null(observed.InnerException);
+        Assert.False(run.HasBackgroundFaults);
+        Assert.DoesNotContain("handshake failed", run.Log.All);
+        AssertSanitized(run);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Run_Scope_Records_Composite_Execution_Or_Cleanup_Before_Cancellation(bool duringCleanup)
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        bool cleaned = false;
+        ClientRole.ScenarioOutcome outcome = await ClientRole.RunAsync(run, caller.Token,
+            () =>
+            {
+                if (duringCleanup) { return Task.FromResult(UnmetOutcome()); }
+                caller.Cancel();
+                return Task.FromException<ClientRole.ScenarioOutcome>(CompositeFailure("cancel-wrapper"));
+            },
+            () =>
+            {
+                cleaned = true;
+                if (duringCleanup)
+                {
+                    caller.Cancel();
+                    return ValueTask.FromException(CompositeFailure("deep-wrapper"));
+                }
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.True(cleaned);
+        Assert.Equal(AcceptanceOutcome.HarnessError, outcome.Outcome);
+        Assert.True(run.HasBackgroundFaults);
+        Assert.Contains("AggregateException", run.BackgroundFaultSummary);
+        AssertSanitized(run);
+    }
+
+    [Theory]
+    [InlineData("execution")]
+    [InlineData("cleanup")]
+    [InlineData("outcome")]
+    public async Task Ordinary_Run_Scope_Failure_Still_Prefers_Caller_Cancellation(string source)
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        bool cleaned = false;
+
+        OperationCanceledException observed = await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            ClientRole.RunAsync(run, caller.Token,
+                () =>
+                {
+                    if (source == "cleanup") { return Task.FromResult(UnmetOutcome()); }
+                    caller.Cancel();
+                    return source == "execution"
+                        ? Task.FromException<ClientRole.ScenarioOutcome>(new InvalidOperationException(SensitiveFailure))
+                        : Task.FromResult(ClientRole.ClassifyAuthenticationFailure(
+                            new InvalidOperationException(SensitiveFailure), CancellationToken.None));
+                },
+                () =>
+                {
+                    cleaned = true;
+                    if (source != "cleanup") { return ValueTask.CompletedTask; }
+                    caller.Cancel();
+                    return ValueTask.FromException(new IOException(SensitiveFailure));
+                }));
+
+        Assert.True(cleaned);
+        Assert.Equal(caller.Token, observed.CancellationToken);
+        Assert.Null(observed.InnerException);
+        Assert.Equal(source != "outcome", run.HasBackgroundFaults);
+        AssertSanitized(run);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Ordinary_Cancellation_Without_Composite_Cleanup_Rethrows_Original(bool cleanupFails)
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        IOException inner = new(SensitiveFailure);
+        OperationCanceledException original = new(SensitiveFailure, inner, caller.Token);
+        bool cleaned = false;
+
+        Task<ClientRole.ScenarioOutcome> CancelAtSource()
+        {
+            caller.Cancel();
+            throw original;
+        }
+
+        OperationCanceledException observed = await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            ClientRole.RunAsync(run, caller.Token, CancelAtSource, () =>
+            {
+                cleaned = true;
+                return cleanupFails ? ValueTask.FromException(new IOException(SensitiveFailure)) : ValueTask.CompletedTask;
+            }));
+
+        Assert.True(cleaned);
+        Assert.Same(original, observed);
+        Assert.Same(inner, observed.InnerException);
+        Assert.Equal(caller.Token, observed.CancellationToken);
+        Assert.Contains(nameof(CancelAtSource), observed.StackTrace);
+        Assert.Equal(cleanupFails, run.HasBackgroundFaults);
+        AssertSanitized(run);
+    }
+
+    [Fact]
+    public async Task Ordinary_Cancellation_With_Composite_Cleanup_Retains_Abort_And_Fault()
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        ClientRole.ScenarioOutcome? scenarioOutcome = null;
+        AcceptanceOutcome result = await ClientRole.RunAllAsync(run, [ClientRole.ScenarioCrossSubnet],
+            caller.Token, async _ => scenarioOutcome = await ClientRole.RunAsync(run, caller.Token,
+                () =>
+                {
+                    caller.Cancel();
+                    return Task.FromCanceled<ClientRole.ScenarioOutcome>(caller.Token);
+                }, () => ValueTask.FromException(CompositeFailure("direct"))));
+
+        Assert.Equal(AcceptanceOutcome.InvalidRun, result);
+        Assert.True(run.AbortedByOperator);
+        Assert.True(run.HasBackgroundFaults);
+        Assert.Contains("Client Discovery/context 释放", run.BackgroundFaultSummary);
+        Assert.Contains("scenario=cross-subnet clientOutcome=HARNESS_ERROR", run.Log.All);
+        Assert.Contains("connection=UNOBSERVED", run.Log.All);
+        Assert.Contains("不能给出整轮 sessionHandled 确定区间", run.Log.All);
+        AssertHarnessFailure(Assert.IsType<ClientRole.ScenarioOutcome>(scenarioOutcome));
+        Assert.True(scenarioOutcome!.HasCompositeFailure);
+        AssertSanitized(run);
+        AssertFooter(run, result);
+    }
+
+    [Theory]
+    [InlineData("loop", false)]
+    [InlineData("loop", true)]
+    [InlineData("summary", false)]
+    [InlineData("summary", true)]
+    [InlineData("abort", true)]
+    public async Task Composite_Log_Fault_Is_Observed_Even_When_Wrapped_In_Cancellation(
+        string boundary, bool cancelled)
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        string prefix = boundary switch
+        {
+            "loop" => "[CLIENT] scenario",
+            "summary" => "[VERDICT]",
+            "abort" => "[RUN] 操作员中止",
+            _ => throw new ArgumentOutOfRangeException(nameof(boundary)),
+        };
+        bool injected = false;
+        run.Log.LineWritten += line =>
+        {
+            if (boundary == "abort" && line.StartsWith("[CLIENT] scenario", StringComparison.Ordinal))
+            {
+                caller.Cancel();
+            }
+            if (!injected && line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                injected = true;
+                if (cancelled) { caller.Cancel(); }
+                throw CompositeFailure("cancel-wrapper");
+            }
+        };
+
+        AcceptanceOutcome result = await ClientRole.RunAllAsync(run,
+            [ClientRole.ScenarioSuccess], null, null, null, 45873, caller.Token);
+
+        Assert.True(injected);
+        Assert.Equal(cancelled ? AcceptanceOutcome.InvalidRun : AcceptanceOutcome.HarnessError, result);
+        Assert.Equal(cancelled, run.AbortedByOperator);
+        Assert.True(run.HasBackgroundFaults);
+        Assert.Contains("AggregateException", run.BackgroundFaultSummary);
+        AssertSanitized(run);
+        AssertFooter(run, result);
+    }
+
+    [Theory]
+    [InlineData("[RESULT] outcome", false)]
+    [InlineData("[RESULT] outcome", true)]
+    [InlineData("RUN COMPLETE", false)]
+    [InlineData("RUN COMPLETE", true)]
+    public async Task Composite_Footer_Fault_Rethrows_Original_Tree_Without_Replaying_Lines(
+        string boundary, bool cancelled)
+    {
+        AcceptanceRun run = CreateRun();
+        using CancellationTokenSource caller = new();
+        Exception original = CompositeFailure("cancel-wrapper");
+        AggregateException aggregate = Assert.IsType<AggregateException>(original.InnerException);
+        Exception primary = aggregate.InnerExceptions[0];
+        AggregateException cleanup = Assert.IsType<AggregateException>(aggregate.InnerExceptions[1]);
+        Exception cleanupInner = Assert.Single(cleanup.InnerExceptions);
+        bool injected = false;
+        run.Log.LineWritten += line =>
+        {
+            if (!injected && line.StartsWith(boundary, StringComparison.Ordinal))
+            {
+                injected = true;
+                if (cancelled) { caller.Cancel(); }
+                throw original;
+            }
+        };
+
+        Exception? observed = await Record.ExceptionAsync(async () =>
+        {
+            await ClientRole.RunAllAsync(run, [ClientRole.ScenarioSuccess], null, null, null, 45873, caller.Token);
+        });
+
+        Assert.True(injected);
+        Assert.Equal(cancelled, run.AbortedByOperator);
+        Assert.True(run.HasBackgroundFaults);
+        Assert.Contains("Client 完成日志", run.BackgroundFaultSummary);
+        Assert.Contains("AggregateException", run.BackgroundFaultSummary);
+        AssertSanitized(run);
+        string[] prefixes = ["[RESULT] outcome", "[RESULT] detail", "[RESULT] background",
+            "[RESULT] aborted", "[RESULT] exitCode", "RUN COMPLETE"];
+        foreach (string log in new[] { run.Log.All, File.ReadAllText(Assert.IsType<string>(run.Log.FilePath)) })
+        {
+            string[] lines = log.Split(Environment.NewLine);
+            Assert.Single(lines, line => line.StartsWith(boundary, StringComparison.Ordinal));
+            foreach (string prefix in prefixes)
+            {
+                Assert.InRange(lines.Count(line => line.StartsWith(prefix, StringComparison.Ordinal)), 0, 1);
+            }
+        }
+        Assert.Same(original, observed);
+        Assert.Same(aggregate, observed!.InnerException);
+        Assert.Equal(2, aggregate.InnerExceptions.Count);
+        Assert.Same(primary, aggregate.InnerExceptions[0]);
+        Assert.Same(cleanup, aggregate.InnerExceptions[1]);
+        Assert.Same(cleanupInner, Assert.Single(cleanup.InnerExceptions));
+        output.WriteLine($"footer={boundary}; cancelled={cancelled}; originalTree=True; fault=True; replay=False");
+    }
+
+    [Fact]
+    public async Task Fault_Logging_Callback_Cannot_Erase_Composite_Fault_Or_Prevent_Cleanup()
+    {
+        AcceptanceRun run = CreateRun();
+        bool cleaned = false;
+        run.Log.LineWritten += line =>
+        {
+            if (line.StartsWith("[HARNESS][FAULT]", StringComparison.Ordinal))
+            {
+                throw CompositeFailure("io-wrapper");
+            }
+        };
+        AcceptanceOutcome result = await ClientRole.RunAllAsync(run, [ClientRole.ScenarioCrossSubnet],
+            CancellationToken.None, _ => ClientRole.RunAsync(run, CancellationToken.None,
+                () => Task.FromException<ClientRole.ScenarioOutcome>(CompositeFailure("direct")),
+                () => { cleaned = true; return ValueTask.CompletedTask; }));
+
+        Assert.True(cleaned);
+        Assert.Equal(AcceptanceOutcome.HarnessError, result);
+        Assert.True(run.HasBackgroundFaults);
+        AssertSanitized(run);
+        AssertFooter(run, result);
+    }
+
+    private static Exception CompositeFailure(string shape)
+    {
+        AggregateException aggregate = new(SensitiveFailure,
+            new IOException(SensitiveFailure, new SocketException((int)SocketError.ConnectionRefused)),
+            new AggregateException(SensitiveFailure, new InvalidOperationException(SensitiveFailure)));
+        return shape switch
+        {
+            "direct" => aggregate,
+            "io-wrapper" => new IOException(SensitiveFailure, aggregate),
+            "auth-wrapper" => new AuthenticationException(SensitiveFailure + PeerCertificateValidator.RejectionPinMismatch, aggregate),
+            "cancel-wrapper" => new OperationCanceledException(SensitiveFailure, aggregate),
+            "deep-wrapper" => new Exception(SensitiveFailure, new IOException(SensitiveFailure, aggregate)),
+            "secondary-tree" => new AggregateException(SensitiveFailure,
+                new AuthenticationException(PeerCertificateValidator.RejectionPinMismatch), aggregate),
+            "empty" => new AggregateException(SensitiveFailure, Array.Empty<Exception>()),
+            "single" => new AggregateException(SensitiveFailure, new OperationCanceledException(SensitiveFailure)),
+            "unreadable" => new UnreadableException(aggregate),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+    }
+
+    private sealed class UnreadableException(Exception inner) : Exception(SensitiveFailure, inner)
+    {
+        public override string Message => throw new InvalidOperationException("不应读取复合异常消息");
+        public override string ToString() => throw new InvalidOperationException("不应格式化复合异常树");
+    }
+
+    private static ConnectionTarget Target()
+    {
+        Assert.True(ConnectionTarget.TryCreate(Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            IPAddress.Loopback, 45873, new string('A', 64), out ConnectionTarget? target));
+        return Assert.IsType<ConnectionTarget>(target);
+    }
+
+    private static ClientRole.ScenarioOutcome UnmetOutcome() => new(
+        AcceptanceOutcome.PreconditionUnmet, "测试未建连", [], "无连接", ReachedWire: false);
+
+    private static void AssertHarnessFailure(ClientRole.ScenarioOutcome outcome)
+    {
+        Assert.Equal(AcceptanceOutcome.HarnessError, outcome.Outcome);
+        Assert.True(outcome.ConnectionObservationUnknown);
+        Assert.False(outcome.ReachedWire);
+        Assert.False(outcome.TlsStageRejection);
+        Assert.Equal("UNOBSERVED", Field(outcome, "connection"));
+        Assert.DoesNotContain(SensitiveFailure, Describe(outcome));
+        Assert.DoesNotContain(outcome.Fields, pair => pair.Key is "rejection" or "sessionId" or "serverProof");
+    }
+
+    private static void AssertSanitized(AcceptanceRun run)
+    {
+        Assert.DoesNotContain(SensitiveFailure, run.Log.All);
+        Assert.DoesNotContain(SensitiveFailure, run.BackgroundFaultSummary);
+        if (run.Log.FilePath is { } path) { Assert.DoesNotContain(SensitiveFailure, File.ReadAllText(path)); }
     }
 
     private AcceptanceRun CreateRun() => AcceptanceRun.Create(_logDirectory, "client-test");
