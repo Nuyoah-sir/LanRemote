@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（M4按明确实屏确认收口；随后M5视频基础件1c710a9完成，Debug/Release各1739 PASS，见§18.25/§19）**
+> 更新时间：**2026-09-29（M4已收口；M5 VideoAttach安全基础片8e1785a完成，Debug/Release各1948 PASS，第二TLS待接线，见§19.4）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`1c710a9`（M5视频基础件）。本轮Debug/Release各1739 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
+> **最新代码：`8e1785a`（M5 VideoAttach安全基础片）。本轮Debug/Release各1948 PASS / 0 FAIL / 0 SKIP，构建0警告/0错误，见§19.4。** M4最终代码`2596357`各1433/Python打包14属§18.22既有证据；1336/1329为更早历史，不冒称本轮重跑Python打包或M4现场专项。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：M5 VideoAttach安全合同与接线，继而GDI/JPEG/渲染闭环。** 已完成有界帧队列、有效payload切片及40字节二进制读写；尚未放行视频TLS、未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
+> **下一关：第二TLS显式路由/ACK与生命周期，再GDI/JPEG/渲染。** 帧基础件、严格video hello/proof、原子一次性附着/撤销及写前窗口已完成；尚未接入第二TLS。接线前先修复停机超时清表使重复Stop漏报的前置问题。未采集/显示、未跑M5十分钟DoD。M4现场不重跑；助手桌面自动化权限未解除，不绕过、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：VideoAttach合同与实现，再衔接采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
+- **下一步：停机跟踪前置修复、第二TLS Router/ACK、客户端附着生命周期，再采集/渲染。** 不重跑M4通过项；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，实际桌面自动化仍遵守权限边界。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`1c710a9`**（M5视频基础件，12文件含ADR-047；实际产品/测试11文件）。产品App、认证/hello/SessionRegistry、网络/权限/预算未改，旧包和安装目录未覆盖。
-- **Working tree at validation：对应随后提交为1c710a9的源码/测试及ADR工作树；Debug/Release各1739 PASS、0失败/0跳过，构建0警告/0错误**。主线程完整solution验证、12份TRX独立汇总一致，证据`outputs/m5-foundation/solution-*-validated.log`及`validated-*.trx`；验证后未再改源码/测试，只记账。未重新publish或打包，M4交付包仍以§18.22为准。
+- **Last code commit：`8e1785a`**（VideoAttach安全基础片，17文件含ADR-048和独立Python向量）。修改认证秘密清理/窗口传递及registry原子绑定；默认Control-only入口、产品App、系统网络/权限未改，旧包/安装目录未覆盖。
+- **Working tree at validation：对应8e1785a的源码/测试工作树；Debug/Release各1948 PASS、0失败/0跳过，构建0警告/0错误**。12份TRX独立核对计数和每条Passed；solution及独立启动器双build，证据`outputs/m5-video-attach/*-validated.log`和`validated-*.trx`。验证后未改源码/测试，只记账；未publish/打包，M4旧包保持§18.22。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2681,8 +2681,38 @@ M4收口记账提交`c251d21`后推进；本节不覆盖M4原日志结局。**La
 ### 19.3 后续顺序与仍未完成项
 
 1. 已完成：原有capture/encoder抽象与帧模型盘点、有效内存所有权、有界队列、二进制header/parser/reader/writer。
-2. 下一片：VideoAttach精确transcript、16字节nonce、15秒绝对有效窗口/起算点、会话注销竞态和原子验证绑定；给独立黄金向量，再接第二条TLS/pinning/同子网准入。当前`TryGetSessionToken`共享视图不等同原子attach，不能直接放行；未决实施细节须先记ADR，不靠猜测对接。
+2. VideoAttach安全基础片已完成见§19.4：83字节transcript、16字节nonce、写前15秒绝对窗口、原子消费/撤销；旧registry token getter已删除。下一片接第二条TLS/pinning/同子网准入，先处理超时清表的停机跟踪前置缺陷；ACK/等待/生命周期实施细节另记ADR，不把只读建议当已冻结协议。
 3. 随后：GDI主屏采集、50%缩放、JPEG编码与解码/WPF显示，以5 FPS先做最小闭环；现有Control保持读不能新增并行读者，需明确会话交接。无必要不新增Video项目或改TFM。
 4. 最后验证M5 DoD：完整链路10分钟无明显持续内存增长、慢网丢旧且延迟不无限累加、断连join和资源释放。仅队列测试不代替这两条；目前均未运行。
 
 **当前无须用户重复M4人工操作；M5尚未完成。** 不改系统网络/防护、不回写原始规格，不把桌面权限限制当成可绕过的口头授权。下一步继续自主实施可自动验证部分，只有真正人工/权限依赖才提出。
+
+### 19.4 VideoAttach安全基础片（完成，8e1785a）
+
+**Last code commit：8e1785a。Working tree at validation：该提交对应的源码/测试树；最终双配置全方案验证后仅文档记账。** ADR-048为实施细则，不回写原规格。17文件/+2760/-87；不是第二TLS或完整M5交付。
+
+- internal `VideoAttachProof`固定83字节：域分隔19、UUID RFC/network-order16、nonce16、实际视频TLS证书摘要32；HMAC token/proof均32。Python标准库uuid/hmac独立三组向量，未用生产helper作为期望值。
+- internal `VideoHelloFrame`严格六字段、规范UUID/Base64、4KiB；旧`HelloFrame`和默认public pre-auth依然只收Control，纯解析器可用不等于视频网络入口已放行。
+- `VideoAttachWindow`在success序列化后/首次Write前起算，min(正值配置,15000ms)，write/flush/调度/登记全计入，elapsed>=budget或负值拒绝；登记不续期，已成功视频不因窗口到点撤销。
+- `SessionRegistry.TryAttachVideo`删除旧token getter，在同锁内校验冻结身份（不同连接ID、同远端IPv4、同pin）、MAC和最终取消/截止/entry对象身份，再一次消费；错误proof不消费，正确并发仅一赢家。注销按对象身份防ABA，同锁摘表/清零/撤销；lease不拥有流、不恢复资格，后继必须锁外关闭并join。客户端旧internal token视图仍留待客户端片改造。
+- success写后才登记的M4门禁保持；访问key生成serverProof后立即清理。审查抓到catch内await FailAsync延迟三份原秘密清理，新增真实状态机原数组观察4红/1绿，修为先finally清零再失败帧I/O，原测试SHA不变，Debug/Release各5绿。DTO字符串及TLS内部副本不承诺擦除。
+- 注册冲突时未转移的新token副本有finally清零；目前测试只直接观测调用方/原entry，未持有该失败新副本，保留漏测声明，不误写成现有泄漏。复核已解除上述清理阻断，无本片新阻断。
+
+**最终本机实际执行（SDK10.0.401）：**
+
+| 项目 | Debug PASS | Release PASS |
+| --- | ---: | ---: |
+| Core | 196 | 196 |
+| Protocol | 299 | 299 |
+| Integration | 3 | 3 |
+| Security | 66 | 66 |
+| Transport | 1102 | 1102 |
+| Acceptance | 282 | 282 |
+| **合计** | **1948** | **1948** |
+
+- solution双配置build、test均成功，0警告/0错误/0失败/0跳过；独立IsolatedAcceptance双build同样通过。12份TRX独立核对Counters与每条Passed，较首片1739净增209，不能把重复专项相加。
+- 三项真实源码变异：移除MAC后检查2红、不消费资格2红、写后才起窗口4红；全为运行期断言失败。逐项精确恢复，源码SHA一致；恢复后同组8绿并重建。详见`outputs/m5-video-attach/mutation-summary.txt`及4组TRX，原红结果保留。
+- 同目录`solution-*-validated.log`、`launcher-build-*-validated.log`和12份`validated-*.trx`为最终证据；`cleanup-review-*`为清理红绿，`protocol-golden.log`为独立向量。最初后台attempt未产生日志，不计验证。汇总脚本首次在构建日志打印部分有转义错误；TRX部分已核对，四份构建日志随后直接读取确认。
+- 真实Control TLS测试中视频安全上下文为合成对象，受控I/O窗口测试也不是第二TLS。未publish/打包、无真实视频/采集/JPEG/实屏或十分钟DoD。旧M4包/安装目录不动，outputs不上传。
+
+**后续**：第二TLS Router/ACK/有界登记间隙及客户端生命周期仍待实施；规划时发现`ConnectionRegistry.StopAllAsync`超时后清空未完成entry，重复Stop可能误报0，先补红测修复该前置条件，再接线。不把规划中的100ms/40ms或ACK字段当成已经定案或实现。

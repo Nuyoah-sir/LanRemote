@@ -1,7 +1,7 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR 工作副本 `docs/DECISIONS.md`（010~047；045现网只读、046隔离/截止、047视频所有权/framing）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（010~048；045现网只读、047视频帧、048原子附着）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入截断上限实测 ≈10000 字符（2026-09-21；超出即截）；2026-09-28 收尾压缩重复摘要，后续追加先核实长度。
 > 再遇「MEMORY.md 超限」提示先核实大小，勿盲目整并。
 
@@ -11,7 +11,7 @@ M4历史两机Control/降权/拒绝/错key、联网/审批/短码、B密钥六�
 
 M4最后2596357双配置1433/Python14；专用隔离WinExe无真实vault/发现，手动审批、不改网。b42a1553坏proof及0cd5d3b8人工活动停止日志均通过，原FAIL/INVALID_RUN不翻绿，e339ed58历史UNMET不阻断。2026-09-29用户明确“上一轮询问的实屏情况都正常”，文案完整可见/恢复操作/原控件可访问配齐，原DoD/21步收口M4（§18.25，记账c251d21），不重跑、不加DPI。隔离ZIP原封保留，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b，424成员；同源码提交前构建，不冒称内嵌2596357。
 
-最新代码1c710a9：M5基础片已完成（§19/ADR-047）。Core有界拥有型队列容量1/2默认2、DropOldest释放/拒绝归调用方/读取移交；EncodedFrame有效payloadLength防池尾部。Transport internal 40字节视频头及reader/writer，先uint验证再分配；v1 flags/reserved0、quality40..85、时间戳0..long.MaxValue。构造后取消终检+CAS交付，失败不重用半帧；清理错误有界可观测、不覆盖主异常，停止不代表join/关闭成功。审查同20项先红后绿，Python独立黄金向量。最终双配置各1739 PASS（196/299/3/66/893/282）、0警告错误失败跳过，独立启动器双build通过；outputs/m5-foundation。无新publish/实屏/视频TLS。下一片VideoAttach精确transcript/nonce16/15秒窗口与原子绑定，再GDI主屏50%/JPEG/5FPS渲染和十分钟慢网DoD；M5未完成，认证/hello/registry/App/原规格未改。
+最新8e1785a：M5 VideoAttach安全基础片（§19.4/ADR048），双配置全量各1948 PASS（196/299/3/66/1102/282），solution/独立启动器0警告错误；outputs/m5-video-attach。transcript83=域19+UUID网络序16+nonce16+实际pin32；success序列化后首次write前起15s封顶窗口，登记不续期。同锁MAC+终检+一次消费，注销清零/撤销防ABA；不导出registry token，客户端旧视图待改。失败帧I/O前清局部3份原秘密，同回归4红/1绿→双配置5绿；3变异2/2/4红，恢复8绿/SHA一致。注册失败副本清零有finally、直接持有观测漏测保留。旧Control入口仍拒video，第二TLS未接线，无新包/实屏，M5未完成。先修ConnectionRegistry超时清表导致重复Stop漏报，再Router/ACK/客户端join，后GDI主屏50%/JPEG/5FPS/十分钟DoD。前片1c710a9/ADR047：队列容量1/2默认2、有效payload、40字节LRVF、CAS交付，清理诊断有界；停止不等于关闭/join。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
