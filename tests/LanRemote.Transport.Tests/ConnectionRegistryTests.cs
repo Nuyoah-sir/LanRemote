@@ -184,6 +184,230 @@ public sealed class ConnectionRegistryTests
             $"空表停机耗时 {clock.Elapsed}，不该等预算。");
     }
 
+    [Fact(Timeout = 30_000)]
+    public async Task Stop_Retains_Unfinished_Registration_Across_Repeated_Timeouts()
+    {
+        ConnectionRegistry registry = new();
+        ConnectionRegistration? registration = registry.TryRegister(new NoopResource());
+        Assert.NotNull(registration);
+
+        try
+        {
+            ConnectionStopReport first = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+            int countAfterFirst = registry.Count;
+            ConnectionStopReport second = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+            int countAfterSecond = registry.Count;
+
+            Assert.Equal(1, first.Total);
+            Assert.Equal(1, first.Unfinished);
+            Assert.False(first.AllFinished);
+            Assert.Equal(1, countAfterFirst);
+            Assert.Equal(1, second.Total);
+            Assert.Equal(1, second.Unfinished);
+            Assert.False(second.AllFinished);
+            Assert.Equal(1, countAfterSecond);
+        }
+        finally
+        {
+            registration.Dispose();
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Stop_Preserves_Cancellation_Until_Registration_Is_Disposed()
+    {
+        ConnectionRegistry registry = new();
+        ConnectionRegistration? registration = registry.TryRegister(new NoopResource());
+        Assert.NotNull(registration);
+
+        try
+        {
+            CancellationToken original = registration.Cancellation;
+            await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+
+            CancellationToken current = default;
+            Assert.Null(Record.Exception(() => { current = registration.Cancellation; }));
+            Assert.Equal(original, current);
+            Assert.True(current.IsCancellationRequested);
+
+            int callbackCount = 0;
+            using CancellationTokenRegistration first =
+                original.Register(() => Interlocked.Increment(ref callbackCount));
+            using CancellationTokenRegistration second =
+                current.Register(() => Interlocked.Increment(ref callbackCount));
+            Assert.Equal(2, Volatile.Read(ref callbackCount));
+        }
+        finally
+        {
+            registration.Dispose();
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Concurrent_And_Repeated_Stops_Force_Dispose_Unfinished_Resource_Only_Once()
+    {
+        ConnectionRegistry registry = new();
+        CountingResource resource = new();
+        ConnectionRegistration? registration = registry.TryRegister(resource);
+        Assert.NotNull(registration);
+
+        TaskCompletionSource cancellationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseCancellation = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<Task<ConnectionStopReport>> stops = new();
+        using CancellationTokenRegistration cancellation = registration.Cancellation.Register(() =>
+        {
+            cancellationEntered.TrySetResult();
+            releaseCancellation.Task.GetAwaiter().GetResult();
+        });
+
+        try
+        {
+            stops.Add(Task.Run(() => registry.StopAllAsync(TimeSpan.FromMilliseconds(80))));
+            await cancellationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // 第一轮停在取消回调中，保证第二轮也取得同一条未完成连接的快照。
+            stops.Add(registry.StopAllAsync(TimeSpan.FromMilliseconds(80)));
+            releaseCancellation.TrySetResult();
+            await Task.WhenAll(stops).WaitAsync(TimeSpan.FromSeconds(5));
+
+            stops.Add(registry.StopAllAsync(TimeSpan.FromMilliseconds(80)));
+            ConnectionStopReport[] reports = await Task.WhenAll(stops).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(1, resource.DisposeCount);
+            Assert.All(reports, report =>
+            {
+                Assert.Equal(1, report.Total);
+                Assert.Equal(1, report.Unfinished);
+                Assert.False(report.AllFinished);
+            });
+        }
+        finally
+        {
+            releaseCancellation.TrySetResult();
+            registration.Dispose();
+            await Task.WhenAll(stops).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Stop_Does_Not_Force_Dispose_Resource_Already_Released_By_Cooperative_Handler()
+    {
+        ConnectionRegistry registry = new();
+        CountingResource resource = new();
+        ConnectionRegistration? registration = registry.TryRegister(resource);
+        Assert.NotNull(registration);
+
+        TaskCompletionSource cancellationObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task handler = Task.Run(async () =>
+        {
+            try
+            {
+                await cancellationObserved.Task;
+                resource.Dispose();
+            }
+            finally
+            {
+                registration.Dispose();
+            }
+        });
+        using CancellationTokenRegistration cancellation = registration.Cancellation.Register(() =>
+        {
+            cancellationObserved.TrySetResult();
+            // 取消阶段等到 handler 收尾，避免与短停机预算竞争。
+            handler.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+        });
+
+        try
+        {
+            ConnectionStopReport report = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+
+            Assert.Equal(1, report.Total);
+            Assert.Equal(0, report.Unfinished);
+            Assert.True(report.AllFinished);
+            Assert.Equal(1, resource.DisposeCount);
+            Assert.Equal(0, registry.Count);
+        }
+        finally
+        {
+            cancellationObserved.TrySetResult();
+            await handler.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Completion_Is_Published_Before_Registry_Removes_Entry()
+    {
+        ConnectionRegistry registry = new();
+        using ConnectionRegistration registration = registry.TryRegister(new NoopResource())!;
+        Assert.NotNull(registration);
+        // 测试专用反射持有真实完成通知；停在 Dispose 内部 Remove 返回后的接缝，
+        // 不用概率调度撞击仅一条语句的窗口，也不新增生产测试回调。
+        var field = typeof(ConnectionRegistration).GetField("_completion",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        TaskCompletionSource completion = Assert.IsType<TaskCompletionSource>(field.GetValue(registration));
+
+        registry.Remove(registration.Id);
+        Assert.Equal(0, registry.Count);
+        Assert.True(completion.Task.IsCompletedSuccessfully,
+            "表项已经不可见时，对应租约完成通知必须先发布。");
+        ConnectionStopReport stop = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+        Assert.True(stop.AllFinished);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Repeated_Stop_Does_Not_Report_Finished_While_Forced_Dispose_Is_Running()
+    {
+        ConnectionRegistry registry = new();
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConnectionRegistration? registration = null;
+        ActionResource resource = new(() =>
+        {
+            registration!.Dispose();
+            entered.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+        });
+        registration = registry.TryRegister(resource);
+        Assert.NotNull(registration);
+        Task<ConnectionStopReport> first = Task.Run(() => registry.StopAllAsync(TimeSpan.FromMilliseconds(80)));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            ConnectionStopReport second = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+            Assert.False(first.IsCompleted);
+            Assert.Equal(1, second.Total);
+            Assert.Equal(1, second.Unfinished);
+            Assert.Equal(1, registry.Count);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            registration.Dispose();
+        }
+
+        Assert.Equal(0, registry.Count);
+        Assert.True((await registry.StopAllAsync(TimeSpan.FromMilliseconds(80))).AllFinished);
+    }
+
+    private sealed class ActionResource(Action dispose) : IDisposable
+    {
+        public void Dispose() => dispose();
+    }
+
+    private sealed class CountingResource : IDisposable
+    {
+        private int _disposeCount;
+
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public void Dispose()
+        {
+            Interlocked.Increment(ref _disposeCount);
+        }
+    }
+
     private sealed class NoopResource : IDisposable
     {
         public void Dispose()
