@@ -85,6 +85,25 @@ public sealed class TransportHost : IAsyncDisposable
             _options.MaxConnectionsPerAddress);
     }
 
+    /// <summary>显式内部装配 M5 双通道；既有 public handler 与 Control-only 入口不变。</summary>
+    internal static TransportHost CreateWithChannelRouter(
+        IReadOnlyList<IPAddress> localAddresses,
+        ISubnetPolicy subnetPolicy,
+        X509Certificate2 serverCertificate,
+        ControlAuthContext authContext,
+        IVideoFrameSource videoFrames,
+        VideoSessionOptions? videoOptions = null,
+        TransportHostOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(authContext);
+        ArgumentNullException.ThrowIfNull(videoFrames);
+        TransportHostOptions hostOptions = options ?? new TransportHostOptions();
+        return new TransportHost(localAddresses, subnetPolicy, serverCertificate,
+            (connection, token) => new FirstFrameRouter(
+                authContext, hostOptions.Timeouts, videoFrames, videoOptions).RunAsync(connection, token),
+            hostOptions);
+    }
+
     /// <summary>是否正在运行。</summary>
     public bool IsRunning => Volatile.Read(ref _started) == 1 && !_stop.IsCancellationRequested;
 
@@ -96,6 +115,9 @@ public sealed class TransportHost : IAsyncDisposable
 
     /// <summary>准入限额器（测试用）。</summary>
     public ConnectionAdmissionLimiter Limiter => _limiter;
+
+    /// <summary>连接处理及逐项清理的有界诊断；每个固定类别只保留首个错误。</summary>
+    internal HostLifecycleErrors LifecycleErrors { get; } = new();
 
     /// <summary>
     /// 启动所有 listener 并开始 accept。
@@ -182,9 +204,9 @@ public sealed class TransportHost : IAsyncDisposable
             }
         }
 
-        // accept 循环只会因为 listener.Stop() 抛 SocketException 或令牌被取消而退出，
-        // 给它总预算的四分之一足够；剩下的留给连接收尾。
-        // 超时不再静默：记进报告（早先这里是一个被吞掉的 catch——「预算超限」由此变得不可观测）。
+        // accept 还持有未登记连接的异步关闭；listener 停止并不意味着这些收尾已经完成。
+        // 四分之一只是分配给 accept 的等待预算，不能保证同步策略或资源释放及时退出。
+        // 超时记进报告，不能把尚未关闭的拒绝连接报告为停机完成。
         bool acceptFinished = true;
         TimeSpan acceptBudget = TimeSpan.FromTicks(budget.Ticks / 4);
         if (_acceptLoops.Count > 0)
@@ -252,16 +274,39 @@ public sealed class TransportHost : IAsyncDisposable
                 break;
             }
 
-            _ = Task.Run(() => HandleAsync(client, localAddress));
+            // 登记标记在 HandleAsync 首次 await 前同步发布，不依赖异步 continuation。
+            // 未登记的拒绝路径必须由 accept 持有至关闭完成；已登记 TLS 仍可并行处理。
+            bool registered = false;
+            Task handling = HandleAsync(client, localAddress, () => registered = true);
+            await AwaitUnregisteredHandlingAsync(handling, registered).ConfigureAwait(false);
         }
     }
 
-    private async Task HandleAsync(TcpClient client, IPAddress listenerAddress)
+    /// <summary>未登记收尾纳入 accept join；已登记生命周期由 registry 跟踪，但两类任务故障都要观察。</summary>
+    internal Task AwaitUnregisteredHandlingAsync(Task handling, bool registered)
+    {
+        Task observed = ObserveHandlingAsync(handling);
+        return registered ? Task.CompletedTask : observed;
+    }
+
+    private async Task ObserveHandlingAsync(Task handling)
+    {
+        try
+        {
+            await handling.ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            // 兜住包括 finally 在内的意外故障，不能从 accept 逃逸或留下未观察 Task。
+            LifecycleErrors.Record(HostLifecycleErrorKind.Connection, error);
+        }
+    }
+
+    private async Task HandleAsync(TcpClient client, IPAddress listenerAddress, Action onRegistered)
     {
         AdmissionLease? lease = null;
         ConnectionRegistration? registration = null;
-        ConnectionCloser? closer = null;
-        SslStream? stream = null;
+        ConnectionCloseHandle closer = new(client, LifecycleErrors);
 
         try
         {
@@ -284,15 +329,17 @@ public sealed class TransportHost : IAsyncDisposable
             }
 
             // ③ 登记表：停机时要能取消并 join。
-            closer = new ConnectionCloser(client);
             registration = _registry.TryRegister(closer);
             if (registration is null)
             {
                 return;
             }
 
+            // 必须保持在任何 await 之前；回调仅由 accept 用于同步标记生命周期的持有方。
+            onRegistered();
+
             // ④ 才是 TLS。
-            stream = new SslStream(client.GetStream(), leaveInnerStreamOpen: false);
+            SslStream stream = new(client.GetStream(), leaveInnerStreamOpen: false);
             closer.Attach(stream);
 
             using (CancellationTokenSource handshakeCts =
@@ -312,9 +359,23 @@ public sealed class TransportHost : IAsyncDisposable
                 stream.SslProtocol,
                 _serverCertificateSha256);
 
-            AcceptedConnection accepted = new(security, stream);
+            AcceptedConnection accepted = new(security, stream, closer);
 
-            await _sessionHandler(accepted, registration.Cancellation).ConfigureAwait(false);
+            try
+            {
+                await _sessionHandler(accepted, registration.Cancellation).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException error) when (
+                registration.Cancellation.IsCancellationRequested &&
+                error.CancellationToken == registration.Cancellation)
+            {
+                // 仅接受明确归属于本次 Host 令牌的取消。后来停机不能把来源故障追认为正常取消。
+            }
+            catch (Exception error)
+            {
+                // 包括同步抛出与返回故障 Task；不能让 fire-and-forget handler 成为未观察异常。
+                LifecycleErrors.Record(HostLifecycleErrorKind.Handler, error);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -336,12 +397,48 @@ public sealed class TransportHost : IAsyncDisposable
         {
             // 停机时 socket 已被强制释放。
         }
+        catch (Exception error)
+        {
+            LifecycleErrors.Record(HostLifecycleErrorKind.Connection, error);
+        }
         finally
         {
-            stream?.Dispose();
-            client.Dispose();
-            lease?.Dispose();
+            await FinishConnectionAsync(closer, lease, registration).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>关闭任务完成后才归还名额、最后结束登记；任一项失败都不能阻断后续清理。</summary>
+    internal async Task FinishConnectionAsync(
+        ConnectionCloseHandle closer,
+        IDisposable? admission,
+        IDisposable? registration)
+    {
+        try
+        {
+            closer.CompleteAttachment();
+            await closer.CloseAsync().ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            LifecycleErrors.Record(HostLifecycleErrorKind.CloseCleanup, error);
+        }
+
+        try
+        {
+            admission?.Dispose();
+        }
+        catch (Exception error)
+        {
+            LifecycleErrors.Record(HostLifecycleErrorKind.AdmissionCleanup, error);
+        }
+
+        try
+        {
             registration?.Dispose();
+        }
+        catch (Exception error)
+        {
+            LifecycleErrors.Record(HostLifecycleErrorKind.RegistrationCleanup, error);
         }
     }
 
@@ -363,34 +460,5 @@ public sealed class TransportHost : IAsyncDisposable
             ClientCertificateRequired = false,
             CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
         };
-    }
-
-    /// <summary>
-    /// 停机超时时用来打断阻塞读的资源句柄。
-    /// </summary>
-    /// <remarks>
-    /// 取消只是「请求」：handler 可能卡在不可中断的读里。
-    /// 登记表在超时后释放它，socket 一关，阻塞的读就会抛，handler 才真的结束。
-    /// </remarks>
-    private sealed class ConnectionCloser : IDisposable
-    {
-        private readonly TcpClient _client;
-        private volatile SslStream? _stream;
-
-        public ConnectionCloser(TcpClient client)
-        {
-            _client = client;
-        }
-
-        public void Attach(SslStream stream)
-        {
-            _stream = stream;
-        }
-
-        public void Dispose()
-        {
-            _stream?.Dispose();
-            _client.Dispose();
-        }
     }
 }

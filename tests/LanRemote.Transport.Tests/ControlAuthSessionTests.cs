@@ -203,7 +203,7 @@ public sealed partial class ControlAuthSessionTests
         Assert.NotNull(syntheticVideo);
         Assert.NotNull(attachProof);
         // 使用断开前保存的有效 proof，不从已清零的 token 重算。
-        Assert.Equal(VideoAttachStatus.Unavailable, registry.TryAttachVideo(
+        Assert.Equal(VideoAttachStatus.NotRegistered, registry.TryAttachVideo(
             scenario.Result.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? stale));
         Assert.Null(stale);
         Assert.NotNull(serverToken);

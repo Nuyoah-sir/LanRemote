@@ -96,6 +96,8 @@ public sealed class ControlAuthSession
     private readonly TransportTimeouts _timeouts;
     private readonly byte[] _serverNonce;
     private readonly AuthChallengeFrame _challenge;
+    private Task<int>? _pendingRead;
+    private Task<LocalApprovalDecision>? _approvalDecision;
     private int _started;
 
     internal ControlAuthSession(
@@ -396,6 +398,49 @@ public sealed class ControlAuthSession
         }
     }
 
+    // Router 在 RunAsync 结束（含异常）并由 Host 关流后调用；不延迟原失败返回，也不另开读者。
+    internal async Task JoinPendingReadAsync()
+    {
+        Task<int>? pendingRead = _pendingRead;
+        if (pendingRead is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = await pendingRead.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            // 正常断连/取消都等原读真正结束；意外异常留给 Host 做有界诊断。
+        }
+    }
+
+    // Router 在 RunAsync 结束并关流后调用；不超时遗弃不合作的 gate，也不因一项故障跳过另一项。
+    internal Task JoinOwnedOperationsAsync()
+    {
+        // 直接返回 WhenAll，保留两项意外故障供调用方从 Exception 中完整观察。
+        return Task.WhenAll(JoinPendingReadAsync(), JoinDecisionAsync(_approvalDecision));
+
+        static async Task JoinDecisionAsync(Task<LocalApprovalDecision>? decision)
+        {
+            if (decision is null)
+            {
+                return;
+            }
+
+            try
+            {
+                _ = await decision.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 审批合作式取消属于正常收尾；gate 的其他故障不能套用读 IO/ODE 的豁免。
+            }
+        }
+    }
+
     /// <summary>
     /// 审批阶段：配额 → <c>approval_pending</c> → 三路竞速（决定 / 客户端活动 / 窗口到点）。
     /// </summary>
@@ -438,7 +483,7 @@ public sealed class ControlAuthSession
 
             Guid requestId = Guid.NewGuid();
             string shortCode = LocalApprovalRequest.ComputeShortCode(SessionId, response.ClientNonce.Span);
-            Task<int> clientActivity = ReadOneByteAsync(_stream, cancellationToken);
+            Task<int> clientActivity = _pendingRead = ReadOneByteAsync(_stream, cancellationToken);
 
             // 调用 gate 前起算；包含同步前缀与 UI 调度。UTC 仅供显示，不参与接受判据。
             using AuthenticationDeadline approval = new(
@@ -454,7 +499,7 @@ public sealed class ControlAuthSession
                 response.RequestedPermission,
                 shortCode,
                 Context.TimeProvider.GetUtcNow() + approval.Remaining);
-            Task<LocalApprovalDecision> decision = RequestApprovalSafeAsync(request, approval.Token);
+            Task<LocalApprovalDecision> decision = _approvalDecision = RequestApprovalSafeAsync(request, approval.Token);
             Task window = Task.Delay(Timeout.InfiniteTimeSpan, approval.Token);
 
             Task<int>? handOff = null;

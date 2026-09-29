@@ -196,7 +196,7 @@ public sealed class VideoAttachRegistryTests
         byte[] nonce = Nonce();
         byte[] proof = IndependentProof(token, SessionId, nonce, pin);
         ConnectionSecurityContext video = Security(pin);
-        Assert.Equal(VideoAttachStatus.Unavailable,
+        Assert.Equal(VideoAttachStatus.NotRegistered,
             registry.TryAttachVideo(SessionId, video, nonce, proof, default, out var missing));
         Assert.Null(missing);
 
@@ -539,6 +539,10 @@ public sealed class VideoAttachRegistryTests
         byte[] pin = Pin();
         byte[] nonce = Nonce();
         byte[] proof = IndependentProof(token, SessionId, nonce, pin);
+        // 初次查找缺项与取时后原 entry 失效是两类状态，注销和同 ID 替换（ABA）都必须区分。
+        Assert.Equal(VideoAttachStatus.NotRegistered,
+            registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var missingLease));
+        Assert.Null(missingLease);
         using var original = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
         byte[] ownedToken = OwnedToken(registry);
         SessionRegistry.SessionRegistration? replacement = null;
@@ -556,6 +560,7 @@ public sealed class VideoAttachRegistryTests
 
         try
         {
+            // 已观察的原 entry 在最终取时中失效；即使此时缺项，也不能返回可重试的 NotRegistered。
             Assert.Equal(VideoAttachStatus.Unavailable,
                 registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var staleLease));
             Assert.Null(staleLease);
@@ -574,6 +579,12 @@ public sealed class VideoAttachRegistryTests
                 replacement!.Dispose();
                 Assert.True(currentLease.Revoked.IsCompletedSuccessfully);
             }
+
+            // 注销完成后发起的独立调用首次查找缺项，应与上面原 entry 失效的结果严格区分。
+            Assert.Equal(0, registry.ActiveSessionCount);
+            Assert.Equal(VideoAttachStatus.NotRegistered,
+                registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var unregisteredLease));
+            Assert.Null(unregisteredLease);
         }
         finally
         {
@@ -643,7 +654,7 @@ public sealed class VideoAttachRegistryTests
         Assert.Equal(0, clock.TimerCount);
         original.Dispose();
         Assert.True(oldLease.Revoked.IsCompletedSuccessfully);
-        Assert.Equal(VideoAttachStatus.Unavailable,
+        Assert.Equal(VideoAttachStatus.NotRegistered,
             registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out _));
 
         using var replacement = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);

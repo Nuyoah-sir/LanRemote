@@ -154,7 +154,7 @@ public sealed class SessionRegistry
 
             if (!_sessions.TryGetValue(sessionId, out Entry? entry))
             {
-                return VideoAttachStatus.Unavailable;
+                return VideoAttachStatus.NotRegistered;
             }
 
             VideoAttachStatus? unavailable = CheckAvailability(sessionId, entry, cancellationToken);

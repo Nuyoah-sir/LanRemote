@@ -1300,3 +1300,21 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 5. 不放宽认证、同子网、准入或原超时数值。现有同步取消回调、任意资源Dispose/CTS解绑阻塞以及清理异常可能中断后续处理，仍是待处理局限：两段异步等待有预算，不伪称整个Stop可硬中断任意本机代码。后继视频生命周期须处理取消任务/关闭错误/真实join，禁止靠文案把这些要求取消。
 
 **Evidence**：四个确定性新增用例先4红，修复后登记表双配置各11绿；随后审查补测“完成先于摘表/force未退出仍跟踪”先1红1绿，修复为完成通知前置。最终全方案结果见HANDOFF§19.5。完成通知用例直接调用内部Remove接缝并持有真实TCS，不冒称随机调度或真实TLS竞态复现；其他用例通过公有停止/租约入口和受控资源执行。未改Host或产品默认装配、未重跑M4人工验收。
+
+### ADR-050 — 显式服务端双TLS路由、附着ACK与真实任务收尾
+
+**日期**：2026-09-29。**Context**：ADR-047/048/049已提供帧、一次性附着及停机留表，本片接通服务端最小闭环；不改变产品默认装配，不实现客户端高层附着、采集或显示。
+
+**Decision**：
+1. internal `FirstFrameRouter` 每连接一次，只读取一个长度前缀首帧。严格Control hello成功直接交原`ControlPreAuthHandoff`，严格video hello走独立TLS附着；public pre-auth仍Control-only。首帧prefix/payload受原单调信封约束，不能把信封令牌传入长期Control holding或ACK之后的视频发送。Host提供internal显式工厂；测试也可显式装配以保留诊断。
+2. success写后登记间隙仅允许初次查无entry的`NotRegistered`短暂重试：100ms总预算、最多3次立即/40ms/80ms查询，原信封只收窄。已经观察到entry但最终失效/ABA用`Unavailable`，立即失败。资格仍在registry锁内按ADR-048消费，调用越过路由预算不发ACK，不回滚资格，不续原15秒窗口。
+3. ACK为四字段严格JSON：`type=video_attach_ack`、`channel=video`、`protocol=1`、canonical D小写`sessionId`；4字节BE长度前缀，payload最多4096。ACK无token/proof/nonce。write和flush均结束并后置检查后才能取第一帧；之后直接40字节LRVF头+有效payload，不再套Control前缀。ACK默认2秒、每整帧write+flush默认5秒，均为内部初值，不宣称性能调优结论。ACK成功不证明首帧显示，也不保证稍后不会撤销。
+4. Host原始socket/SSL共享一个`ConnectionCloseHandle`关闭任务；同步Dispose仅请求，异步关闭分别尝试socket与SSL，即使前者失败也尝试后者，迟到SSL须回收。`AcceptedConnection`关闭能力绑定原始Security/Stream引用，public两参构造及替换引用的record副本无授权。`HostOwnedVideoStream`真实转发且Dispose发起同一关闭，不用空Dispose/leaveOpen逃避所有权。
+5. Host先等关闭尝试，再分别归还准入和登记。未登记拒绝路径由accept持有至关闭结束，已登记连接并发由registry持有。固定七类生命周期诊断各保留首错，关闭句柄最多两项；完成表示尝试结束，不代表释放成功。不能用超时摘表或仅发送取消伪称所有任务退出。
+6. 视频路由持有transfer（含ACK/sender）、唯一上行一字节读、CancelAsync回调任务、Host关闭任务；任一transfer/peer/撤销/Host stop触发独立关闭与取消，随后逐项join。不合作source继续保持handler/登记未完成；上行额外字节违规。Control只复用原审批读和原decision，新增内部join但不改变public认证入口兼容行为，不新增Control reader。
+7. `IVideoFrameSource`返回非null即将帧所有权转给sender；串行取/写/释放，不预取无界队列。迟到帧先接管再检查取消，write结束后才释放。sender保存来源首错及固定清理错误，EDI保留原异常。Router完整读取原WhenAll的异常集合，主体/收尾逐项join后统一传播，单错原实例、多错聚合，按引用去重；不得将source IO/ODE或无取消OCE当成正常网络结束。
+8. Host仅豁免已取消且异常token等于本次registration token的OCE，避免后来停机吞掉先发生的source故障。Router首帧/登记等待的子deadline取消在受控边界按caller优先归一为Host token，视频来源/清理不进入此豁免。不能据catch时后来的取消追认来源故障；任意handler故意伪造同Host token的故障与真实取消不可仅凭这两个事实区分，不承诺解决此不可区分性。
+
+**Evidence**：Router异常保留11项先运行期全红，修复后全绿；source OCE先发生、Host Stop后到的真实双TLS交错1红后修复；子deadline正常取消归属3红后修复。最终定向双配置各225 PASS、solution各2196 PASS、四次build均0警告错误，见HANDOFF§19.6及outputs/m5-dual-tls。其余边界为受控SSL/手动时钟组件证据；真实TLS用例13项采用实际pin验证、独立proof/ACK/wire断言，不冒称截图、JPEG解码、两机现场或M5十分钟DoD。
+
+**Limits**：关闭失败、任意同步Dispose/gate/source/取消回调可能阻塞，CTS不能硬中断本机任意代码；留表与join确保不遗弃，不提供无条件硬截止。测试payload仅为不透明黄金字节。无客户端安全交付、无GDI/JPEG/WPF显示；默认产品App、系统网络、防火墙、M4物料均不变。

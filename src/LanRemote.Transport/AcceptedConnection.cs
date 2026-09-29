@@ -23,6 +23,47 @@ public sealed record AcceptedConnection(
     ConnectionSecurityContext Security,
     SslStream Stream)
 {
+    private readonly ConnectionCloseHandle? _closer;
+    private readonly ConnectionSecurityContext? _boundSecurity;
+    private readonly SslStream? _boundStream;
+
+    internal AcceptedConnection(
+        ConnectionSecurityContext security,
+        SslStream stream,
+        ConnectionCloseHandle closer)
+        : this(security, stream)
+    {
+        ArgumentNullException.ThrowIfNull(closer);
+        _closer = closer;
+        _boundSecurity = security;
+        _boundStream = stream;
+    }
+
+    // record 的 with 会复制私有字段；必须核对两个原始引用，不能只看 closer 是否存在。
+    internal bool HasCloseAuthority => _closer is not null
+        && ReferenceEquals(Security, _boundSecurity)
+        && ReferenceEquals(Stream, _boundStream);
+
+    /// <summary>仅 Host 绑定的连接可请求关闭；返回同一完成任务，不代表处理器或在途 I/O 已 join。</summary>
+    /// <exception cref="InvalidOperationException">未绑定 Host，或 with 替换了安全上下文/SSL 引用。</exception>
+    internal Task CloseAsync() => RequireCloseAuthority().CloseAsync();
+
+    /// <summary>
+    /// 创建真实 SSL 的窄读写适配器；Dispose 只请求关闭，pipeline 仍须 await CloseAsync。
+    /// writer 的 StreamDisposeSucceeded 在这里仅表示请求发出，不表示物理释放完成。
+    /// </summary>
+    internal Stream CreateVideoStream() => new HostOwnedVideoStream(Stream, RequireCloseAuthority());
+
+    private ConnectionCloseHandle RequireCloseAuthority()
+    {
+        if (!HasCloseAuthority)
+        {
+            throw new InvalidOperationException("连接未绑定 Host 关闭权限，或原始安全上下文/SSL 引用已被替换。");
+        }
+
+        return _closer!;
+    }
+
     /// <summary>接受它的那个 listener 的本地地址（转发自 <see cref="Security"/>）。</summary>
     public IPAddress LocalAddress => Security.LocalAddress;
 

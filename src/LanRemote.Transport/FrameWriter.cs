@@ -36,6 +36,21 @@ public static class FrameWriter
             throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "写出时限必须为正。");
         }
 
+        using CancellationTokenSource stageCts =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        stageCts.CancelAfter(timeout);
+        await WriteFrameAsync(stream, payload, maxBytes, stageCts.Token).ConfigureAwait(false);
+    }
+
+    // 外层已拥有绝对 deadline 的内部通道使用，不额外创建系统计时器。
+    internal static async Task WriteFrameAsync(
+        Stream stream,
+        ReadOnlyMemory<byte> payload,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!FrameReader.TryValidateLength((uint)payload.Length, maxBytes, out int length, out string? rejection))
         {
             throw new FrameProtocolException(rejection!);
@@ -45,12 +60,10 @@ public static class FrameWriter
         BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(0, TransportConstants.LengthPrefixBytes), (uint)length);
         payload.CopyTo(frame.AsMemory(TransportConstants.LengthPrefixBytes));
 
-        using CancellationTokenSource stageCts =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-        stageCts.CancelAfter(timeout);
-        await stream.WriteAsync(frame, stageCts.Token).ConfigureAwait(false);
-        await stream.FlushAsync(stageCts.Token).ConfigureAwait(false);
+        await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     /// <summary>

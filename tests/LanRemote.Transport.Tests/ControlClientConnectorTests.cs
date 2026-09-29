@@ -141,7 +141,7 @@ public sealed partial class ControlClientConnectorTests
         await lease.Revoked.WaitAsync(Guard);
         Assert.True(lease.Revoked.IsCompletedSuccessfully);
         // 使用断开前保存的有效 proof，不从已清零的 token 重算。
-        Assert.Equal(VideoAttachStatus.Unavailable, context.SessionRegistry.TryAttachVideo(
+        Assert.Equal(VideoAttachStatus.NotRegistered, context.SessionRegistry.TryAttachVideo(
             session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? stale));
         Assert.Null(stale);
         Assert.All(serverToken, value => Assert.Equal((byte)0, value));
@@ -172,7 +172,7 @@ public sealed partial class ControlClientConnectorTests
         ConnectionSecurityContext syntheticVideo = new(
             IPAddress.Loopback, IPAddress.Loopback, 0, SslProtocols.None,
             scenario.Target.ExpectedCertSha256.Span);
-        Assert.Equal(VideoAttachStatus.Unavailable, context.SessionRegistry.TryAttachVideo(
+        Assert.Equal(VideoAttachStatus.NotRegistered, context.SessionRegistry.TryAttachVideo(
             result.SessionId, syntheticVideo, new byte[16], new byte[32], default, out VideoAttachLease? lease));
         Assert.Null(lease);
         Assert.Equal(0, gate.RequestCount);
