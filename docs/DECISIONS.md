@@ -1469,3 +1469,17 @@ monitor Worker在gate内登记，首次取gate作为发布屏障；锁外执行R
 6单点变异依次旧入口默认启monitor/删除原Task完成检查/原错只留首根/删原read等待/父join漏monitor/monitor不撤销，共15目标失败（1/2/2/2/3/5），6/6有效。第4另有附着前ODE不计目标，不称3/3；无Guard或编译失败充数。首runner误判xUnit FAIL通知为基础设施错，已恢复后在独立续跑目录纠正；旧证据保留。主线程逐条核验13TRX、3源码原bytes、320保护SHA、34恢复产物、29自有Job排空。最终12TRX逐条：Debug/Release各3117 PASS（196/299/3/66/2160/393），0失败跳过；solution/IsolatedAcceptance双配置四Rebuild零警告错误，303源码/测试/工程/脚本文件哈希前后一致。证据outputs/m5-control-monitor。
 
 **Limits / next**：尚未确定性固定Committed已设置而worker/外层Task尚未完成的最窄窗口；已有提交前撤销和完整交付后撤销证据，不能外推。登记竞争测试不独立证明所有生产锁边界；真实TLS事后await只证明最终退出，强join证据来自组件闸门/await链。下一片封闭public视频外壳固定monitor生产路径、原Task读帧与完整异步释放；本片public尚未实现。不改现网/防护/App，不重跑M4、不打新包。
+
+### ADR-061 — 封闭 public 视频接口、交付投影与稳定异步释放报告
+
+**日期**：2026-10-01。**Decision**：新增sealed AuthenticatedVideoSession，只提供ReadFrameAsync(token)与IAsyncDisposable，不公开Stream/TLS/token/工厂/目标。父增加AttachVideoAsync(token)和IAsyncDisposable，原同步Dispose合同不变。生产入口固定真实TLS/严格ACK/monitor路径；资格/重复拒绝同步抛出，成功登记前的失败不消费attempt，重入输家不停止或覆盖赢家。
+
+child构造时预建PublicSession；public读取直接返回底座原Task并透传token，已交付帧归caller。投影仅await底座成功后返回预建对象，不新增取消、父状态或预算终检；父停止可使返回的对象已失效，但不能推翻此前联合提交。测试projectionScheduler只延迟空操作Task屏障，先建立await屏障的投影并在父gate发布，再Start；避免QueueTask同步重入父释放或抛错留下未追踪attempt。调度异常由原faulted屏障保留，投影停止自己的child、等待底座包装Task及raw join，完整聚合原调度/操作/清理错误，不把已接受后错误改成同步资格拒绝。默认TaskScheduler.Default，不继承任意调用方scheduler。
+
+父DisposeAsync缓存一个报告Task，先逻辑撤销并启动raw CloseAndJoin，再WhenAll等待raw join和已接受public投影；子独立缓存报告Task，只等自身StopAndJoin，不等父或public投影。依赖单向，原worker不自join。排空后取稳定诊断，按引用双向包含归并顶层，完整保留原树、兄弟和重复叶子；不Flatten、不按IO/ODE/OCE或local-stop观察过滤。无错成功；任一错误统一AggregateException，包括单OCE，重复调用观察同一Task及异常实例。同步Dispose/操作/父子报告可分别观察同一原错，不实现全局消费一次。异步释放不能在被跟踪操作/回调内等待；不合作原代码仍无硬中断承诺。
+
+**Evidence**：新增50展开（42组件/8真实TLS）。测试包含public表面封闭、真实身份/hello/ACK/monitor、重复/clock重入、预建投影受闸、原Task透传和owner归属、同步前缀/AsTask/原I/O完整join、父子报告范围与完整错误树。独立审查补投影未完成时子释放可独立结束、测试主错误保留/总清理预算，以及scheduler同步/失败/重入、有效caller取消。首build 7个xUnit2014和2个CS4014为测试写法错误，改Record.Exception同步断言和显式追踪，不放宽同步拒绝合同。review Debug构建0警告错误、50定向通过；修后复审无新增阻断。
+
+八候选的有效证据跨两个目录：outputs/m5-public-video/mutation-20261001-043937-00a86d4f中1/3/4/5/6/7/8，加mutation-02-assert-null-20261001-050104-b231e5dc中的2。有效目标断言1/2/2/3/3/3/3/3共20；首轮1的组件Guard、首轮2的两个非显式断言ODE不计，原证据不覆盖。第2仅给成功合同加Guard外Record.ExceptionAsync及Assert.Null后单点复验；其余7项不重跑，不称单目录同测试版本8轮。主线程逐条核验14TRX及生产两文件原bytes，311保护文件、4产物前后核验；各基线/恢复50通过。最终双配置全量与具体提交见HANDOFF§19.17。
+
+**Limits / next**：投影闸门固定的是core已完成/public尚未完成窗口，不扩称底层Committed已设而原worker未退出最窄窗口。真实TLS只证明最终退出，强join依赖组件实际awaiter链。子报告不包含父拥有的投影调度错误；父会报告它。主动关闭可能返回IO/ODE/OCE诊断，调用层须保留主错并单独呈现收尾错误。M5仍欠GDI/JPEG/有界流水线/WPF显示/Host产品装配与十分钟DoD，本片不是产品看屏完成。未改M4、现网、防护或App。

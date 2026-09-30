@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-10-01（f3dbccc显式Control监控，各3117 PASS；public视频/M5未完成，§19.16）**
+> 更新时间：**2026-10-01（511ca6d public视频及异步释放，各3167 PASS；M5采集显示未完成，§19.17）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`f3dbccc`完成internal显式Control断连监控和原读完整join（ADR-060），双配置各3117 PASS，见§19.16；真实第二TLS/严格ACK及前片历史保留于§19.15–19.6。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`511ca6d`完成封闭public视频接口及父子完整异步释放（ADR-061），双配置各3167 PASS，见§19.17；显式Control监控/真实第二TLS历史保留于§19.16及之前。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：封闭public视频外壳与完整异步释放，详见§19.16。** 真实第二TLS/严格ACK及显式Control断连监控已完成；尚无public视频入口，默认Control-only不变。采集/显示及十分钟DoD未完；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：主屏GDI采集与JPEG编码，随后有界管线/Host产品装配/WPF显示，详见§19.17。** public视频入口与完整异步释放已完成，未调用附着时Control-only不变。十分钟DoD未完；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：封闭public视频外壳与完整异步释放（§19.16）；真实第二TLS/严格ACK/显式Control监控已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：主屏GDI采集/JPEG（§19.17），再有界生产管线/Host产品装配/WPF显示及十分钟DoD。** public视频接口及异步释放已完成；不重跑M4，不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`f3dbccc`**（显式Control监控/原读完整join，ADR-060）；前片8ae502b等历史保留。
-- **Working tree at validation：f3dbccc源码/测试，验证后未变；双配置各3117 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-control-monitor/final-{Debug,Release}_*.trx`，四Rebuild零警告错误，303文件SHA前后一致（§19.16）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
+- **Last code commit：`511ca6d`**（封闭public视频/父子异步释放，ADR-061）；前片历史保留。
+- **Working tree at validation：511ca6d源码/测试，验证后未变；双配置各3167 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-public-video/final-02/final-{Debug,Release}_*.trx`，四Rebuild零警告错误，307文件SHA前后一致（§19.17）。首次全量旧public白名单失败保留，修正后独立目录重验；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2903,4 +2903,16 @@ Control只对传入复合故障避开caller取消翻译；实例readonly委托�
 
 **Last code commit：f3dbccc。Working tree at validation：该提交完整源码/测试，最终验证后未变。** 本轮主线程执行串行solution/IsolatedAcceptance双配置四次完整Rebuild并读取日志，均0警告/0错误；逐条解析12份final TRX：Debug/Release各**3117 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport2160/Acceptance393）。303源码/测试/工程/脚本SHA前后一致。原证据`outputs/m5-control-monitor`，无M4或Python打包重跑、无新包/GUI、无产品App/权威规格/网络/防护修改。
 
-**下一片**：封闭public AttachVideoAsync/AuthenticatedVideoSession/原Task ReadFrameAsync及父子IAsyncDisposable。固定monitor生产路径；外壳提交前预构造、提交后无撤销/取消终检；重复输家不清理赢家。异步释放等原join（父另等已接受的public attach投影），原始异常完整树严格报告，不按本地close时序或IO/ODE类型抹错；这意味着主动关闭也可能报告异常。public签名/报告层与确定性测试尚未实现，先完成本片，不把规划写成代码。之后采集/JPEG/显示/有界队列与十分钟DoD；M5仍未完成。
+**下一片**：封闭public AttachVideoAsync/AuthenticatedVideoSession/原Task ReadFrameAsync及父子IAsyncDisposable。固定monitor生产路径；外壳提交前预构造、提交后无撤销/取消终检；重复输家不清理赢家。异步释放等原join（父另等已接受的public attach投影），原始异常完整树严格报告，不按本地close时序或IO/ODE类型抹错；这意味着主动关闭也可能报告异常。public签名/报告层与确定性测试尚未实现，先完成本片，不把规划写成代码。之后采集/JPEG/显示/有界队列与十分钟DoD；M5仍未完成。（后续落地见§19.17。）
+
+### 19.17 封闭public视频接口与完整异步释放（2026-10-01）
+
+**实现**：511ca6d/ADR-061，10files/+2228/-5。父AttachVideoAsync固定真实第二TLS/严格ACK/Control monitor，child预建sealed AuthenticatedVideoSession；无公开流/连接/秘密/工厂。ReadFrameAsync原Task透传token，帧交付后归caller。资格/重复同步拒绝不清理赢家，成功后投影不追加终检。父缓存DisposeAsync完整等raw join+已接受投影，子仅自身raw join；稳定完整原错统一Aggregate报告，重复调用共享Task/异常，主动close的IO/ODE/OCE不隐藏。
+
+**审查修复**：自定义scheduler的QueueTask可抛错或重入，旧StartNew后发布投影会漏追踪；改未启动空Task屏障→真实await投影→同gate发布→Start，调度失败由原faulted屏障保留，投影停止并完整join自己的attempt，无自join。测试补投影受闸时子释放先结束、有效caller取消、sync/throw/reentrant调度、主断言不被cleanup覆盖及20秒总清理预算。首build7个xUnit2014/2个CS4014，保持同步异常合同修正测试写法。两轮实施审查无剩余阻断。
+
+**验证**：新增50展开（42组件/8真实TLS），独立HMAC/真实生产TLS路径、原await链、帧owner、取消、异常树、父子作用域均覆盖。八单点有效目标1/2/2/3/3/3/3/3共20红，跨`outputs/m5-public-video/mutation-20261001-043937-00a86d4f`的1/3–8及`mutation-02-assert-null-20261001-050104-b231e5dc`的2；首轮组件Guard及两个非显式ODE不计，旧证据不覆盖，不重跑7有效。第2最小补显式成功Assert.Null（Guard在外）后目标2红，恢复50绿；主线程逐条解析14TRX并重算两生产/最终测试SHA。311保护文件与4恢复产物核验是变异范围，不套用为最终Rebuild产物字节不变。
+
+首次final Debug总3166PASS/1FAIL（Transport2209/1）来自遗漏旧AttachBudgetTests public方法白名单，与新合同冲突；仅增加AttachVideoAsync/DisposeAsync预期，其他预算/秘密/构造封闭断言保留。该轮在Debug后停止，未称Release已跑。独立final-02重跑四完整Rebuild及双配置全量：**Debug/Release各3167 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport2210/Acceptance393）。主线程逐条核验12TRX及日志，四build零警告错误，307源码/测试/工程/脚本SHA前后及核验时一致；Last code commit **511ca6d**，Working tree at validation为该提交源码/测试，之后仅文档记账。
+
+**边界与下一步**：投影受闸是core已完成/public未完成，不声称固定底层Committed后worker未完最窄窗口；TLS事后await只证明最终退出，强join来自组件。Capture与Sessions仍空，App未接Transport，Host router/frame source仍internal，产品尚不能看屏。下一片实现Core既有接口的GDI主屏raw+WPF JPEG编码（net10.0-windows，不加WinSDK版本TFM），合成像素/离屏GDI先验证；主屏5FPS/50%/quality60由上层串行有界调度。再补Host显式public安全装配（不暴露秘密/流、不加friend绕层）、raw/encoded两级容量1–2队列、WPF显示与十分钟DoD。无M4重跑、真实桌面采集、GUI、新包或现网/防护/App修改。

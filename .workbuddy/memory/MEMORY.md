@@ -1,15 +1,15 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至060显式Control监控；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至061public视频及异步释放；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-10-01，优先于下方历史记录）
 
 M4已收口（§18.25/c251d21）：2596357双配置1433/Python14；两机认证/联网/审批/短码/遮挡/关窗及b42a1553坏proof/0cd5d3b8停止通过。9月29日用户确认“上一轮询问的实屏情况都正常”，DoD/21步齐。原结局不翻绿、不重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；旧改网/Undo停用，SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界见§18.22–23。
 
-最新f3dbccc/§19.16/ADR060：显式internal Control monitor完成，旧入口/Control-only零读。成功child同gate登记唯一父Worker，一次1字节None-token原读，EOF/错/额外数据撤销；锁外独立请求Control close/child stop不自join。父WhenAll完整含同步前缀/AsTask/原Task。原多错保树，本地停止按已发布Task.IsCompleted观察；未发布区间不证明物理因果，不按IO/ODE过滤。SkippedLocalStop未读标记true。新65(57组件/8TLS)，154定向绿，6变异6/6有效15目标红(1/2/2/2/3/5)，第4另ODE不计。13TRX/3原bytes/320保护/34恢复产物/29自有Job主线程核验。最终双配置各3117 PASS(196/299/3/66/2160/393)，12TRX逐条/四Rebuild零警告错误，303源码测试工程脚本SHA一致。首失败修正含原Task观察代理持gate竞态、SslStream.NestedState实际枚举；不掩盖旧红/警告。尚未固定Committed已设置但worker未完成的最窄窗口。
-下一片public封闭外壳固定monitor，预构造外壳/成功无后置终检，read原Task直传；父子DisposeAsync完整join，父再等已登记public attach投影且不反向自join。严格报告全部稳定异常(主动close也可抛)，不抹IO/ODE、不消费诊断；此public层尚未实现。8ae502b真实第二TLS/严格单ACK、00ecff3敏感wire/b4febc5截止/eb448d8父子底座不重做：冻结独立IP/pin、actual pin proof、SessionId匹配/ACK清零、失败只join自己child；212原wire等IO退出清零，原success同源min(hint,15000)，负或>=拒，timer/注册排空再提交。owner撤销纯逻辑；Task.WhenAll错误比原树不猜顺序，测试看真实await链；既有83字节nonce transcript未擦除(无token/proof)，不外推TLS擦除。采集显示/十分钟DoD未完，无M4/改网/GUI/新包。
+最新511ca6d/§19.17/ADR061：public AttachVideoAsync固定真实TLS/严格ACK/monitor，sealed AuthenticatedVideoSession只原Task ReadFrameAsync和异步释放。child预建wrapper，成功投影无后置终检；未启动空Task屏障→真实await投影→父gate发布→Start，修scheduler同步重入/抛错漏追踪，失败只停止join自己attempt。父DisposeAsync缓存报告等raw+accepted projection，子仅raw；稳定完整原错Aggregate保树，主动close的IO/ODE/OCE不隐藏，不消费其他观察者。50新例(42组件/8TLS)，8变异跨两目录联合有效20目标断言红(1/2/2/3/3/3/3/3)，旧Guard/非显式ODE不计；第2强化成功Assert.Null后单点复验，其余7不重复。14TRX/原bytes/311保护/4产物核验。首次final旧预算public白名单1红，最小修正后final-02双配置各3167 PASS(196/299/3/66/2210/393)，12TRX逐条/四Rebuild零警告错误，307冻结SHA一致。
+下一片主屏GDI raw+WPF JPEG实现Core既有接口(net10.0-windows不加WinSDK)，先合成像素/离屏GDI；上层5FPS/50%/quality60，再raw/encoded容量1–2管线、Host安全public装配/WPF显示/十分钟DoD。Capture/Sessions仍空，App未接Transport；Host router/frame source仍internal，不能加friend绕层。f3dbccc一次None-token Control监控及8ae502b真实第二TLS/b4febc5截止/00ecff3敏感wire不重做：父join含原同步前缀/AsTask/Task，EOF/错/额外数据撤销；旧入口Control-only零读/owner纯撤销。冻结IP/pin/actual proof/ACK SessionId与清零；212原wire等IO退出清零，success预算min(hint,15000)，负或>=拒。Task异常比原树不猜顺序。投影闸门不外推最窄Committed后worker未完窗口；83字节nonce transcript未擦除(无token/proof)，不外推TLS擦除。M5未完，无M4/改网/GUI/新包。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
@@ -56,7 +56,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：`f3dbccc`internal显式Control监控，各3117 PASS；public/采集显示/十分钟DoD未完，§19.16。 |
+| **M5** | 进行中：`511ca6d`public视频/异步释放，各3167 PASS；采集显示/十分钟DoD未完，§19.17。 |
 | M6~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。
