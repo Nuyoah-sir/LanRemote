@@ -1,17 +1,17 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至057执行期原截止；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至058敏感wire；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-09-30，优先于下方历史记录）
 
 M4历史两机认证/联网/审批/短码/密钥遮挡/关窗均过，不重跑，见HANDOFF§18.15–20。pin仅顺序关联，采样跨度非清理耗时。A可做的不推B；不外推DPI/擦除，旧改网/Undo停用，SAC历史授权非产品功能。
 
-M4已收口（§18.25/c251d21）：2596357双配置1433/Python14；b42a1553坏proof/0cd5d3b8人工停止日志过，原FAIL/INVALID_RUN不翻绿。2026-09-29用户“上一轮询问的实屏情况都正常”，原DoD/21步齐，不重跑/加DPI。隔离WinExe无vault/发现，不改网；旧ZIP不动，424成员，SHA c9dcbc04fbb201d1870915c65bd218f1599868eefbcfaeb459e845bee8e8fb5b；提交前同源码构建，不冒称内嵌2596357。
+M4已收口（§18.25/c251d21）：2596357双配置1433/Python14；b42a1553坏proof/0cd5d3b8人工停止通过，原结局不翻绿。9月29日用户确认“上一轮询问的实屏情况都正常”，DoD/21步齐，不重跑/加DPI。隔离WinExe无vault/发现/改网；旧ZIP不动，包SHA与内嵌提交边界见§18.22–23。
 
-最新b4febc5/§19.13/ADR057：#153执行期原截止完成。内部attach默认固定deadline worker，禁用Create后接管，运行期clock/Create/Change/Dispose锁外完整跟踪；原success+同源clock/min(hint,15000)，负elapsed或>=拒，Change前后复查。回调仅合并通知，最小1ms无宽限，连续立即通知>32拒。成功先排空原timer/caller注册再联合终检，reader不能提前构造抢ODE。48新增/223定向；8有效变异1/1/7/7/1/1/4/3红，恢复重建223绿；双配置各2899 PASS（196/299/3/66/1942/393），12TRX逐条/四build零警告错误。provider Fire尾部非OnTimer本体证明，caller在途排空未增同级证明。
-eb448d8父子底座不重做：一个attach/read槽先登记再原Task，同锁撤销/stop/交付，迟到连接接管；本地登记失败不恢复且Control继续。owner撤销纯逻辑，public Dispose只首次等Control；internal join等原操作与清理，有限来源保多错树。测试不靠瞬时IsCompleted：受闸真实await链或严格单项scheduler推进；Guard先WhenAny原Task，兜底Dispose不盖主Assert。下一片#155敏感hello/wire单数组清零，再高层actual第二pin/proof与严格ACK SessionId；Control唯一reader/主动关闭感知/采集显示/十分钟DoD未接。关闭≠释放成功/join，CTS不硬中断；默认Control-only，无新包/GUI/M4/改网，M5未完。
+最新00ecff3/§19.14/ADR058：#155敏感wire完成，212字节单数组直接UTF8，nonce/proof借用，无秘密string；writer入口接管，原Write/Flush退出finally全域零，无副本/新timer/关流/重试，多错保树。新增64(17/47)，174定向含旧parser110；独立Python两完整wire。有效变异serial02轮1–7+serial03轮8，2/2/2/2/3/2/2/2红，旧Guard不计；恢复重建174绿，双配置各2963 PASS（196/299/3/66/2006/393），12TRX逐条/四build零警告错误。观察器须发现实际registered await Task再比原Task，不能死等原边卡Guard；拒绝测试预放IO以免漏检只超时。
+b4febc5原截止/eb448d8父子底座不重做：success同源min(hint,15000)，负或>=拒；默认固定deadline worker父锁外timer调用，回调合并通知1ms无宽限/>32立即通知拒，交付先原timer/注册排空再联合终检。一个attach/read槽先登记再原Task，同锁撤销/stop/交付，迟到连接接管；本地失败不恢复且Control继续。owner撤销纯逻辑，public Dispose首个只等Control；internal join原操作清理保多错树。测试用真实await链/严格scheduler，不瞬时IsCompleted；Guard先WhenAny，兜底不盖Assert。下一片internal真实第二TLS/actual pin/proof/严格ACK和自己attempt局部join；输家不能stop赢家，worker不自join。public外壳/Control唯一reader/采集显示/十分钟DoD未接。默认Control-only，无新包/GUI/M4/改网，M5未完。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
@@ -58,7 +58,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：`b4febc5`执行期原截止，各2899 PASS；敏感写出/高层附着/采集显示/十分钟DoD未完，§19.13。 |
+| **M5** | 进行中：`00ecff3`敏感wire，各2963 PASS；高层附着/采集显示/十分钟DoD未完，§19.14。 |
 | M6~M11 | 未开始 |
 
 M3 链 `ee1cbe3`→`601d7a7`→`5ba5822`→`e0484ec`→`5bf3cb6`→`5ae052f`→`f080581`→`ffd73e9`→`c5f0aa9`→**`1d5ffc8`**（一键准备本机）；M3.1 = **`2dee00c`**；M4 阶段 0 = **`2312e70`**（记账 `cddc071`）；M4 阶段 1 = **`35506b5`**（重定位 `e7687ec`）；M4 阶段 2 = **`21a8829`**；M4 阶段 3 = **`760e950`**。
