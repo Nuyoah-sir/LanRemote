@@ -180,6 +180,36 @@ public sealed partial class ClientVideoAttachTlsTests
             }
         }
 
+        internal Task<AuthenticatedControlSession.ClientVideoLifetime> AttachMonitored(CancellationToken token = default)
+        {
+            try
+            {
+                // 显式生产入口固定真实 TlsClientConnector；旧 Attach 不启用 monitor。
+                Task<AuthenticatedControlSession.ClientVideoLifetime> attach =
+                    Own(Control.AttachVideoWithControlMonitorCoreAsync(token));
+                if (Control.ControlMonitorCompletion is { } monitor) Own(monitor);
+                return attach;
+            }
+            catch (Exception error)
+            {
+                return Own(Task.FromException<AuthenticatedControlSession.ClientVideoLifetime>(error));
+            }
+        }
+
+        internal Task CloseServerControlAsync() => Own(_controlServer.Connection.CloseAsync());
+
+        internal Task SendServerControlByteAsync(byte value) => Own(
+            _controlServer.Connection.Stream.WriteAsync(new byte[] { value }, CancellationToken.None).AsTask());
+
+        internal async Task JoinServerConnectionsAsync()
+        {
+            // 这里只等待事实，不请求关闭，更不能对已经断开的 Control 调用 AssertControlAlive。
+            foreach (ObservedConnection server in _servers)
+                await server.Worker.WaitAsync(Guard);
+            await WaitForConnectionCountAsync(0);
+            Assert.Empty(Context.SessionRegistry.Snapshot());
+        }
+
         internal T Own<T>(T task) where T : Task { _clients.Add(task); return task; }
 
         internal Task<EncodedFrame?> Read(AuthenticatedControlSession.ClientVideoLifetime child)

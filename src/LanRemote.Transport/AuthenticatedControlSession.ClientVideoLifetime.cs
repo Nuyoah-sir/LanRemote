@@ -71,11 +71,9 @@ public sealed partial class AuthenticatedControlSession
             _ = RevokeCore();
             Task controlClose = _ownedConnection.CloseAsync();
             Task videoJoin = _videoLifetime?.StopAndJoinAsync() ?? Task.CompletedTask;
-            return _closeAndJoin = Task.Run(async () =>
-            {
-                await controlClose.ConfigureAwait(false);
-                await videoJoin.ConfigureAwait(false);
-            });
+            Task monitor = _controlMonitor?.Worker ?? Task.CompletedTask;
+            // 所有分支都必须退出；不能因某项 fault 而跳过另一项原操作的等待。
+            return _closeAndJoin = Task.WhenAll(controlClose, videoJoin, monitor);
         }
     }
 
@@ -87,6 +85,7 @@ public sealed partial class AuthenticatedControlSession
             AddErrors(errors, _ownedConnection.CleanupErrors);
             lock (_gate)
             {
+                if (_controlMonitor?.Snapshot.Error is { } monitorError) AddErrors(errors, [monitorError]);
                 if (_videoLifetime is not null) AddErrors(errors, _videoLifetime.LifetimeErrors);
             }
             return errors.AsReadOnly();

@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Net;
+using LanRemote.Core.Models;
 using System.Runtime.ExceptionServices;
 using System.Security.Authentication;
 using System.Security.Cryptography;
@@ -22,7 +24,31 @@ public sealed partial class AuthenticatedControlSession
     /// </summary>
     internal Task<ClientVideoLifetime> AttachVideoCoreAsync(
         Func<ConnectionTarget, TransportTimeouts, TimeProvider, CancellationToken, Task<TlsConnection>> connectTls,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        AttachVideoCoreAsync(connectTls, monitorControl: false, cancellationToken);
+
+    /// <summary>显式启用父 Control 唯一断连读取；旧 internal 入口和 Control-only 保持零新增读取。</summary>
+    internal Task<ClientVideoLifetime> AttachVideoWithControlMonitorCoreAsync(
+        CancellationToken cancellationToken = default) =>
+        AttachVideoWithControlMonitorCoreAsync(static (target, timeouts, clock, token) =>
+            new TlsClientConnector().ConnectAsync(target, timeouts, clock, token), cancellationToken);
+
+    internal Task<ClientVideoLifetime> AttachVideoWithControlMonitorCoreAsync(
+        Func<ConnectionTarget, TransportTimeouts, TimeProvider, CancellationToken, Task<TlsConnection>> connectTls,
+        CancellationToken cancellationToken = default) =>
+        AttachVideoCoreAsync(connectTls, monitorControl: true, cancellationToken);
+
+    // 只贯通既有生命周期的实例级租用/交付观察接缝；不替换身份验证、hello、ACK 或 monitor。
+    internal Task<ClientVideoLifetime> AttachVideoWithControlMonitorForTestingAsync(
+        Func<ConnectionTarget, TransportTimeouts, TimeProvider, CancellationToken, Task<TlsConnection>> connectTls,
+        Func<int, IMemoryOwner<byte>> rent, Action<EncodedFrame?> frameRead,
+        CancellationToken cancellationToken = default) =>
+        AttachVideoCoreAsync(connectTls, monitorControl: true, cancellationToken, rent, frameRead);
+
+    private Task<ClientVideoLifetime> AttachVideoCoreAsync(
+        Func<ConnectionTarget, TransportTimeouts, TimeProvider, CancellationToken, Task<TlsConnection>> connectTls,
+        bool monitorControl, CancellationToken cancellationToken,
+        Func<int, IMemoryOwner<byte>>? rent = null, Action<EncodedFrame?>? frameRead = null)
     {
         ArgumentNullException.ThrowIfNull(connectTls);
         Task<ClientVideoLifetime> originalAttach;
@@ -39,8 +65,14 @@ public sealed partial class AuthenticatedControlSession
             // 必须直接返回原连接任务，避免 async 包装丢失 Task 的兄弟异常。
             originalAttach = StartVideoLifetimeAsync(
                 token => connectTls(target, TransportTimeouts.Default, _clock, token),
-                (connection, token) => InitializeVideoAsync(connection, target, token), cancellationToken);
+                (connection, token) => InitializeVideoAsync(connection, target, token), cancellationToken, rent, frameRead);
             child = _videoLifetime!;
+            // 与成功的 child 登记同锁；任何重复或 clock 重入输家都不能替赢家启动 monitor。
+            if (monitorControl)
+            {
+                _controlMonitor = new ControlDisconnectMonitor(this);
+                _controlMonitor.StartUnderGate();
+            }
         }
         // 登记失败不进入此处；clock 重入/重复入口的输家不能停止别人的 child。
         return AwaitVideoAttachAsync(originalAttach, child);
