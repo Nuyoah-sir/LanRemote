@@ -1423,3 +1423,17 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 首轮变异第5项由fake timer提前断言下限导致外层Guard遮错，整轮无效并停止恢复，旧证据保留；将下限断言移至已有正文记录值检查。最终独立8轮有效运行期红例1/1/7/7/1/1/4/3，无Guard或编译错误充数；恢复原bytes并重建后223绿，目录outputs/m5-client-deadline/mutation-20260930-164647-29de2bd5。最终逐条解析十二份TRX：Debug/Release各2899 PASS（196/299/3/66/1942/393），0失败/跳过；solution与独立入口四build零警告错误，恢复源码SHA一致，见HANDOFF§19.13。
 
 **Limits / next**：不保证硬中断不合作clock/工厂/Stream/provider；故障provider未返回的资源不能替它回收，DisposeAsync抛错后也不能声称它物理禁止未来callback（本层入口已无副作用）。Fire尾部证明provider原任务排空，不是暂停生产OnTimer本体；caller注册实际在途排空未增同等级定向证明。当前仍无高层AttachVideoAsync/真实第二TLS接线；下一片敏感hello/wire清零，再actual pin/proof与严格ACK SessionId。M4/现网/App不动，M5未完成。
+
+### ADR-058 — 敏感视频 hello 单数组 wire 与原 I/O 后清零
+
+**日期**：2026-09-30。**Context**：既有VideoHelloFrame.Serialize产生nonce/proof Base64 string，FrameWriter另复制wire且不清零。下一客户端附着路径需要独立敏感通道，不能改变服务端parser/旧DTO复制合同或复用两次framing。
+
+**Decision**：新增internal VideoHelloWire直接在唯一212字节数组写4字节大端208前缀与固定六字段JSON，Guid.TryFormat和Base64.EncodeToUtf8直接写目标切片，不创建秘密string。输入nonce16/proof32借用不改，输出成功后转移给调用者；分配后异常清零。旧VideoHelloFrame及FrameWriter不改。
+
+SensitiveFrameWriter.WriteOwnedFrameAsync接管完整非null wire；校验stream/token/完整前缀/有效payload上限/精确数组长度，任何入口失败也在finally全域清零。只以原Memory进行一次WriteAsync，原ValueTask仅AsTask一次，再await原FlushAsync；每次成功后检查同一外层token，不创建timer/CTS、不复制、不关闭借用流、不重试。取消不提前清零仍由原I/O使用的数组；原故障先于后置取消，多fault取原Task.Exception保持有序子树、重复引用与用户Aggregate层次，单故障原样throw。faulted Task单含OCE由async自然传播为Canceled，不额外承诺保留该Task状态。调用者移交后不得再并发访问数组，本层不保证TLS/Stream内部副本擦除。
+
+**Evidence**：新增64展开例（wire17/writer47），原parser110保留，最终定向174绿；独立Python原向量重新生成并匹配两条完整wire黄金文本（208/212/000000D0）。验证实际Write Memory底层array恒等/offset0/count全部，原IO挂起及同步前缀期间未早清、入口/取消/失败/成功后全域零、不关流不重试、原Task多错、IValueTaskSource同步完成及挂起故障/取消单次消费。静态审查无阻断，source失败覆盖缺口已补12例。无秘密string/额外副本分配主要为源码审查边界，不能仅用行为用例声称任意内存擦除。
+
+两次变异暴露测试保护遮蔽：直接await观察器死等原Task会被WaitAsync代理变异卡Guard，改为正向发现实际registered await Task后Assert.Same原Task；非法长度拒绝测试的IO闸会遮住漏检，改先放IO使错误发送直接触发缺少异常断言。未放宽产品合同。有效8轮来自serial-02的1–7及serial-03的8（不是同目录8轮，前7不重跑）：红例2/2/2/2/3/2/2/2，分别前缀/证明字节/清零/原数组/Write代理/Flush代理/多错/精确长度。serial-01第5和serial-02第8的Guard均不计kill，证据保留。恢复原bytes并重建174绿；最后双配置各2963 PASS/0失败跳过，四build零警告错误，详见HANDOFF§19.14。
+
+**Limits / next**：当前是内部敏感写出前置，不是已接线的高层AttachVideoAsync，不改public表面/Control-only默认。下一片以Control冻结目标走生产TlsClientConnector、第二actual presented pin调用封闭CreateVideoAttachProof、敏感hello写出、精确一帧严格ACK并匹配SessionId；失败只join自己成功登记的attempt，不能stop赢家或在原worker内自join。真实客户端第二TLS、Control唯一reader/主动关闭感知、采集显示及十分钟DoD未完成；M4/现网/App不动。
