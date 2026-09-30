@@ -1242,9 +1242,12 @@ public sealed class ClientControlMonitorTests
         }
         Assert.All(snapshotType.GetFields(Fields), field => Assert.True(field.IsInitOnly));
         Assert.NotNull(snapshotType.GetMethod("PrintMembers", Fields));
-        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(parent));
-        Assert.DoesNotContain(parent.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(parent));
+        MethodInfo disposeAsync = Assert.Single(parent.GetMethods(
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
             method => method.Name == "DisposeAsync");
+        Assert.Equal(typeof(ValueTask), disposeAsync.ReturnType);
+        Assert.Empty(disposeAsync.GetParameters());
     }
 
     private static AggregateException MixedRoot()

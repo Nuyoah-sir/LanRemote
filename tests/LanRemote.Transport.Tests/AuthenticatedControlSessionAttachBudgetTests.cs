@@ -351,7 +351,7 @@ public sealed class AuthenticatedControlSessionAttachBudgetTests
         Assert.Equal(new[] { "GrantedPermission", "Identity", "SessionId", "ShortCode" },
             type.GetProperties(publicDeclared).Select(property => property.Name)
                 .OrderBy(name => name, StringComparer.Ordinal).ToArray());
-        Assert.Equal(new[] { "Dispose", "get_GrantedPermission", "get_Identity", "get_SessionId", "get_ShortCode" },
+        Assert.Equal(new[] { "AttachVideoAsync", "Dispose", "DisposeAsync", "get_GrantedPermission", "get_Identity", "get_SessionId", "get_ShortCode" },
             type.GetMethods(publicDeclared).Select(method => method.Name)
                 .OrderBy(name => name, StringComparer.Ordinal).ToArray());
         Assert.Empty(type.GetFields(publicDeclared));

@@ -196,6 +196,21 @@ public sealed partial class ClientVideoAttachTlsTests
             }
         }
 
+        internal Task<AuthenticatedVideoSession> AttachPublic(CancellationToken token = default)
+        {
+            try
+            {
+                // 只调用封闭 public 生产入口；monitor 由生产代码登记，不在夹具中补启动。
+                Task<AuthenticatedVideoSession> attach = Own(Control.AttachVideoAsync(token));
+                if (Control.ControlMonitorCompletion is { } monitor) Own(monitor);
+                return attach;
+            }
+            catch (Exception error)
+            {
+                return Own(Task.FromException<AuthenticatedVideoSession>(error));
+            }
+        }
+
         internal Task CloseServerControlAsync() => Own(_controlServer.Connection.CloseAsync());
 
         internal Task SendServerControlByteAsync(byte value) => Own(
@@ -215,6 +230,14 @@ public sealed partial class ClientVideoAttachTlsTests
         internal Task<EncodedFrame?> Read(AuthenticatedControlSession.ClientVideoLifetime child)
         {
             Task<EncodedFrame?> read = Own(child.ReadFrameAsync());
+            _reads.Add(read);
+            return read;
+        }
+
+        internal Task<EncodedFrame?> Read(AuthenticatedVideoSession video)
+        {
+            // 保留 public 返回的原 Task，沿用既有迟到帧回收，不加 async 投影。
+            Task<EncodedFrame?> read = Own(video.ReadFrameAsync());
             _reads.Add(read);
             return read;
         }

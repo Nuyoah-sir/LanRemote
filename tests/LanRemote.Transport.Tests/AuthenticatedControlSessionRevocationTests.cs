@@ -277,7 +277,7 @@ public sealed class AuthenticatedControlSessionRevocationTests
         string[] properties = ["GrantedPermission", "Identity", "SessionId", "ShortCode"];
         Assert.Equal(properties, type.GetProperties(publicDeclared)
             .Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
-        string[] methods = ["Dispose", "get_GrantedPermission", "get_Identity", "get_SessionId", "get_ShortCode"];
+        string[] methods = ["AttachVideoAsync", "Dispose", "DisposeAsync", "get_GrantedPermission", "get_Identity", "get_SessionId", "get_ShortCode"];
         Assert.Equal(methods, type.GetMethods(publicDeclared)
             .Select(method => method.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         Assert.DoesNotContain(type.GetMethods(publicDeclared), method =>

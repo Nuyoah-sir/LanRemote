@@ -9,7 +9,7 @@ namespace LanRemote.Transport;
 /// <remarks>
 /// M4 不提供输入发送接口。认证只消费第一个终帧，后续帧（包括第二个 success）由 M5 消费方处理。
 /// </remarks>
-public sealed partial class AuthenticatedControlSession : IDisposable
+public sealed partial class AuthenticatedControlSession : IDisposable, IAsyncDisposable
 {
     private readonly object _gate = new();
     private TlsConnection? _connection;

@@ -140,6 +140,7 @@ public sealed partial class AuthenticatedControlSession
             _rent = rent;
             _frameRead = frameRead;
             _joinScheduler = joinScheduler ?? TaskScheduler.Default;
+            PublicSession = new AuthenticatedVideoSession(this);
             _deadline = new AttachDeadline(this);
         }
 
