@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-30（8ae502b客户端真实第二TLS/严格ACK，各3052 PASS；public视频/M5未完成，§19.15）**
+> 更新时间：**2026-10-01（f3dbccc显式Control监控，各3117 PASS；public视频/M5未完成，§19.16）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`8ae502b`接通internal真实第二TLS、严格ACK和本attempt完整join（ADR-059），双配置各3052 PASS，见§19.15；敏感wire/执行期原截止及前片历史保留于§19.14–19.6。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`f3dbccc`完成internal显式Control断连监控和原读完整join（ADR-060），双配置各3117 PASS，见§19.16；真实第二TLS/严格ACK及前片历史保留于§19.15–19.6。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：internal显式Control唯一断连reader，再封闭public视频外壳，详见§19.15。** 真实客户端第二TLS/严格ACK已完成；尚无public视频入口，默认Control-only不变。未接Control主动断连感知、采集/显示或十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：封闭public视频外壳与完整异步释放，详见§19.16。** 真实第二TLS/严格ACK及显式Control断连监控已完成；尚无public视频入口，默认Control-only不变。采集/显示及十分钟DoD未完；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：internal显式Control唯一断连reader，再public视频外壳（§19.15）；真实第二TLS/严格ACK已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：封闭public视频外壳与完整异步释放（§19.16）；真实第二TLS/严格ACK/显式Control监控已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`8ae502b`**（客户端真实第二TLS/严格ACK/本attempt join，ADR-059）；前片00ecff3等历史保留。
-- **Working tree at validation：8ae502b源码/测试，验证后未变；双配置各3052 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-client-attach/final-{Debug,Release}_*.trx`，四Rebuild零警告错误（§19.15）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
+- **Last code commit：`f3dbccc`**（显式Control监控/原读完整join，ADR-060）；前片8ae502b等历史保留。
+- **Working tree at validation：f3dbccc源码/测试，验证后未变；双配置各3117 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-control-monitor/final-{Debug,Release}_*.trx`，四Rebuild零警告错误，303文件SHA前后一致（§19.16）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2889,4 +2889,18 @@ Control只对传入复合故障避开caller取消翻译；实例readonly委托�
 
 **边界与下一片**：既有83字节proof transcript含nonce副本未清零，但不含sessionToken/proof；不外推TLS/Stream/HMAC内部副本擦除。expected/presented正常相同，替换入参可能等价，不能捏造该变异必红；FrameReader更底层已丢失的多fault不可恢复。本片internal接线不等于public视频或产品看屏完成。
 
-继续先做internal显式Control断连monitor，默认Control-only/旧internal入口不增加读。拟由成功登记child的入口在同gate登记唯一父拥有worker，重复/重入输家不启动它；至多一次1字节None-token原读，EOF/故障/额外数据撤销并独立请求Control close/child stop，原worker不自join，父join覆盖原读与关闭。保留owner纯逻辑撤销，原读同步前缀/AsTask/多fault可追溯；原始诊断与将来DisposeAsync报告分开，按本地停止与原Task已完成的观察顺序分类，不声称能证明关闭竞态的物理原因。不开新心跳/消息协议，不探测无EOF/RST网络黑洞。后续public封闭外壳固定使用monitor路径，再采集/JPEG/显示与十分钟DoD。此下一片为经源码核对的实施方案，尚未编码。
+继续先做internal显式Control断连monitor，默认Control-only/旧internal入口不增加读。拟由成功登记child的入口在同gate登记唯一父拥有worker，重复/重入输家不启动它；至多一次1字节None-token原读，EOF/故障/额外数据撤销并独立请求Control close/child stop，原worker不自join，父join覆盖原读与关闭。保留owner纯逻辑撤销，原读同步前缀/AsTask/多fault可追溯；原始诊断与将来DisposeAsync报告分开，按本地停止与原Task已完成的观察顺序分类，不声称能证明关闭竞态的物理原因。不开新心跳/消息协议，不探测无EOF/RST网络黑洞。后续public封闭外壳固定使用monitor路径，再采集/JPEG/显示与十分钟DoD。此下一片为经源码核对的实施方案，尚未编码（后续实现见§19.16）。
+
+### 19.16 显式Control断连监控（2026-09-30验证，10-01记账）
+
+**实现**：f3dbccc/ADR-060，7files/+2309/-7。internal显式monitor入口成功登记child后同gate登记父拥有Worker；旧入口/Control-only不增加读。至多一次1字节None-token原读，EOF/故障/额外数据同gate撤销，额外数据固定control-unexpected-data；锁外独立请求Control close与child stop，不自join。父共享WhenAll完整等Control close/child join/monitor，含ReadAsync同步前缀、AsTask及原Task。纯逻辑owner撤销和公共同步Dispose原合同不改。
+
+**诊断/边界**：原Task多fault完整树保留；本地停止标志仅反映原Task发布/完成的观察次序，不证明close物理因果，不按IO/ODE类型过滤。SkippedLocalStop未发读、标志true。不新增心跳/消息协议/黑洞检测。已覆盖reader成功后提交前的撤销与owner恰一次释放，既有已交付帧不被回收；最窄Committed已设置但原worker/外层Task尚未完成窗口尚未确定性固定，不声称已覆盖。真实TLS事后await只证明最终退出，完整join强证据来自组件闸门/await链。
+
+**验证**：新增65展开（57组件/8真实TLS），与原attach回归合计154定向绿。首轮75中3红来自SkippedLocalStop期望、原Task完成观察代理持gate竞态、SslStream私有字段错误假设；按合同修正并实测.NET10.0.12 NestedState枚举。review build曾有xUnit2012，等价改Assert.Contains后最终无警告，旧失败日志不覆盖。两次独立只读审查，补父完整异常树/慢close不阻塞child stop/attach与frame提交竞态；只贯通原rent/frameRead实例接缝，不替换认证或monitor。
+
+**变异**：六单点6/6有效，目标红例1/2/2/2/3/5共15；第4另有附着前ODE不计目标，不称3/3，无Guard/编译失败充数。首runner误判xUnit FAIL通知后恢复再续跑；三个独立证据目录保留，未重复已有效单点。主线程核验13TRX、3源码原bytes、320保护SHA、34恢复产物和29自有Job排空记录；基线与6恢复均154绿。无全机进程扫描结果，不绕过被阻拦的API。
+
+**Last code commit：f3dbccc。Working tree at validation：该提交完整源码/测试，最终验证后未变。** 本轮主线程执行串行solution/IsolatedAcceptance双配置四次完整Rebuild并读取日志，均0警告/0错误；逐条解析12份final TRX：Debug/Release各**3117 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport2160/Acceptance393）。303源码/测试/工程/脚本SHA前后一致。原证据`outputs/m5-control-monitor`，无M4或Python打包重跑、无新包/GUI、无产品App/权威规格/网络/防护修改。
+
+**下一片**：封闭public AttachVideoAsync/AuthenticatedVideoSession/原Task ReadFrameAsync及父子IAsyncDisposable。固定monitor生产路径；外壳提交前预构造、提交后无撤销/取消终检；重复输家不清理赢家。异步释放等原join（父另等已接受的public attach投影），原始异常完整树严格报告，不按本地close时序或IO/ODE类型抹错；这意味着主动关闭也可能报告异常。public签名/报告层与确定性测试尚未实现，先完成本片，不把规划写成代码。之后采集/JPEG/显示/有界队列与十分钟DoD；M5仍未完成。

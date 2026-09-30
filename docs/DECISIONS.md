@@ -1455,3 +1455,17 @@ SensitiveFrameWriter.WriteOwnedFrameAsync接管完整非null wire；校验stream
 8轮单点变异红例2/6/8/4/1/1/1/2（共25），依次删除SessionId匹配、ACK清零、外层join等待、反向包含、增加connect async包装、删除DeviceId校验、删除地址复制、删除敏感write等待。主线程逐条解析10份TRX，全部目标运行期断言，无Guard/编译失败充数；第8轮未运行WaitAsync候选，不冒称该变异已验证。源码7373字节与备份相同，SHA256 c0b8d17d6205ff314bd361f6a835c67b1243b1cc0d222d57352d9dff16a8f8bd；385个保护文件未变、34个恢复产物与基线一致，恢复重建89绿。最终solution/IsolatedAcceptance双配置四次Rebuild零警告错误；主线程逐条核验12份TRX，Debug/Release各3052 PASS（196/299/3/66/2095/393），0失败跳过；验证后源码/测试未变。详见HANDOFF§19.15。
 
 **Limits / next**：expected/presented正常一致时，替换proof入参可能是等价变异；实际来源靠源码链路、偏差拒绝与真实换证共同验证。83字节既有proof transcript含nonce副本、未擦除，但不包含sessionToken/proof；本片不扩修它，不承诺TLS/Stream/HMAC内部副本擦除。FrameReader更底层已丢失的多fault不能在此恢复。测试接缝不是恶意进程内安全边界。尚无public AttachVideoAsync、Control唯一reader/远端关闭主动感知、采集/JPEG/显示或十分钟DoD；下一片先补Control reader生命周期再封闭公开外壳。无M4重验、现网/防护/App修改或新包。
+
+### ADR-060 — 显式 Control 单读监控与完整原操作 join
+
+**日期**：2026-09-30验证，2026-10-01记账。**Decision**：internal AttachVideoWithControlMonitorCoreAsync固定生产第二TLS入口；旧AttachVideoCoreAsync与Control-only仍不新增Control读。只有成功登记child的attempt在同父gate登记monitor，重复/clock重入输家不能启动它。父拥有至多一次1字节CancellationToken.None原读，无CTS/循环/新timer/心跳；EOF、故障或额外数据均撤销会话，额外数据固定control-unexpected-data，不静默吞字节。不是完整Control消息分发器，也不保证检测无EOF/RST的网络黑洞。
+
+monitor Worker在gate内登记，首次取gate作为发布屏障；锁外执行ReadAsync同步前缀、AsTask及原Task。终态/错误/纯逻辑RevokeCore在同gate发布，锁外独立请求Control close及child stop，不自join；慢Control关闭不串行阻止child停止。父CloseAndJoinAsync共享Task.WhenAll(controlClose, videoJoin, monitor)，任一fault不得漏等另一个原操作。关闭完成不代表原读退出，不合作同步前缀/AsTask/原Task仍须真正返回；原同步Dispose合同及owner纯逻辑撤销不变。
+
+保留原Task多fault完整树，仅去Task自动单项容器，不Flatten或删除原树重复分支；父LifetimeErrors纳入monitor原根。不可变snapshot分开保存End、Error、LocalStopObservedBeforeCompletion。首次本地撤销只按已发布原Task.IsCompleted判断观察顺序；未发布包括同步前缀/AsTask区间，不能证明故障物理因果。SkippedLocalStop不启动读，标记true。不得按IO/ODE类型或该观察标志抹去错误；未来public释放报告单独定案。
+
+**Evidence**：f3dbccc新增65例（组件57/真实TLS8），定向含既有回归154绿。首轮75中3红为SkippedLocalStop期望、持gate等WhenAny观察代理、SslStream私有字段类型假设；分别按合同修正、直接观察已完成原Task、实测.NET10.0.12的NestedState枚举后修正。review构建曾有xUnit2012，等价改Assert.Contains后最终四Rebuild均零警告错误，不改写旧日志。独立审查补完整父异常树、ACK已成功后的提交闸门、frameRead原reader返回而联合提交前的owner精确释放；仅贯通既有rent/frameRead实例接缝，不替换认证或monitor。
+
+6单点变异依次旧入口默认启monitor/删除原Task完成检查/原错只留首根/删原read等待/父join漏monitor/monitor不撤销，共15目标失败（1/2/2/2/3/5），6/6有效。第4另有附着前ODE不计目标，不称3/3；无Guard或编译失败充数。首runner误判xUnit FAIL通知为基础设施错，已恢复后在独立续跑目录纠正；旧证据保留。主线程逐条核验13TRX、3源码原bytes、320保护SHA、34恢复产物、29自有Job排空。最终12TRX逐条：Debug/Release各3117 PASS（196/299/3/66/2160/393），0失败跳过；solution/IsolatedAcceptance双配置四Rebuild零警告错误，303源码/测试/工程/脚本文件哈希前后一致。证据outputs/m5-control-monitor。
+
+**Limits / next**：尚未确定性固定Committed已设置而worker/外层Task尚未完成的最窄窗口；已有提交前撤销和完整交付后撤销证据，不能外推。登记竞争测试不独立证明所有生产锁边界；真实TLS事后await只证明最终退出，强join证据来自组件闸门/await链。下一片封闭public视频外壳固定monitor生产路径、原Task读帧与完整异步释放；本片public尚未实现。不改现网/防护/App，不重跑M4、不打新包。
