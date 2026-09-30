@@ -9,10 +9,12 @@
     <AssemblyName>LanRemote.Capture</AssemblyName>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+    <InternalsVisibleTo Include="LanRemote.Capture.Tests" />
   </ItemGroup>
 
 </Project>
