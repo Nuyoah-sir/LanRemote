@@ -1405,3 +1405,21 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 最终8轮单点变异分别4/3/2/2/2/3/2/2个运行期红例，覆盖最终交付、尚未交付门禁、入口重入、迟到连接接管、提交重入、帧联合终检、原read join、多故障保真；无Guard或编译错误充数。恢复逐字节一致后175绿；双配置各2851 PASS，四build零警告错误，见HANDOFF§19.12。
 
 **Limits / next**：本片是 internal 生命周期底座，initialize 成功只是借用委托合同，不等于已接严格 ACK；没有执行期 attach timer，只做启动/交付预算检查。下一片先补 child 拥有的原截止计时器和回调join/诊断、敏感hello/wire缓冲释放，再接真实第二TLS实际pin/proof和ACK SessionId匹配。Control唯一reader、远端Control关闭主动感知、采集/JPEG/WPF/十分钟DoD均未完成；受控SSL测试不是新真实TLS证据，不改默认Control-only、M4或系统网络。
+
+### ADR-057 — 客户端视频附着原截止的执行期通知与排空
+
+**日期**：2026-09-30。**Context**：ADR056只在启动/交付检查预算，原工厂挂起期间没有执行期取消；简单复用重新起表且同步Dispose的AuthenticationDeadline不满足此所有权合同。
+
+**Decision**：
+1. 每次被接受的内部attach默认拥有一个固定deadline worker；与attach worker均先在父gate内登记，再以首个gate作为发布屏障。Control-only、构造和纯预算查询仍不建timer，交付后读帧不受attach TTL约束。
+2. 原successReceivedAt、原clock和min(hint,15000)是唯一预算。禁用态CreateTimer后无条件接管返回timer；Create/Change/运行期clock/DisposeAsync同步前缀均在固定worker、父锁外执行。Change前后均采样与复查重入状态；负elapsed或>=预算失败，绝不阶段续期。原入口/最终预算查询的持父锁旧合同不改。
+3. 原TimerCallback只在内部短锁内合并一项唤醒，不取时/关闭/取消、不派发每回调Task。早触发按剩余重排，最小1ms仅是通知粒度，无接受宽限；连续立即唤醒超过32次失败，避免非合作provider无限忙循环。
+4. 显式停止立即关闭通知入口并唤醒worker，与连接关闭/reader释放/CTS取消独立推进，不等原connect/init结束才停timer。worker在finally调用并await原ITimer.DisposeAsync（ValueTask只消费一次），其同步前缀及provider在途回调排空同属原worker；不能从worker等待包含自己的join。纯owner撤销仍仅逻辑标记，无新增网络/取消/计时器调用。
+5. 初始化成功后先await timer worker及caller注册排空，再同gate裁决父撤销>caller取消>deadline失败>普通子停止，随后创建仅存字段的流适配器/reader、原预算末检及重入复查才交付。先创建流会被已关闭TlsConnection的ODE抢走真实原因，首轮7个运行期红例已证实并修复。原I/O自身错误仍原样优先保留，不改成新Timeout。
+6. 执行期首次失败与原timer释放失败独立有限槽；原Dispose任务多错保存完整树，单错只剥Task自动容器，用户Aggregate/InnerException不Flatten。caller回调/注册排空也有固定诊断槽。旧快照不随新错误变化，join成功只证明尝试退出。
+
+**Evidence**：新增48例；原57生命周期用例升级手动timer但不关生产功能、不改纯预算禁timer断言。首轮212=205PASS/7FAIL是上面的reader顺序缺陷；修后新增clock阻塞/慢Change/同步重入/provider在途Fire尾部/连续同步通知11例，223定向全绿。受闸原Task的实际awaiter链验证attach→deadline→Dispose→Fire，严格关联state-machine类型/owner/原awaiter/Task.Run wrapper；运行时布局不兼容明确失败，不跳过。ErrorAsync先判WhenAny的原Task获胜，再读原异常；测试保护Timeout不冒充业务Timeout。
+
+首轮变异第5项由fake timer提前断言下限导致外层Guard遮错，整轮无效并停止恢复，旧证据保留；将下限断言移至已有正文记录值检查。最终独立8轮有效运行期红例1/1/7/7/1/1/4/3，无Guard或编译错误充数；恢复原bytes并重建后223绿，目录outputs/m5-client-deadline/mutation-20260930-164647-29de2bd5。最终逐条解析十二份TRX：Debug/Release各2899 PASS（196/299/3/66/1942/393），0失败/跳过；solution与独立入口四build零警告错误，恢复源码SHA一致，见HANDOFF§19.13。
+
+**Limits / next**：不保证硬中断不合作clock/工厂/Stream/provider；故障provider未返回的资源不能替它回收，DisposeAsync抛错后也不能声称它物理禁止未来callback（本层入口已无副作用）。Fire尾部证明provider原任务排空，不是暂停生产OnTimer本体；caller注册实际在途排空未增同等级定向证明。当前仍无高层AttachVideoAsync/真实第二TLS接线；下一片敏感hello/wire清零，再actual pin/proof与严格ACK SessionId。M4/现网/App不动，M5未完成。

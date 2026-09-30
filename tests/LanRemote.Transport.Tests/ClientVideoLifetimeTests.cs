@@ -175,11 +175,15 @@ public sealed class ClientVideoLifetimeTests
                 Assert.Equal(0, f.Video.Client.DisposeCalls);
             }
             f.AssertControlLive();
+            // 原 worker 已 join；只约束重复入口不再取时，不约束已登记 attempt 的调度取时次数。
+            int timestampReads = f.Clock.TimestampReads;
+            int frequencyReads = f.Clock.FrequencyReads;
             Assert.Throws<InvalidOperationException>(() => { _ = f.Start(); });
             Assert.Same(child, f.RegisteredChild);
             Assert.Equal(1, f.ConnectCalls);
             Assert.Equal(phase == "initialize" ? 1 : 0, f.InitializeCalls);
-            Assert.Equal(1, f.Clock.TimestampReads);
+            Assert.Equal(timestampReads, f.Clock.TimestampReads);
+            Assert.Equal(frequencyReads, f.Clock.FrequencyReads);
         }
         finally { await f.FinishAsync(); }
     }
@@ -1142,7 +1146,7 @@ public sealed class ClientVideoLifetimeTests
         try
         {
             Child child = await f.Start(rent: pool.Rent).WaitAsync(Guard);
-            Assert.Equal(2, f.Clock.TimestampReads);
+            int timestampReads = f.Clock.TimestampReads;
             int frequencyReads = f.Clock.FrequencyReads;
             f.Clock.Timestamp = TimeSpan.FromDays(365).Ticks;
             f.Clock.Arm("timestamp", () => throw new InvalidOperationException("交付后读帧不应取时。"));
@@ -1151,7 +1155,7 @@ public sealed class ClientVideoLifetimeTests
             EncodedFrame second = Assert.IsType<EncodedFrame>(await f.Read(child).WaitAsync(Guard));
             Assert.Null(await f.Read(child).WaitAsync(Guard));
             await child.StopAndJoinAsync().WaitAsync(Guard);
-            Assert.Equal(2, f.Clock.TimestampReads);
+            Assert.Equal(timestampReads, f.Clock.TimestampReads);
             Assert.Equal(frequencyReads, f.Clock.FrequencyReads);
             Assert.Equal(VideoFrameTestData.Payload(), first.Payload.ToArray());
             Assert.Equal(VideoFrameTestData.Payload(), second.Payload.ToArray());
@@ -1177,14 +1181,16 @@ public sealed class ClientVideoLifetimeTests
             Task<Child> attach = f.Start(initialize: (_, _) => original);
             await f.Initializing.Task.WaitAsync(Guard);
             await initializeReturn.Reached.Task.WaitAsync(Guard);
-            Assert.Equal(1, f.Clock.TimestampReads);
+            Assert.Equal(TimeSpan.FromTicks(BudgetTicks), f.Parent.GetRemainingAttachBudget());
             Assert.False(original.IsCompleted);
+            Assert.False(attach.IsCompleted);
+            // 手动 timer 不触发；原初始化开闸后必须以原锚点的剩余预算拒绝提交。
             f.Clock.Timestamp = commitTimestamp;
             initializeReturn.Open();
             await original.WaitAsync(Guard);
             Assert.IsType<TimeoutException>(await ErrorAsync(attach));
             await Assert.IsType<Child>(f.RegisteredChild).StopAndJoinAsync().WaitAsync(Guard);
-            Assert.Equal(2, f.Clock.TimestampReads);
+            Assert.True(attach.IsFaulted);
             f.Video.AssertClosedOnce();
             f.AssertControlLive();
             f.Clock.Timestamp = 0;
@@ -1196,18 +1202,35 @@ public sealed class ClientVideoLifetimeTests
         async Task InitializeAsync() => await initializeReturn.WaitAsync();
     }
 
-    private static async Task<Exception> ErrorAsync(Task task)
+    private static async Task<Exception> ErrorAsync(Task original)
     {
-        Exception? error = await Record.ExceptionAsync(async () => await task.WaitAsync(Guard));
-        Assert.NotNull(error);
-        Assert.True(task.IsCompleted, "Guard 只能报告失败，不能充当原任务已经退出的证据。");
-        return error;
+        using CancellationTokenSource guard = new();
+        Task guardTask = Task.Delay(Guard, guard.Token);
+        try
+        {
+            Task winner = await Task.WhenAny(original, guardTask);
+            // Guard 获胜即失败，不能用稍后变化的原任务状态把保护超时当成业务异常。
+            Assert.Same(original, winner);
+            Exception? error = await Record.ExceptionAsync(async () => await original);
+            Assert.NotNull(error);
+            return error;
+        }
+        finally { guard.Cancel(); }
     }
 
-    private static async Task ObserveAsync(Task task)
+    private static async Task ObserveAsync(Task original)
     {
-        try { await task.WaitAsync(Guard); }
-        catch when (task.IsCompleted) { _ = task.Exception; }
+        using CancellationTokenSource guard = new();
+        Task guardTask = Task.Delay(Guard, guard.Token);
+        try
+        {
+            Task winner = await Task.WhenAny(original, guardTask);
+            Assert.Same(original, winner);
+            // 只观察原任务异常；Guard 断言必须在吞异常的范围之外。
+            try { await original; }
+            catch { _ = original.Exception; }
+        }
+        finally { guard.Cancel(); }
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1245,7 +1268,11 @@ public sealed class ClientVideoLifetimeTests
             if (open) Open();
             Reached.TrySetResult();
             // 仅作死锁失败保护；正常路径总由测试 finally 或明确提交顺序开闸。
-            _release.Task.WaitAsync(Guard).GetAwaiter().GetResult();
+            try { _release.Task.WaitAsync(Guard).GetAwaiter().GetResult(); }
+            catch (TimeoutException)
+            {
+                throw new Xunit.Sdk.XunitException("Pause 同步等待超过 Guard：测试未及时开闸，不是业务超时。");
+            }
         }
     }
 
@@ -1329,7 +1356,23 @@ public sealed class ClientVideoLifetimeTests
 
         public override DateTimeOffset GetUtcNow() => throw new InvalidOperationException("不得读取墙钟。");
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
-            throw new InvalidOperationException("本地附着预算不得创建计时器。");
+            new ManualTimer();
+
+        // 只接受手动调度/释放，不推进时间，也不自动执行 timer 回调。
+        private sealed class ManualTimer : ITimer
+        {
+            private int _disposed;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => Volatile.Read(ref _disposed) == 0;
+
+            public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     // 未连接的 TCP + 派生 SslStream 只模拟受控 I/O/释放，不执行或宣称真实 TLS 握手。

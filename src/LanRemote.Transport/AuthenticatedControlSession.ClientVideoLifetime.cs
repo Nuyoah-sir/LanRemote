@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.ExceptionServices;
 using LanRemote.Core.Models;
 
 namespace LanRemote.Transport;
@@ -112,7 +113,7 @@ public sealed partial class AuthenticatedControlSession
     /// 一个固定 attach 槽和一个固定 read 槽；与父会话共用交付锁，不公开 reader/Stream。
     /// 每个 worker 在锁内登记，在锁外调用并等待原 Task；关闭不是原操作已退出的证明。
     /// </summary>
-    internal sealed class ClientVideoLifetime
+    internal sealed partial class ClientVideoLifetime
     {
         private readonly AuthenticatedControlSession _parent;
         private readonly CancellationTokenSource _stopSource = new();
@@ -140,6 +141,7 @@ public sealed partial class AuthenticatedControlSession
             _rent = rent;
             _frameRead = frameRead;
             _joinScheduler = joinScheduler ?? TaskScheduler.Default;
+            _deadline = new AttachDeadline(this);
         }
 
         internal Task<ClientVideoLifetime> StartUnderGate(
@@ -147,6 +149,8 @@ public sealed partial class AuthenticatedControlSession
             Func<TlsConnection, CancellationToken, Task> initialize,
             CancellationToken caller)
         {
+            // 两个固定 worker 均先登记，首次取得父 gate 后才执行原外部调用。
+            _deadline.StartUnderGate();
             // 不向 Task.Run 传取消令牌：登记成功的协调者即使先被停止也必须运行并收尾。
             Task<ClientVideoLifetime> worker = Task.Run(() => AttachCoreAsync(connect, initialize, caller));
             _attach.Worker = worker;
@@ -164,6 +168,7 @@ public sealed partial class AuthenticatedControlSession
                 // 第一次 gate 同时是发布屏障：原工厂不可能早于 Worker 槽登记执行。
                 lock (Gate) CheckActive(caller);
                 registration = RegisterCaller(caller, _attach);
+                await _deadline.Ready.ConfigureAwait(false);
                 lock (Gate) CheckActive(caller);
                 Task<TlsConnection> originalConnect = connect(_stopSource.Token)
                     ?? throw new InvalidOperationException("连接工厂没有返回任务。");
@@ -178,11 +183,16 @@ public sealed partial class AuthenticatedControlSession
                 Task originalInitialize = initialize(connection, _stopSource.Token)
                     ?? throw new InvalidOperationException("初始化没有返回任务。");
                 await ObserveOriginalAsync(originalInitialize, _attach).ConfigureAwait(false);
-                VideoFrameReader reader = new(connection.CreateVideoStream(), _rent);
+                // 原 timer/回调和 caller 注册退出后才可提交；收尾耗时仍从 success 原锚点扣除。
+                await _deadline.QuiesceAsync().ConfigureAwait(false);
+                await DrainCallerAsync(registration, _attach).ConfigureAwait(false);
+                registration = default;
                 lock (Gate)
                 {
-                    _reader = reader;
                     CheckActive(caller);
+                    // 先裁决父/caller/deadline 再创建适配器，不能让已关闭连接的 ODE 抢先覆盖原因。
+                    // 构造只保存本层字段，不执行 I/O、租用函数或任何外部回调。
+                    _reader = new VideoFrameReader(connection.CreateVideoStream(), _rent);
                     _ = _parent.GetRemainingAttachBudget(caller);
                     // clock 的任意重入可停止 child；不能只依赖预算方法的父状态终检。
                     CheckActive(caller);
@@ -199,7 +209,11 @@ public sealed partial class AuthenticatedControlSession
             }
             finally
             {
-                await registration.DisposeAsync().ConfigureAwait(false);
+                if (!_attach.Committed)
+                {
+                    await _deadline.QuiesceAsync().ConfigureAwait(false);
+                    await DrainCallerAsync(registration, _attach).ConfigureAwait(false);
+                }
             }
         }
 
@@ -257,26 +271,45 @@ public sealed partial class AuthenticatedControlSession
                 // 不在父锁内调用外部 owner.Dispose；原 worker 覆盖这一整段收尾。
                 try { uncommitted?.Dispose(); }
                 catch (Exception error) { lock (Gate) operation.CleanupError = error; }
-                await registration.DisposeAsync().ConfigureAwait(false);
+                await DrainCallerAsync(registration, operation).ConfigureAwait(false);
+            }
+        }
+
+        private async Task DrainCallerAsync(CancellationTokenRegistration registration, Operation operation)
+        {
+            try { await registration.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception error)
+            {
+                lock (Gate) operation.RegistrationError ??= error;
+                RequestStop();
             }
         }
 
         private CancellationTokenRegistration RegisterCaller(CancellationToken caller, Operation operation) =>
             caller.UnsafeRegister(_ =>
             {
-                lock (Gate)
+                try
                 {
-                    // 接受之后的 caller 取消不能追溯停止已交付 child/帧。
-                    if (operation.Committed) return;
-                    MarkStoppedUnderGate();
+                    lock (Gate)
+                    {
+                        // 接受之后的 caller 取消不能追溯停止已交付 child/帧。
+                        if (operation.Committed) return;
+                        MarkStoppedUnderGate();
+                    }
+                    EnsureStopStarted();
                 }
-                EnsureStopStarted();
+                catch (Exception error)
+                {
+                    lock (Gate) operation.CallbackError ??= error;
+                }
             }, null);
 
         private void CheckActive(CancellationToken caller)
         {
             ObjectDisposedException.ThrowIf(_parent._connection is null, _parent);
             caller.ThrowIfCancellationRequested();
+            if (_deadlineFailure is { } deadlineError) ExceptionDispatchInfo.Capture(deadlineError).Throw();
+            if (_attach.RegistrationError is { } registrationError) ExceptionDispatchInfo.Capture(registrationError).Throw();
             ObjectDisposedException.ThrowIf(_stopped, this);
             if (!ReferenceEquals(_parent._videoLifetime, this))
                 throw new InvalidOperationException("视频会话不属于当前父会话。");
@@ -300,6 +333,8 @@ public sealed partial class AuthenticatedControlSession
         {
             lock (Gate)
             {
+                // 只向内部协调者发通知；原 timer 方法由它在父锁外执行，不等待原操作退出才停 timer。
+                _deadline.StopScheduling();
                 // CloseAsync 只登记独立 worker，不在此线程执行释放；取消另起 worker，互不串行等待。
                 if (_connection is not null) _videoClose ??= _connection.CloseAsync();
                 if (_reader is not null) _readerDispose ??= Task.Run(() =>
@@ -340,6 +375,7 @@ public sealed partial class AuthenticatedControlSession
             if (videoClose is not null) await videoClose.ConfigureAwait(false);
             if (readerDispose is not null) await readerDispose.ConfigureAwait(false);
             await cancel.ConfigureAwait(false);
+            await _deadline.QuiesceAsync().ConfigureAwait(false);
             _stopSource.Dispose();
         }
 
@@ -384,7 +420,9 @@ public sealed partial class AuthenticatedControlSession
                 lock (Gate)
                 {
                     List<Exception> errors = new();
-                    Exception?[] operations = [_attach.Error, _read?.Error, _read?.CleanupError,
+                    Exception?[] operations = [_deadlineFailure, _deadline.CleanupError,
+                        _attach.Error, _attach.RegistrationError, _attach.CallbackError,
+                        _read?.Error, _read?.CleanupError, _read?.RegistrationError, _read?.CallbackError,
                         _cancelError, _readerDisposeError];
                     AddErrors(errors, operations.OfType<Exception>());
                     if (_reader is not null) AddErrors(errors, _reader.CleanupErrors);
@@ -400,6 +438,8 @@ public sealed partial class AuthenticatedControlSession
             internal bool Committed;
             internal Exception? Error;
             internal Exception? CleanupError;
+            internal Exception? RegistrationError;
+            internal Exception? CallbackError;
         }
     }
 }
