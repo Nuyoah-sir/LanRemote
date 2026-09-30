@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-29（1bb9063认证owner收尾，各2741 PASS；高层附着/M5未完成，§19.10）**
+> 更新时间：**2026-09-30（8cefb34成功时间与附着预算，各2788 PASS；高层附着/M5未完成，§19.11）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`1bb9063`认证owner收尾与秘密撤销（ADR-054），双配置各2741 PASS，见§19.10；建连清理、共享关闭、封闭proof与服务端历史保留于§19.9–19.6。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`8cefb34`保留success原时刻与本地附着预算（ADR-055），双配置各2788 PASS，见§19.11；认证owner、建连清理、共享关闭等历史保留于§19.10–19.6。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：success原收齐时刻/同源clock与本地附着预算，再高层安全附着，详见§19.10。** 共享关闭/流adapter已实现；默认Control-only不变，父子生命周期/安全交付未完成。未采集/显示或跑十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：内部父子生命周期、原任务join与联合交付门禁，再真实第二TLS/严格ACK，详见§19.11。** 原success时间/预算已完成，不重做；默认Control-only不变，不能先开放缺少父撤销终检的public Attach。未采集/显示或跑十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：保留success原payload收齐时刻/clock及≤15秒本地预算，再高层附着与父子join（§19.10）。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：内部父子生命周期与安全交付门禁，再实际第二TLS/ACK（§19.11）；success原时刻/预算已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`1bb9063`**（认证owner收尾片，6files/+2224/-26，ADR-054）；前片6d6a496等历史保留。
-- **Working tree at validation：1bb9063源码/测试，验证后未变；双配置各2741 PASS/0失败/0跳过。** 主线程已解析12份`outputs/m5-control-owner/verified-{Debug,Release}_*.trx`，四build零警告错误（§19.10）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
+- **Last code commit：`8cefb34`**（success原时刻与本地附着预算，ADR-055）；前片1bb9063等历史保留。
+- **Working tree at validation：8cefb34源码/测试，验证后未变；双配置各2788 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-attach-budget/verified-{Debug,Release}_*.trx`，四build零警告错误（§19.11）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2820,3 +2820,15 @@ Control只对传入复合故障避开caller取消翻译；实例readonly委托�
 **Last code commit：1bb9063（6files/+2224/-26）。Working tree at validation：该提交源码/测试，最终验证后未变，之后仅文档记账。** 主线程逐条解析`outputs/m5-control-owner/verified-{Debug,Release}_*.trx`共12份：每配置**2741 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport1784/Acceptance393）。solution及IsolatedAcceptance双配置四build均0警告/0错误。未改原真实TLS用例断言、系统网络、M4物料或产品App；未GUI/打包/M4重跑。
 
 **下一片（已只读设计，未实现）**：ReadReplyAsync当前丢弃success原ReceivedAt而返回0；保留原完整payload收齐时刻和同源clock传入session，pending仍保留原严格解析接受时刻，不混用。本地hint封顶15秒、elapsed>=预算拒绝、重复查询不续期，TTL到期不关闭Control。客户端锚点只是本地等待上界，不能冒称准确服务端写前TTL。之后再父子登记/撤销/join、第二TLS实际pin/严格ACK唯一交付与迟到回收、采集/JPEG/显示/十分钟DoD，M5仍进行中。
+
+### 19.11 success 原时刻与本地附着预算（2026-09-30）
+
+**实现**：ADR-055。ReadReplyAsync分别返回SuccessReceivedAt/PendingAcceptedAt；两条success路径均直传原完整payload时刻及window.Clock，pending仍严格解析后接受。session必填原时刻/clock，构造不取时，内部GetRemainingAttachBudget按min(hint,15000)计算；同锁撤销>取消>到期，取时和frequency读取后再查，负elapsed或>=边界抛TimeoutException。查询不续期、无timer/I/O、无资格消费，不改变proof或因到期关闭Control；小hint构造前耗尽仍能交付有效认证Control。本地预算不等于准确服务端剩余TTL。
+
+**证据与修正**：新增47例（预算27/公开入口传播20），原断言未放宽。首个定向112例中2项同步Theory配置Timeout被runner拒绝，去掉该标记后112绿；不将其算生产缺陷。受控SSL走严格帧/独立HMAC，不是新真实TLS证据。最后字节、payload timer释放与真实构造observer独立推进时间，5000ms预算扣400+600+250ms后3750ms；非标准频率/UTC跳变/小大hint/精确边界/负elapsed/重入撤销取消/原token与proof仍有效有断言。未直观测MAC内部耗时。
+
+六轮单点变异分别16/10/6/11/2/2红（各47），依次为success重新取时、pending收齐替接受、去封顶、>=改>、删后置撤销、删后置取消。每轮独立证据`outputs/m5-attach-budget/verified-mutation-*.trx`；pending通过通知脱敏包装产生固定认证异常，内层定位由单点变异与源码断言交叉核对，非TRX直接展示。源码与原快照逐字节恢复后47绿；连接器SHA256 b8dd1f8315ebfa057b636536b643f8f408dd3cf55de6f1eac0788cfd0494a62e，session f29f66adafdc211b8c50f7581d8d46c2a54c9f2cef46dd1da738046111548720。首个执行器裸bash误选WSL未跑测试，改显式Git Bash后执行六轮，不将启动错误算变异命中。
+
+**Last code commit：8cefb34。Working tree at validation：该提交源码/测试，最终验证后未变，之后仅文档记账。** 主线程逐条解析最终十二份`verified-{Debug,Release}_*.trx`，双配置各**2788 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport1831/Acceptance393），solution及IsolatedAcceptance双配置四build均0警告/0错误。未改产品App、系统网络/防护、M4物料；无GUI/打包/M4或Python打包重跑。
+
+**下一片#138（只读设计，未实装）**：先内部父子生命周期/联合交付，不先开public Attach。需要认证公开入口最后提交标记（阻止未交付observer启动子操作）、先登记再启动的固定任务槽、迟到连接/帧owner、同_gate父撤销/子stop/ACK与帧提交、所有已知close独立发起再等取消回调、原任务全部join和有限来源诊断。保持RevokeForOwnerCleanup无网络及重复session Dispose不等待首个慢关闭的原合同。随后接真实第二TLS实际pin/严格ACK及高层唯一交付，再采集/JPEG/显示/十分钟DoD。这里不是已完成父子生命周期或可看屏，M5继续；不重跑M4、不改网。
