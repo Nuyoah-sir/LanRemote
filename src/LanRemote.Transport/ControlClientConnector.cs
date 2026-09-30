@@ -171,6 +171,7 @@ public sealed class ControlClientConnector
             Guid sessionId;
             string shortCode;
             long pendingAcceptedAt;
+            long successReceivedAt;
             timeoutRejection = "client-machine-timeout";
             using (ClientAuthWindow machine = new(
                 clock, options.MachineWindow, cancellationToken, timeoutRejection, helloSentAt))
@@ -214,13 +215,13 @@ public sealed class ControlClientConnector
                 }
 
                 // 只有 response 写完才允许 pending；返回 null 唯一表示第一次合法 pending。
-                (success, pendingAcceptedAt) = await ReadReplyAsync(
+                (success, successReceivedAt, pendingAcceptedAt) = await ReadReplyAsync(
                     reader, challengeWindow, timeouts, allowPending: true, approval: false).ConfigureAwait(false);
                 if (success is not null)
                 {
                     return VerifyAndCreateSession(
                         connection, success, clientTranscript, key, requestedPermission,
-                        sessionId, shortCode, challengeWindow, sessionConstructed);
+                        sessionId, shortCode, successReceivedAt, challengeWindow, sessionConstructed);
                 }
             }
 
@@ -242,11 +243,11 @@ public sealed class ControlClientConnector
                     "client-approval-notification-failed", "无法显示远端审批等待状态，请重试。");
             }
             _ = approvalWindow.GetRemaining();
-            (success, _) = await ReadReplyAsync(
+            (success, successReceivedAt, _) = await ReadReplyAsync(
                 reader, approvalWindow, timeouts, allowPending: false, approval: true).ConfigureAwait(false);
             return VerifyAndCreateSession(
                 connection, success!, clientTranscript, key, requestedPermission,
-                sessionId, shortCode, approvalWindow, sessionConstructed);
+                sessionId, shortCode, successReceivedAt, approvalWindow, sessionConstructed);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -322,14 +323,15 @@ public sealed class ControlClientConnector
         }
     }
 
-    private static async Task<(AuthSuccessFrame? Success, long AcceptedAt)> ReadReplyAsync(
+    // success 的原收齐时刻与 pending 的严格解析后接受时刻分别传播，不能互换起点。
+    private static async Task<(AuthSuccessFrame? Success, long SuccessReceivedAt, long PendingAcceptedAt)> ReadReplyAsync(
         FrameReader reader,
         ClientAuthWindow window,
         TransportTimeouts timeouts,
         bool allowPending,
         bool approval)
     {
-        var (payload, _) = await ReadFrameAsync(reader, window, timeouts, approval).ConfigureAwait(false);
+        var (payload, receivedAt) = await ReadFrameAsync(reader, window, timeouts, approval).ConfigureAwait(false);
         AuthSuccessFrame? success = null;
         try
         {
@@ -338,7 +340,7 @@ public sealed class ControlClientConnector
                 _ = window.GetRemaining();
                 AuthSuccessFrame result = success!;
                 success = null;
-                return (result, 0);
+                return (result, receivedAt, 0);
             }
 
             // 只使用完整严格解析器的结果，不把 JSON type 提示当作合法帧。
@@ -359,7 +361,7 @@ public sealed class ControlClientConnector
                         "client-repeated-pending", "远端重复发送审批等待帧。");
                 }
 
-                return (null, acceptedAt);
+                return (null, 0, acceptedAt);
             }
 
             throw new ControlClientAuthenticationException(
@@ -381,6 +383,7 @@ public sealed class ControlClientConnector
         SessionPermission requestedPermission,
         Guid sessionId,
         string shortCode,
+        long successReceivedAt,
         ClientAuthWindow window,
         Action<AuthenticatedControlSession>? sessionConstructed)
     {
@@ -408,7 +411,7 @@ public sealed class ControlClientConnector
 
             AuthenticatedControlSession session = new(
                 connection, success.GrantedPermission, sessionId, shortCode,
-                success.SessionToken.Span, success.VideoAttachExpiresInMs);
+                success.SessionToken.Span, success.VideoAttachExpiresInMs, successReceivedAt, window.Clock);
             try
             {
                 sessionConstructed?.Invoke(session);

@@ -1372,3 +1372,17 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Evidence**：owner旧实现190例144红，旧构造后22例18红；修复后加强至26例，并新增11例撤销原语。实际删除外层/Verify撤销调用分别10/14红（各26例），原构造、到期与取消事件不删；精确恢复源码后26绿。最终再加强构造时持有session token原数组并检查非零前态、闸前同一数组全零，避免清零副本假证。最终双配置证据见HANDOFF§19.10。
 
 **Limits / next**：测试直观测key/client transcript/parsed token/session自有token；expectedProof/grantTranscript只有代码finally顺序证据，JSON字符串/TLS内部副本不承诺擦除。受控SSL夹具不是实际TLS，真实TLS由未放宽的原用例提供。success原receivedAt/clock与附着TTL、父子生命周期/ACK后唯一交付、采集/JPEG/显示/十分钟DoD仍未完成；系统网络、M4、产品默认Control-only不动。
+
+### ADR-055 — 客户端 success 原时刻与无副作用附着预算
+
+**日期**：2026-09-30。**Context**：ReadFrameAsync 已在完整 payload 收齐后采样，但 ReadReplyAsync 丢弃 success 的时刻；若到构造或附着调用时才起表，会漏扣解析、校验与本地调度耗时。服务端从 success 写出前开始计时，因此客户端收齐锚点只能限制本地等待，不能代表准确的服务端剩余资格。
+
+**Decision**：
+1. ReadReplyAsync 分开返回 SuccessReceivedAt 与 PendingAcceptedAt；direct/pending 后 success 均传递原完整 payload 时刻和同源 TimeProvider。pending 仍在严格解析后接受，不把其收齐时间替换为接受时间，不改变独立审批窗口。
+2. session internal 构造必须提供 successReceivedAt/clock，无自动重新起表旧重载；null clock/非正 hint 在复制 token 前拒绝。零或负 timestamp 原点本身合法，构造不取时；保留原 hint 属性，消费预算为 min(hint,15000) 毫秒。
+3. internal GetRemainingAttachBudget 在原秘密锁内按已撤销/Dispose > caller 取消 > 到期判定；单次 GetTimestamp 与同源 GetElapsedTime 后，再查撤销/取消，包含可重入 frequency 读取。elapsed<0 或 elapsed>=budget 抛 TimeoutException，成功仅返回正余量，不续期、不创建 timer/I/O、不消费资格、不因到期清零或关闭 Control。
+4. 预算查询不参与 Control 认证成功判定，也不附加到现有 proof 方法；小 hint 在构造前已耗尽，仍可交付在认证有效窗口内的 Control。该方法不是后续 Attach 的完整门禁，父子生命周期和 ACK 后唯一交付尚需单独实现。
+
+**Evidence**：新增47例（预算27、公开认证入口传播20）；受控SSL走严格帧与独立HMAC oracle，不冒称真实TLS。最后一字节到达、payload timer释放、真实构造observer各自驱动时间，避免第N次取时自证；固定400ms构造前+600ms observer+250ms消费者延时由5000ms原预算扣至3750ms。非标准频率、UTC跳变、B±1 tick、负elapsed、重入撤销/取消和无关闭/原token/proof有效均有断言。未声称直接观察MAC内部耗时。
+
+六轮单点变异（success重采样、pending换起点、去封顶、>=变>、删后置撤销、删后置取消）分别16/10/6/11/2/2红，每轮47例；恢复原字节后47绿。pending变异经通知边界脱敏为固定认证异常，结合唯一变异与断言位置定位，不把TRX包装误说成直接显示内层断言。初始2项同步Theory误用Timeout属测试错误，去除该标记后定向112通过。最终双配置全量结果见HANDOFF§19.11；未动M4、系统网络或默认Control-only。

@@ -14,6 +14,9 @@ public sealed class AuthenticatedControlSession : IDisposable
     private readonly object _gate = new();
     private TlsConnection? _connection;
     private readonly byte[] _sessionToken;
+    private readonly long _successReceivedAt;
+    private readonly TimeProvider _clock;
+    private readonly TimeSpan _attachBudget;
 
     internal AuthenticatedControlSession(
         TlsConnection connection,
@@ -21,8 +24,16 @@ public sealed class AuthenticatedControlSession : IDisposable
         Guid sessionId,
         string shortCode,
         ReadOnlySpan<byte> sessionToken,
-        int videoAttachExpiresInMsHint)
+        int videoAttachExpiresInMsHint,
+        long successReceivedAt,
+        TimeProvider clock)
     {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(videoAttachExpiresInMsHint);
+        _successReceivedAt = successReceivedAt;
+        _clock = clock;
+        _attachBudget = TimeSpan.FromMilliseconds(Math.Min(videoAttachExpiresInMsHint, 15_000));
         Identity = connection.Identity;
         GrantedPermission = grantedPermission;
         SessionId = sessionId;
@@ -100,8 +111,31 @@ public sealed class AuthenticatedControlSession : IDisposable
         }
     }
 
-    /// <summary>远端视频附加窗口提示，不是权威 TTL；M5 消费时必须再施加本地上限。</summary>
+    /// <summary>远端视频附加窗口提示，不是权威 TTL；本地消费另施加 15 秒上限。</summary>
     internal int VideoAttachExpiresInMsHint { get; }
+
+    /// <summary>
+    /// 从 success 原 payload 收齐时刻计算本地等待上界，不代表服务端准确剩余 TTL。
+    /// 仅查询，不创建 timer、不消费附着资格，不因到期撤销或关闭仍有效的 Control。
+    /// </summary>
+    internal TimeSpan GetRemainingAttachBudget(CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_connection is null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            long now = _clock.GetTimestamp();
+            TimeSpan elapsed = _clock.GetElapsedTime(_successReceivedAt, now);
+            // TimeProvider 可重入；取时及频率读取之后，撤销/取消仍先于到期裁决。
+            ObjectDisposedException.ThrowIf(_connection is null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (elapsed < TimeSpan.Zero || elapsed >= _attachBudget)
+            {
+                throw new TimeoutException("本地视频附着等待预算已耗尽。");
+            }
+            return _attachBudget - elapsed;
+        }
+    }
 
     /// <summary>清零私有 token 并关闭连接；可重复调用。</summary>
     public void Dispose()
