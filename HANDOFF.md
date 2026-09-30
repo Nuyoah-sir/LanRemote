@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-30（00ecff3敏感hello单数组写出，各2963 PASS；高层附着/M5未完成，§19.14）**
+> 更新时间：**2026-09-30（8ae502b客户端真实第二TLS/严格ACK，各3052 PASS；public视频/M5未完成，§19.15）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`00ecff3`实现敏感hello单数组wire与原I/O后清零（ADR-058），双配置各2963 PASS，见§19.14；执行期原截止及前片历史保留于§19.13–19.6。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`8ae502b`接通internal真实第二TLS、严格ACK和本attempt完整join（ADR-059），双配置各3052 PASS，见§19.15；敏感wire/执行期原截止及前片历史保留于§19.14–19.6。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：internal真实客户端第二TLS接线、严格ACK及本attempt局部join，详见§19.14。** 父子生命周期、执行期timer与敏感写出已完成；尚无高层视频入口，默认Control-only不变。未接Control唯一reader、采集/显示或十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：internal显式Control唯一断连reader，再封闭public视频外壳，详见§19.15。** 真实客户端第二TLS/严格ACK已完成；尚无public视频入口，默认Control-only不变。未接Control主动断连感知、采集/显示或十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：internal真实第二TLS/严格ACK及本attempt局部join（§19.14）；敏感写出已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：internal显式Control唯一断连reader，再public视频外壳（§19.15）；真实第二TLS/严格ACK已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`00ecff3`**（敏感hello单数组wire与原I/O后清零，ADR-058）；前片b4febc5等历史保留。
-- **Working tree at validation：00ecff3源码/测试，验证后未变；双配置各2963 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-sensitive-wire/final-{Debug,Release}_*.trx`，四build零警告错误（§19.14）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
+- **Last code commit：`8ae502b`**（客户端真实第二TLS/严格ACK/本attempt join，ADR-059）；前片00ecff3等历史保留。
+- **Working tree at validation：8ae502b源码/测试，验证后未变；双配置各3052 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-client-attach/final-{Debug,Release}_*.trx`，四Rebuild零警告错误（§19.15）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2874,3 +2874,19 @@ Control只对传入复合故障避开caller取消翻译；实例readonly委托�
 **Last code commit：00ecff3（5files/+1265）。Working tree at validation：该提交源码/测试，最终验证后未改，之后仅文档记账。** 十二份`outputs/m5-sensitive-wire/final-{Debug,Release}_*.trx`逐条均Passed：每配置**2963 PASS/0失败/0跳过**（196/299/3/66/2006/393）；solution/IsolatedAcceptance双配置四build零警告错误。无M4重跑、改网、防护修改、App改动、GUI或新包。
 
 **下一片（只读方案，尚未实现）**：新session partial先internal真实接线，不先改public：Control冻结Identity构建ConnectionTarget，生产TlsClientConnector和actual PresentedCertSha256，封闭CreateVideoAttachProof；hello原数组所有权安全移交，token-only FrameReader严格只消费一个ACK并比对父SessionId，后续帧不预读。失败必须持有自己成功登记的child再StopAndJoin，重复/重入输家不能读全局child去stop别人，原worker内不得自join。实际客户端connector本身不做同子网授权，原Host同子网→准入→TLS门禁不绕过；loopback策略仅测试，不冒称生产允许127。session未保存原TransportTimeouts，默认值须显式定案。随后public封闭读帧外壳、Control唯一reader/远端主动关闭、采集显示/十分钟DoD仍待完成。
+
+### 19.15 客户端真实第二TLS与严格ACK（2026-09-30）
+
+**实现**：8ae502b/ADR-059，#157完成。新增internal AttachVideoCoreAsync默认生产TlsClientConnector；Control冻结身份重建独立地址/pin目标，默认TCP3秒/TLS5秒叠加success原预算。校验第二连接DeviceId/地址/端口/expected pin及PinsMatch，用实际PresentedCertSha256计算proof；真实客户端与Host原同子网/准入/registry/router联测，不绕生产门禁。instance工厂仅internal可信接缝，须返回新独占第二连接。
+
+敏感hello原数组移交后等原Write/Flush退出，helper自有nonce/proof清零。ACK token-only，uint域先验1..4096，严格parser再匹配SessionId，错会话固定video-attach-ack-session-mismatch；payload成功取得后的各路径finally清零。精确只消费一帧，不drain/探EOF/预读，第二ACK留给视频reader以video-magic拒绝。资格/登记/捕获本child在同gate，输家不能stop赢家；失败在原attach退出后外层join本child，普通视频失败不关闭Control，成功后不追加终检。稳定诊断与primary双向引用包含归并，仅合并顶层，不Flatten或修改原树重复叶子。
+
+**测试与审查**：新增89展开（组件70/真实TLS19），独立HMAC、随机nonce、actual换证拒绝、粘连首帧/分片ACK/错会话/第二ACK、偏差身份、原wire/ACK数组零、原I/O及慢join等待、重复和clock重入、异常树均覆盖。首次solution Debug成功但2个nullable警告，补target非null后零警告；首次宽筛137=136绿/1红，原因是Task.WhenAll排序假设，修为逐项比较原Task实际树的引用/顺序，不放宽生产合同。独立审查补地址非同引用断言，最终新89定向绿。
+
+**变异**：`outputs/m5-client-attach/mutation-20260930-serial-01/`八轮红例2/6/8/4/1/1/1/2，共25个目标运行期断言；分别ACK会话匹配/清零/外层join/反向包含/原connect Task/DeviceId/地址副本/敏感write等待。主线程逐条解析10TRX，无Guard/编译失败充数；第8轮仅删除等待，未跑WaitAsync候选。7373字节源码与备份精确恢复，SHA256 c0b8d17d6205ff314bd361f6a835c67b1243b1cc0d222d57352d9dff16a8f8bd；385保护文件、34恢复产物核验一致，恢复重建89绿。
+
+**Last code commit：8ae502b（5files/+2320）。Working tree at validation：该提交源码/测试，最终验证后未改，之后仅文档记账。** 主线程逐条解析十二份`outputs/m5-client-attach/final-{Debug,Release}_*.trx`：每配置**3052 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport2095/Acceptance393）；solution与IsolatedAcceptance双配置四次完整Rebuild零警告错误。源码/测试哈希与恢复版本一致；ADR在验证期间新增属已知文档变更。未改产品App/权威规格/网络/防护，无GUI/新包/M4专项或Python打包重跑。
+
+**边界与下一片**：既有83字节proof transcript含nonce副本未清零，但不含sessionToken/proof；不外推TLS/Stream/HMAC内部副本擦除。expected/presented正常相同，替换入参可能等价，不能捏造该变异必红；FrameReader更底层已丢失的多fault不可恢复。本片internal接线不等于public视频或产品看屏完成。
+
+继续先做internal显式Control断连monitor，默认Control-only/旧internal入口不增加读。拟由成功登记child的入口在同gate登记唯一父拥有worker，重复/重入输家不启动它；至多一次1字节None-token原读，EOF/故障/额外数据撤销并独立请求Control close/child stop，原worker不自join，父join覆盖原读与关闭。保留owner纯逻辑撤销，原读同步前缀/AsTask/多fault可追溯；原始诊断与将来DisposeAsync报告分开，按本地停止与原Task已完成的观察顺序分类，不声称能证明关闭竞态的物理原因。不开新心跳/消息协议，不探测无EOF/RST网络黑洞。后续public封闭外壳固定使用monitor路径，再采集/JPEG/显示与十分钟DoD。此下一片为经源码核对的实施方案，尚未编码。
