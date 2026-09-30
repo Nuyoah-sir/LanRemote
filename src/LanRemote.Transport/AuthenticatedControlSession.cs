@@ -9,7 +9,7 @@ namespace LanRemote.Transport;
 /// <remarks>
 /// M4 不提供输入发送接口。认证只消费第一个终帧，后续帧（包括第二个 success）由 M5 消费方处理。
 /// </remarks>
-public sealed class AuthenticatedControlSession : IDisposable
+public sealed partial class AuthenticatedControlSession : IDisposable
 {
     private readonly object _gate = new();
     private TlsConnection? _connection;
@@ -41,6 +41,7 @@ public sealed class AuthenticatedControlSession : IDisposable
         VideoAttachExpiresInMsHint = videoAttachExpiresInMsHint;
         _sessionToken = sessionToken.ToArray();
         _connection = connection;
+        _ownedConnection = connection;
     }
 
     /// <summary>连接时冻结的 TLS 身份，不再查询发现缓存。</summary>
@@ -140,8 +141,13 @@ public sealed class AuthenticatedControlSession : IDisposable
     /// <summary>清零私有 token 并关闭连接；可重复调用。</summary>
     public void Dispose()
     {
-        // TLS 关闭可能执行 I/O，不得占用密钥锁；public 首调用仍同步等待。
-        RevokeCore()?.Dispose();
+        // 首个撤销者请求两条连接关闭，再保持原来的 Control 同步等待合同。
+        // 重复 Dispose（包括 owner 已撤销）不请求关闭，也不等待首次慢释放。
+        TlsConnection? connection = RevokeCore();
+        if (connection is null) return;
+        _ = connection.CloseAsync();
+        _videoLifetime?.RequestStop();
+        connection.Dispose();
     }
 
     /// <summary>
@@ -158,6 +164,8 @@ public sealed class AuthenticatedControlSession : IDisposable
             if (connection is not null)
             {
                 CryptographicOperations.ZeroMemory(_sessionToken);
+                // 仅逻辑失效，不能在认证 owner 撤销路径调度网络或任意取消回调。
+                _videoLifetime?.MarkStoppedUnderGate();
             }
             return connection;
         }

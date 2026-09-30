@@ -93,7 +93,7 @@ public sealed class ControlClientConnector
             session = await AuthenticateConnectedAsync(
                 connection, target, clientDeviceId, clientName, key, requestedPermission,
                 authOptions, budget, effectiveClock, cancellationToken, _sessionConstructed).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
+            session.CommitDelivery(cancellationToken);
 
             AuthenticatedControlSession result = session;
             session = null;

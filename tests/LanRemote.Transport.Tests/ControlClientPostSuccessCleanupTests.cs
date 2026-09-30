@@ -236,6 +236,255 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
         }
     }
 
+    [Theory(Timeout = 120_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConstructionObserver_AttachIsSynchronouslyRejected_UntilConnectorCommitsDelivery(bool pending)
+    {
+        Fixture fixture = new(pending, callerFinalCancellation: false, cleanup: 0,
+            pausePayload: true, forceFinalTimeout: false);
+        IOException factoryError = new("受控视频连接工厂故障。");
+        int connectCalls = 0;
+        int initializeCalls = 0;
+        bool observerCompleted = false;
+        Task<AuthenticatedControlSession.ClientVideoLifetime>? prematureAttach = null;
+        Task<AuthenticatedControlSession.ClientVideoLifetime>? deliveredAttach = null;
+        Func<CancellationToken, Task<TlsConnection>> connectOwned = _ =>
+        {
+            Interlocked.Increment(ref connectCalls);
+            return Task.FromException<TlsConnection>(factoryError);
+        };
+        Func<TlsConnection, CancellationToken, Task> initializeBorrowed = (_, _) =>
+        {
+            Interlocked.Increment(ref initializeCalls);
+            return Task.CompletedTask;
+        };
+        fixture.ObserveConstruction = session =>
+        {
+            // 真实构造不等于交付；Action 断言保证异常同步抛出，而不是返回一个失败 Task。
+            Assert.Throws<InvalidOperationException>(() =>
+            {
+                prematureAttach = session.StartVideoLifetimeAsync(connectOwned, initializeBorrowed,
+                    cancellationToken: fixture.Caller.Token, rent: null, frameRead: null);
+            });
+            Assert.Null(prematureAttach);
+            Assert.Equal(0, Volatile.Read(ref connectCalls));
+            Assert.Equal(0, Volatile.Read(ref initializeCalls));
+            Assert.False(fixture.Connection.IsCloseRequested);
+            // 新门禁只约束生命周期启动，不收紧既有 Stream、proof 和预算查询合同。
+            Assert.Same(fixture.Ssl, session.Stream);
+            Assert.Equal(TimeSpan.FromSeconds(15), session.GetRemainingAttachBudget());
+            byte[] proof = session.CreateVideoAttachProof(new byte[16],
+                fixture.Connection.Identity.PresentedCertSha256.Span);
+            try { Assert.Equal(32, proof.Length); }
+            finally { CryptographicOperations.ZeroMemory(proof); }
+            observerCompleted = true;
+        };
+        try
+        {
+            fixture.Start();
+            Task<AuthenticatedControlSession> original = await fixture.Returned.Task.WaitAsync(Guard);
+            await fixture.Ssl.PayloadEntered.Task.WaitAsync(Guard);
+            CapturedSecrets secrets = new(original);
+            fixture.ObserveParsedSuccess = secrets.CaptureParsedSuccess;
+            fixture.Ssl.ReleasePayload();
+
+            Task completionOrUnexpectedCleanup = await Task.WhenAny(original, fixture.TcpClose.Entered.Task)
+                .WaitAsync(Guard);
+            if (!ReferenceEquals(completionOrUnexpectedCleanup, original))
+            {
+                // 观察器断言或认证提前失败应传播原故障，不能被未放行的关闭闸遮成 Guard 超时。
+                fixture.TcpClose.Release();
+                fixture.SslClose.Release();
+            }
+            AuthenticatedControlSession session = await original.WaitAsync(Guard);
+            Assert.Equal(TaskStatus.RanToCompletion, original.Status);
+            Assert.Same(Assert.Single(fixture.Constructions), session);
+            Assert.True(observerCompleted);
+            Assert.Equal(new[] { "success-payload-disposed", "session-constructed", "final-window-disposed" },
+                fixture.Clock.Events);
+            Assert.Equal(0, fixture.Clock.Timestamp);
+            Assert.Equal(0, fixture.Clock.TimerCallbacks);
+            Assert.Equal(0, fixture.Clock.ActiveTimers);
+            Assert.False(fixture.Clock.CanceledAfterVerify);
+            Assert.False(fixture.Caller.IsCancellationRequested);
+            Assert.False(fixture.Connection.IsCloseRequested);
+            Assert.False(fixture.TcpClose.Entered.Task.IsCompleted);
+            Assert.False(fixture.SslClose.Entered.Task.IsCompleted);
+            Assert.True(IsZero(secrets.Key));
+            Assert.True(IsZero(secrets.Transcript));
+            Assert.True(IsZero(Assert.IsType<byte[]>(secrets.ParsedToken)));
+            Assert.NotSame(secrets.ParsedToken, ReadSessionToken(session));
+            Assert.Contains(ReadSessionToken(session), value => value != 0);
+            fixture.Ssl.AssertWireConsumed(pending);
+            fixture.AssertCallerKeyUnchanged();
+
+            // 故障子生命周期可以立即收尾；这里不依赖启动失败与网络关闭的等待先后。
+            fixture.TcpClose.Release();
+            fixture.SslClose.Release();
+            Exception? synchronousError = Record.Exception(() =>
+            {
+                deliveredAttach = session.StartVideoLifetimeAsync(connectOwned, initializeBorrowed,
+                    cancellationToken: fixture.Caller.Token, rent: null, frameRead: null);
+            });
+            Assert.Null(synchronousError);
+            Assert.NotNull(deliveredAttach);
+            Assert.Same(factoryError, await ObserveAsync(deliveredAttach).WaitAsync(Guard));
+            Assert.Equal(TaskStatus.Faulted, deliveredAttach.Status);
+            Assert.Equal(1, Volatile.Read(ref connectCalls));
+            Assert.Equal(0, Volatile.Read(ref initializeCalls));
+
+            Task joined = session.CloseAndJoinAsync();
+            Assert.Same(joined, session.CloseAndJoinAsync());
+            await joined.WaitAsync(Guard);
+            Assert.True(joined.IsCompletedSuccessfully);
+            Assert.Same(joined, session.CloseAndJoinAsync());
+            Assert.Same(factoryError, Assert.Single(session.LifetimeErrors));
+            fixture.AssertSessionRevoked(secrets.ParsedToken);
+            fixture.AssertClosed();
+            output.WriteLine($"路径={(pending ? "pending-success" : "direct-success")}; " +
+                "构造观察器同步拒绝attach且零工厂调用；原认证Task成功返回后工厂调用一次，生命周期故障已join。");
+        }
+        finally
+        {
+            await FinishVideoLifetimeAsync(fixture, prematureAttach, deliveredAttach);
+        }
+    }
+
+    [Theory(Timeout = 120_000)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ConstructionObserver_RevokesOrDisposes_FinalDeliveryRejectsAndClosesOnce(
+        bool pending, bool dispose)
+    {
+        Fixture fixture = new(pending, callerFinalCancellation: false, cleanup: 0,
+            pausePayload: true, forceFinalTimeout: false);
+        int connectCalls = 0;
+        int initializeCalls = 0;
+        bool observerCompleted = false;
+        Task<AuthenticatedControlSession.ClientVideoLifetime>? rejectedAttach = null;
+        fixture.ObserveConstruction = session =>
+        {
+            byte[] token = ReadSessionToken(session);
+            if (dispose) session.Dispose();
+            else session.RevokeForOwnerCleanup();
+            Assert.Same(token, ReadSessionToken(session));
+            Assert.True(IsZero(token));
+            if (!dispose)
+            {
+                // owner 撤销本身不发起关闭；保留原数组证明秘密先于任何网络释放清零。
+                Assert.False(fixture.Connection.IsCloseRequested);
+                Assert.False(fixture.TcpClose.Entered.Task.IsCompleted);
+                Assert.False(fixture.SslClose.Entered.Task.IsCompleted);
+            }
+            // 已撤销优先于尚未交付，且不能调用任一工厂。
+            Assert.Throws<ObjectDisposedException>(() =>
+            {
+                rejectedAttach = session.StartVideoLifetimeAsync(_ =>
+                {
+                    Interlocked.Increment(ref connectCalls);
+                    return Task.FromException<TlsConnection>(new IOException("已撤销会话不应调用视频工厂。"));
+                }, (_, _) =>
+                {
+                    Interlocked.Increment(ref initializeCalls);
+                    return Task.CompletedTask;
+                }, cancellationToken: fixture.Caller.Token, rent: null, frameRead: null);
+            });
+            Assert.Null(rejectedAttach);
+            Assert.Equal(0, Volatile.Read(ref connectCalls));
+            Assert.Equal(0, Volatile.Read(ref initializeCalls));
+            observerCompleted = true;
+        };
+        try
+        {
+            if (dispose)
+            {
+                // public Dispose 可以同步等待，必须在真实构造观察器运行前放行两个资源闸。
+                fixture.TcpClose.Release();
+                fixture.SslClose.Release();
+            }
+            fixture.Start();
+            Task<AuthenticatedControlSession> original = await fixture.Returned.Task.WaitAsync(Guard);
+            await fixture.Ssl.PayloadEntered.Task.WaitAsync(Guard);
+            CapturedSecrets secrets = new(original);
+            fixture.ObserveParsedSuccess = secrets.CaptureParsedSuccess;
+            fixture.Ssl.ReleasePayload();
+
+            if (!dispose)
+            {
+                Task cleanupOrIncorrectDelivery = await Task.WhenAny(fixture.TcpClose.Entered.Task, original)
+                    .WaitAsync(Guard);
+                // 错误地交付已撤销会话时，原 Task 会先成功结束，立即报告而不是等待从未启动的关闭。
+                Assert.Same(fixture.TcpClose.Entered.Task, cleanupOrIncorrectDelivery);
+                Assert.True(observerCompleted);
+                Assert.False(original.IsCompleted);
+                Assert.False(fixture.SslClose.Entered.Task.IsCompleted);
+                fixture.AssertSessionRevoked(secrets.ParsedToken);
+                Assert.True(IsZero(secrets.Key));
+                Assert.True(IsZero(secrets.Transcript));
+                Assert.True(IsZero(Assert.IsType<byte[]>(secrets.ParsedToken)));
+                Task sharedClose = fixture.Connection.CloseAsync();
+                Assert.Same(sharedClose, fixture.Connection.CloseAsync());
+                Assert.False(sharedClose.IsCompleted);
+                fixture.TcpClose.Release();
+                await fixture.SslClose.Entered.Task.WaitAsync(Guard);
+                Assert.False(original.IsCompleted);
+                Assert.False(sharedClose.IsCompleted);
+                fixture.SslClose.Release();
+            }
+
+            Exception? observed = await ObserveAsync(original).WaitAsync(Guard);
+            Assert.True(observerCompleted);
+            ObjectDisposedException rejection = Assert.IsType<ObjectDisposedException>(observed);
+            Assert.Equal(typeof(AuthenticatedControlSession).FullName, rejection.ObjectName);
+            Assert.Equal(TaskStatus.Faulted, original.Status);
+            Assert.Same(observed, await ObserveAsync(original).WaitAsync(Guard));
+            Assert.Equal(0, Volatile.Read(ref connectCalls));
+            Assert.Equal(0, Volatile.Read(ref initializeCalls));
+            Assert.Equal(new[] { "success-payload-disposed", "session-constructed", "final-window-disposed" },
+                fixture.Clock.Events);
+            Assert.Equal(0, fixture.Clock.Timestamp);
+            Assert.False(fixture.Clock.CanceledAfterVerify);
+            Assert.False(fixture.Caller.IsCancellationRequested);
+            Assert.True(IsZero(secrets.Key));
+            Assert.True(IsZero(secrets.Transcript));
+            Assert.True(IsZero(Assert.IsType<byte[]>(secrets.ParsedToken)));
+            fixture.AssertSessionRevoked(secrets.ParsedToken);
+            fixture.AssertClosed();
+            fixture.Ssl.AssertWireConsumed(pending);
+            output.WriteLine($"路径={(pending ? "pending-success" : "direct-success")}; " +
+                $"观察器操作={(dispose ? "Dispose" : "RevokeForOwnerCleanup")}; " +
+                "原认证Task拒绝交付，撤销后attach同步拒绝且零工厂调用，原TCP/SSL各关闭一次。");
+        }
+        finally
+        {
+            await FinishVideoLifetimeAsync(fixture, rejectedAttach);
+        }
+    }
+
+    private static async Task FinishVideoLifetimeAsync(Fixture fixture, params Task?[] attempts)
+    {
+        fixture.Ssl.ReleasePayload();
+        fixture.TcpClose.Release();
+        fixture.SslClose.Release();
+        try
+        {
+            // 先观察原认证Task，确保构造观察器已退出，再join包括断言失败路径上的子生命周期。
+            Task<AuthenticatedControlSession> original = await fixture.Returned.Task.WaitAsync(Guard);
+            await ObserveAsync(original).WaitAsync(Guard);
+            foreach (AuthenticatedControlSession session in fixture.Constructions)
+                await session.CloseAndJoinAsync().WaitAsync(Guard);
+            foreach (Task? attempt in attempts)
+                if (attempt is not null) await ObserveAsync(attempt).WaitAsync(Guard);
+        }
+        finally
+        {
+            await fixture.FinishAsync();
+        }
+    }
+
     private static void AssertOutcome(Task original, Exception? observed, Fixture fixture, bool canceled)
     {
         Assert.NotNull(observed);
@@ -429,6 +678,7 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
         internal ConcurrentQueue<AuthenticatedControlSession> Constructions { get; } = new();
         private readonly ConcurrentQueue<byte[]> _constructedTokens = new();
         internal Action? ObserveParsedSuccess { get; set; }
+        internal Action<AuthenticatedControlSession>? ObserveConstruction { get; set; }
         internal int FallbackDisposeCalls { get; private set; }
         private readonly TransportTimeouts _timeouts = new(
             connectTimeout: TimeSpan.FromSeconds(5), handshakeTimeout: TimeSpan.FromSeconds(5),
@@ -453,14 +703,14 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
         internal TimeSpan FinalBudget => Clock.FinalBudget;
 
         internal Fixture(bool pending, bool callerFinalCancellation, int cleanup, bool pausePayload,
-            bool wrongProof = false, Exception? observerError = null)
+            bool wrongProof = false, Exception? observerError = null, bool forceFinalTimeout = true)
         {
             Pending = pending;
             _cancel = callerFinalCancellation;
             _observerError = observerError;
             _keyBefore = Key.ToArray();
             Clock = new(pending, callerFinalCancellation,
-                expireAfterConstruction: !callerFinalCancellation && observerError is null, Caller.Cancel);
+                expireAfterConstruction: forceFinalTimeout && !callerFinalCancellation && observerError is null, Caller.Cancel);
             byte[] pin = Convert.FromHexString("808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F");
             Assert.True(ConnectionTarget.TryCreate(Guid.NewGuid(), IPAddress.Loopback, 12345,
                 Convert.ToHexString(pin), out ConnectionTarget? target));
@@ -488,7 +738,7 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
                 return Task.FromResult(Connection);
             }, session =>
             {
-                // 仅保存真实对象和解析帧观测；不调用 Dispose/Revoke，也不取消 caller。
+                // 先保存真实对象和解析帧；仅新用例显式配置的观察动作可尝试attach或撤销。
                 Constructions.Enqueue(session);
                 byte[] originalToken = ReadSessionToken(session);
                 _constructedTokens.Enqueue(originalToken);
@@ -496,6 +746,7 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
                 ObserveParsedSuccess?.Invoke();
                 Clock.SessionConstructed();
                 if (_observerError is not null) throw _observerError;
+                ObserveConstruction?.Invoke(session);
             });
             _thread = new Thread(() =>
             {

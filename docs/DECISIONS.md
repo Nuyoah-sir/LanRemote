@@ -1386,3 +1386,22 @@ Security（`35506b5`）；阶段 2 开工盘点发现 TFM 约束后重定位—�
 **Evidence**：新增47例（预算27、公开认证入口传播20）；受控SSL走严格帧与独立HMAC oracle，不冒称真实TLS。最后一字节到达、payload timer释放、真实构造observer各自驱动时间，避免第N次取时自证；固定400ms构造前+600ms observer+250ms消费者延时由5000ms原预算扣至3750ms。非标准频率、UTC跳变、B±1 tick、负elapsed、重入撤销/取消和无关闭/原token/proof有效均有断言。未声称直接观察MAC内部耗时。
 
 六轮单点变异（success重采样、pending换起点、去封顶、>=变>、删后置撤销、删后置取消）分别16/10/6/11/2/2红，每轮47例；恢复原字节后47绿。pending变异经通知边界脱敏为固定认证异常，结合唯一变异与断言位置定位，不把TRX包装误说成直接显示内层断言。初始2项同步Theory误用Timeout属测试错误，去除该标记后定向112通过。最终双配置全量结果见HANDOFF§19.11；未动M4、系统网络或默认Control-only。
+
+### ADR-056 — 客户端父子生命周期与联合交付
+
+**日期**：2026-09-30。**Context**：原认证构造 observer 能看到尚未最终交付的 session；连接关闭不代表原 connect/init/read 或取消回调已退出。高层第二 TLS 接线前必须先保证所有权与交付边界，不以缺少父撤销检查的 public Attach 抢跑。
+
+**Decision**：
+1. 认证公开入口在 AuthenticateConnectedAsync 及其窗口释放完全返回后，同秘密锁 CommitDelivery；已撤销优先于 caller 取消，提交后不再插入可失败步骤。只有新子操作要求已交付；旧 Stream、proof、预算查询及 public 表面不扩大或收紧。
+2. 一个固定 attach 槽、一个固定 read 槽，worker 在父锁内登记后于锁外执行原操作并 await 原 Task；同步工厂前缀同样受跟踪。worker 不绑定 Task.Run 调度取消，避免已登记任务被取消得不执行。失败即永久耗用本地单次尝试，入口拒绝不消费，Control 不因此关闭。这是客户端保守政策，不改变服务端仅正确 proof 原子绑定才消费的规则。
+3. 迟到连接先接管再裁决停止；init 完成后 reader 仍仅是候选，预算检查后复查可重入的父/子状态再提交。原 reader 返回的帧归高层暂持，同父锁终检才交给调用方；未交付帧在锁外精确释放。提交后的停止/取消不追溯回收。持续读不受 attach TTL 约束。
+4. RevokeForOwnerCleanup 只逻辑失效/清零/标记子停止，零网络与回调；public Dispose 首个撤销者先独立请求 Control/video 关闭并只等原 Control 同步关闭，重复调用立即返回；新增 internal CloseAndJoinAsync 返回共享任务，等待两个连接及子原操作/取消/reader/迟到回收全部结束，不消费 public 错误报告权。
+5. 子停止先逻辑标记，连接关闭、reader 释放与任意 CTS.Cancel 回调独立安排；join 先等已登记 attach/read，再补齐迟到资源。操作只能请求 stop，不能等待包含自身的 join。不承诺硬中断不合作代码，外部借用委托不得留下未返回的 I/O。caller 注册在锁外建立，原 worker 覆盖异步解绑，提交后的 caller 取消不追溯停止会话/帧。
+6. 错误来源固定有界，join 完成只代表所有尝试退出，错误见 LifetimeErrors 稳定只读快照。原 Task 多错保留完整树；单错仅移除 Task 自加的最外单项容器，用户自己的 Aggregate/InnerException 不 Flatten。下层 helper 若已丢失分支，不声称本层可以还原。
+7. 测试用实例级 joinScheduler 默认线程池，严格单项测试调度器用于同步推进 join 至原 read await；这比等待 close/cancel 信号后瞬时读取 IsCompleted 更强。未新增 public 或全局测试开关。
+
+**Evidence**：新增63个展开用例（生命周期57、真实公开认证路径最终交付6）；定向175 PASS。初轮单错容器身份与ObjectDisposedException全名预期分别2/4失败，前者修生产诊断、后者校正新增测试预期，原断言未放宽。变异先揭示关闭信号单等造成Guard遮错、最后兜底Dispose覆盖主Assert、瞬时join采样盲区；分别改为观察原Task竞速、仅隔离最终资源兜底异常、显式单项调度推进。旧无效/存活证据保留，不将其改写成通过。
+
+最终8轮单点变异分别4/3/2/2/2/3/2/2个运行期红例，覆盖最终交付、尚未交付门禁、入口重入、迟到连接接管、提交重入、帧联合终检、原read join、多故障保真；无Guard或编译错误充数。恢复逐字节一致后175绿；双配置各2851 PASS，四build零警告错误，见HANDOFF§19.12。
+
+**Limits / next**：本片是 internal 生命周期底座，initialize 成功只是借用委托合同，不等于已接严格 ACK；没有执行期 attach timer，只做启动/交付预算检查。下一片先补 child 拥有的原截止计时器和回调join/诊断、敏感hello/wire缓冲释放，再接真实第二TLS实际pin/proof和ACK SessionId匹配。Control唯一reader、远端Control关闭主动感知、采集/JPEG/WPF/十分钟DoD均未完成；受控SSL测试不是新真实TLS证据，不改默认Control-only、M4或系统网络。
