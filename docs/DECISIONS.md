@@ -1437,3 +1437,21 @@ SensitiveFrameWriter.WriteOwnedFrameAsync接管完整非null wire；校验stream
 两次变异暴露测试保护遮蔽：直接await观察器死等原Task会被WaitAsync代理变异卡Guard，改为正向发现实际registered await Task后Assert.Same原Task；非法长度拒绝测试的IO闸会遮住漏检，改先放IO使错误发送直接触发缺少异常断言。未放宽产品合同。有效8轮来自serial-02的1–7及serial-03的8（不是同目录8轮，前7不重跑）：红例2/2/2/2/3/2/2/2，分别前缀/证明字节/清零/原数组/Write代理/Flush代理/多错/精确长度。serial-01第5和serial-02第8的Guard均不计kill，证据保留。恢复原bytes并重建174绿；最后双配置各2963 PASS/0失败跳过，四build零警告错误，详见HANDOFF§19.14。
 
 **Limits / next**：当前是内部敏感写出前置，不是已接线的高层AttachVideoAsync，不改public表面/Control-only默认。下一片以Control冻结目标走生产TlsClientConnector、第二actual presented pin调用封闭CreateVideoAttachProof、敏感hello写出、精确一帧严格ACK并匹配SessionId；失败只join自己成功登记的attempt，不能stop赢家或在原worker内自join。真实客户端第二TLS、Control唯一reader/主动关闭感知、采集显示及十分钟DoD未完成；M4/现网/App不动。
+
+### ADR-059 — 客户端真实第二 TLS、严格单帧 ACK 与本 attempt 收尾
+
+**日期**：2026-09-30。**Context**：ADR-056/057/058已分别完成父子生命周期、原success截止和敏感wire；本片组合成internal真实附着路径，暂不公开视频会话或改变Control-only行为。
+
+**Decision**：新增AuthenticatedControlSession.VideoAttach.cs。无委托AttachVideoCoreAsync固定调用生产TlsClientConnector；实例级internal接缝仅替换连接工厂，要求返回新建独占的第二连接，不允许父连接/共享连接。根据已交付Control Identity重建ConnectionTarget，对IPAddress和pin使用独立副本，不重新发现。第二TLS使用TransportTimeouts.Default（TCP3秒/TLS5秒），证书校验沿用父clock；TCP/TLS CancelAfter仍是系统timer。整体attach受原success预算约束，不声称继承父连接未保存的自定义timeouts。
+
+同gate完成资格检查、StartVideoLifetimeAsync登记及捕获本child；登记失败的重复/clock重入输家不清理赢家。直接返回原connect Task，不加async包装丢兄弟异常。初始化必须验证第二Identity的PinsMatch、DeviceId、地址、端口和expected pin一致；proof使用实际PresentedCertSha256，生产来源为真实证书回调。Host同子网→准入→TLS→router不绕过，loopback特许仅测试。
+
+先借用Stream再生成hello。同步helper用RNG生成nonce，调用封闭proof helper和VideoHelloWire，finally清理自有nonce/proof；writer接管后在await前放弃外层wire所有权，原Write/Flush退出才可擦除。ACK使用token-only FrameReader，无新阶段timer；uint域校验1..4096再分配，严格parser后匹配父SessionId，错会话固定FrameProtocolException("video-attach-ack-session-mismatch")。成功取得payload后finally清零，失败读取由FrameReader清零。只消费一个ACK，不探EOF、重试、drain或预读，后续第二ACK由视频reader以video-magic拒绝。
+
+原attach失败退出后外层仅await本child.StopAndJoinAsync，原worker不自join，也不关闭仍有效的Control。稳定child诊断先于primary，防御性join异常最后；顶层按引用双向包含归并，后根包含旧根时替换旧根，互不包含但共享叶子仍保留两根。不Flatten，不按类型/文本去重，不改原树内部重复引用；单根EDI原样throw。底座成功联合提交之后，不追加caller/预算终检追溯推翻交付。
+
+**Evidence**：新89展开例（组件70/真实TLS19）。覆盖真实客户端双TLS/router、独立HMAC、actual换证pin回调拒绝、ACK粘连/分片/错会话/第二ACK、身份偏差、原wire/ACK数组清零、不合作I/O与慢join、重复输家和完整异常树。独立审查补IPAddress非同引用断言。首build两个nullable警告加显式target非null检查消除；首宽筛137中1红来自Task.WhenAll错误排序假设，改为先验证原Task树组成，再逐项引用/顺序比较，不排序或Flatten。修正后89定向通过。
+
+8轮单点变异红例2/6/8/4/1/1/1/2（共25），依次删除SessionId匹配、ACK清零、外层join等待、反向包含、增加connect async包装、删除DeviceId校验、删除地址复制、删除敏感write等待。主线程逐条解析10份TRX，全部目标运行期断言，无Guard/编译失败充数；第8轮未运行WaitAsync候选，不冒称该变异已验证。源码7373字节与备份相同，SHA256 c0b8d17d6205ff314bd361f6a835c67b1243b1cc0d222d57352d9dff16a8f8bd；385个保护文件未变、34个恢复产物与基线一致，恢复重建89绿。最终solution/IsolatedAcceptance双配置四次Rebuild零警告错误；主线程逐条核验12份TRX，Debug/Release各3052 PASS（196/299/3/66/2095/393），0失败跳过；验证后源码/测试未变。详见HANDOFF§19.15。
+
+**Limits / next**：expected/presented正常一致时，替换proof入参可能是等价变异；实际来源靠源码链路、偏差拒绝与真实换证共同验证。83字节既有proof transcript含nonce副本、未擦除，但不包含sessionToken/proof；本片不扩修它，不承诺TLS/Stream/HMAC内部副本擦除。FrameReader更底层已丢失的多fault不能在此恢复。测试接缝不是恶意进程内安全边界。尚无public AttachVideoAsync、Control唯一reader/远端关闭主动感知、采集/JPEG/显示或十分钟DoD；下一片先补Control reader生命周期再封闭公开外壳。无M4重验、现网/防护/App修改或新包。
