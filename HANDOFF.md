@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-09-30（eb448d8父子生命周期与联合交付，各2851 PASS；高层附着/M5未完成，§19.12）**
+> 更新时间：**2026-09-30（b4febc5执行期原截止与计时器排空，各2899 PASS；高层附着/M5未完成，§19.13）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`eb448d8`实现客户端父子生命周期与联合交付（ADR-056），双配置各2851 PASS，见§19.12；原时间/预算与认证owner等历史保留于§19.11–19.6。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`b4febc5`实现客户端附着执行期原截止与计时器排空（ADR-057），双配置各2899 PASS，见§19.13；父子生命周期及前片历史保留于§19.12–19.6。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：原附着截止的执行期timer/回调join与敏感hello写出，再真实第二TLS/严格ACK，详见§19.12。** 内部父子生命周期已完成；尚无高层视频入口或执行期timer，默认Control-only不变。未接Control唯一reader、采集/显示或十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：敏感hello/wire单数组清零写出，再真实第二TLS/严格ACK，详见§19.13。** 内部父子生命周期与执行期timer已完成；尚无高层视频入口，默认Control-only不变。未接Control唯一reader、采集/显示或十分钟DoD；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：child拥有的原截止timer与回调join、敏感hello写出，再实际第二TLS/ACK（§19.12）；父子生命周期/原时间预算已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：敏感hello/wire单数组清零写出，再实际第二TLS/ACK（§19.13）；执行期原截止及排空已完成。** 不重跑M4；不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`eb448d8`**（客户端父子生命周期与联合交付，ADR-056）；前片8cefb34等历史保留。
-- **Working tree at validation：eb448d8源码/测试，验证后未变；双配置各2851 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-client-lifetime/final-{Debug,Release}_*.trx`，四build零警告错误（§19.12）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
+- **Last code commit：`b4febc5`**（客户端附着执行期原截止与计时器排空，ADR-057）；前片eb448d8等历史保留。
+- **Working tree at validation：b4febc5源码/测试，验证后未变；双配置各2899 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-client-deadline/final-{Debug,Release}_*.trx`，四build零警告错误（§19.13）。代码提交后仅文档记账；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2848,3 +2848,17 @@ Control只对传入复合故障避开caller取消翻译；实例readonly委托�
 **Last code commit：eb448d8（6files/+2264/-7）。Working tree at validation：该提交源码/测试，最终验证后未改，之后仅文档记账。** 主线程逐条解析`outputs/m5-client-lifetime/final-{Debug,Release}_*.trx`十二份：每配置**2851 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport1894/Acceptance393）；solution及IsolatedAcceptance双配置四build均0警告/0错误。受控SSL与手工黄金wire不是新真实TLS握手证据；原真实TLS测试随全量执行未放宽。未动产品App、M4物料、系统网络或防护；无GUI、打包、M4或Python打包重跑。
 
 **下一片（仅只读方案，未实施）**：真实高层attach前先补child拥有的执行期原截止timer：从success原锚点计算、不阶段续期，timer回调/释放/取消全部join且保存诊断；当前底座仅检查启动/提交预算，不会主动超时打断不返回的工厂。敏感hello序列化和wire副本须在原I/O结束后清零；复用原生命周期，以Control冻结目标建立第二TLS，用actual第二pin计算封闭proof，ACK严格解析并比对父SessionId，精确只读一帧后交付唯一reader。避免在worker内等包含自己的join、避免重复入口失败停止别人的attempt。Control唯一reader/远端Control关闭主动感知、采集/JPEG/显示/十分钟DoD仍未完成，M5继续。
+
+### 19.13 客户端附着执行期原截止与计时器排空（2026-09-30）
+
+**实现**：b4febc5/ADR-057，#153完成。每个已登记内部attach默认固定deadline worker，先登记后运行；原successReceivedAt、同源clock、min(hint,15000)不续期。禁用Create返回后接管timer，Create/Change/运行期clock/DisposeAsync的同步前缀及原任务均由该worker在父锁外跟踪。回调仅合并通知，早回调按原remaining重排，1ms只限通知粒度，连续立即唤醒超过32次失败。Control-only/纯预算查询不建timer；交付后不再采样attach clock。
+
+停止立即通知timer收尾并独立发起已知连接/reader/取消，不等挂起I/O。成功先等原deadline worker、原DisposeAsync及caller registration，再同gate检查父撤销>caller取消>deadline失败>普通stop、创建本地reader、原预算末检/重入复查后交付。原初始化失败仍保留原错误；原timer清理多错保完整树，固定来源诊断不Flatten。join完成不表示资源物理释放成功，不承诺硬中断不合作provider或I/O。
+
+**验证**：新增48展开例。首轮212=205PASS/7FAIL证实已关闭连接的reader提前构造抢走真实停止原因；调整顺序而非放宽断言后223定向通过。旧57生命周期测试启用手动timer但不关闭生产功能。受闸Task验证真实attach→deadline→原Dispose→provider Fire尾部await链；Guard先确定原Task获胜，不把保护Timeout当业务错误。Fire尾部不是暂停生产OnTimer本体，caller实际在途排空没有新增同等级证明；不外推全部clock锁外或真实TLS握手。
+
+首轮变异第5项因fake内部下限断言而Guard，无效、停止并恢复；正文直接检查due后新序列完成。最终目录`outputs/m5-client-deadline/mutation-20260930-164647-29de2bd5/`：8轮运行期红例1/1/7/7/1/1/4/3，无编译/框架/Guard充数；恢复原bytes并重新构建223绿。主线程独立解析10份变异TRX。源码SHA：deadline `9032e6aacfe5ace4800b5e13ddc3290225dce07faddd83226b37769a0138077a`；lifetime `782caec65023953167dfa7a26636a724dfafe72a67eb56c035d3730b191bdef3`。
+
+**Last code commit：b4febc5（5files/+2018/-26）。Working tree at validation：该提交源码/测试，最终验证后未改，之后仅文档记账。** 主线程逐条解析`outputs/m5-client-deadline/final-{Debug,Release}_*.trx`十二份：每配置**2899 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport1942/Acceptance393）；solution与IsolatedAcceptance双配置四build零警告错误，恢复源码SHA一致。原真实TLS用例随全量执行，未改旧断言；无M4/网络/防护/App改动，无GUI/新包/Python打包重跑。
+
+**下一片**：#155可清零VideoHelloWire完整单数组wire、SensitiveFrameWriter在原Write/Flush退出后全域清零，独立向量/原数组引用/多错保真测试。此片未开始编码；之后仍须高层AttachVideoAsync真实第二TLS actual pin/proof、严格ACK SessionId、Control唯一reader/远端关闭主动感知、采集显示及十分钟DoD，M5未完成。
