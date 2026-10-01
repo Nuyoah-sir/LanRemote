@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-10-01（511ca6d public视频及异步释放，各3167 PASS；M5采集显示未完成，§19.17）**
+> 更新时间：**2026-10-01（99dfd76 GDI/JPEG，各3324 PASS；M5有界生产/显示未完成，§19.18）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`511ca6d`完成封闭public视频接口及父子完整异步释放（ADR-061），双配置各3167 PASS，见§19.17；显式Control监控/真实第二TLS历史保留于§19.16及之前。** M4/Python打包均未重跑（§18.22历史）。
+> **最新代码：`99dfd76`完成主屏GDI及JPEG编码（ADR-062），双配置各3324 PASS，见§19.18；public视频/Control监控/真实第二TLS历史保留于§19.17及之前。** M4/Python打包均未重跑（§18.22历史）。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
 > 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：主屏GDI采集与JPEG编码，随后有界管线/Host产品装配/WPF显示，详见§19.17。** public视频入口与完整异步释放已完成，未调用附着时Control-only不变。十分钟DoD未完；不重跑M4、不绕过桌面权限、不改网。
+> **下一关：Sessions两级有界生产管线，再Host产品装配/WPF显示，详见§19.18。** GDI/JPEG及public视频已实现并独立验证，尚未产品接线。十分钟DoD未完；不重跑M4、不绕过桌面权限、不改网。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -35,11 +35,11 @@
 ## 1. 当前状态
 
 - **当前里程碑：M5 — 视频最小闭环，进行中。** 基础件完成，尚未达到采集/编码/第二TLS/VideoAttach/解码显示闭环及10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：主屏GDI采集/JPEG（§19.17），再有界生产管线/Host产品装配/WPF显示及十分钟DoD。** public视频接口及异步释放已完成；不重跑M4，不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
+- **下一步：Sessions两级有界生产管线（§19.18），再Host产品装配/WPF显示及十分钟DoD。** GDI/JPEG与public视频已完成独立验证；不重跑M4，不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`511ca6d`**（封闭public视频/父子异步释放，ADR-061）；前片历史保留。
-- **Working tree at validation：511ca6d源码/测试，验证后未变；双配置各3167 PASS/0失败/0跳过。** 主线程逐条解析12份`outputs/m5-public-video/final-02/final-{Debug,Release}_*.trx`，四Rebuild零警告错误，307文件SHA前后一致（§19.17）。首次全量旧public白名单失败保留，修正后独立目录重验；无新包/GUI/M4重跑/改网。
+- **Last code commit：`99dfd76`**（GDI/JPEG，ADR-062）；前片历史保留。
+- **Working tree at validation：99dfd76源码/测试，验证后未变；双配置各3324 PASS/0失败/0跳过。** 主线程逐条解析14份`outputs/m5-capture-jpeg/final-20261001-074525-215929`内TRX，四Rebuild零警告错误，319文件SHA前后/当前一致（§19.18）。初轮WPF吞输出超限错误已修并保留原证据；无新包/GUI/M4重跑/改网。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2916,3 +2916,15 @@ Control只对传入复合故障避开caller取消翻译；实例readonly委托�
 首次final Debug总3166PASS/1FAIL（Transport2209/1）来自遗漏旧AttachBudgetTests public方法白名单，与新合同冲突；仅增加AttachVideoAsync/DisposeAsync预期，其他预算/秘密/构造封闭断言保留。该轮在Debug后停止，未称Release已跑。独立final-02重跑四完整Rebuild及双配置全量：**Debug/Release各3167 PASS/0失败/0跳过**（Core196/Protocol299/Integration3/Security66/Transport2210/Acceptance393）。主线程逐条核验12TRX及日志，四build零警告错误，307源码/测试/工程/脚本SHA前后及核验时一致；Last code commit **511ca6d**，Working tree at validation为该提交源码/测试，之后仅文档记账。
 
 **边界与下一步**：投影受闸是core已完成/public未完成，不声称固定底层Committed后worker未完最窄窗口；TLS事后await只证明最终退出，强join来自组件。Capture与Sessions仍空，App未接Transport，Host router/frame source仍internal，产品尚不能看屏。下一片实现Core既有接口的GDI主屏raw+WPF JPEG编码（net10.0-windows，不加WinSDK版本TFM），合成像素/离屏GDI先验证；主屏5FPS/50%/quality60由上层串行有界调度。再补Host显式public安全装配（不暴露秘密/流、不加friend绕层）、raw/encoded两级容量1–2队列、WPF显示与十分钟DoD。无M4重跑、真实桌面采集、GUI、新包或现网/防护/App修改。
+
+### 19.18 主屏 GDI 采集与 JPEG 编码（2026-10-01）
+
+**实现**：99dfd76/ADR-062，14files/+3096/-12。Capture既有接口落地：GdiScreenCaptureBackend只读主屏物理模式、设备本地坐标、top-down BGRA alpha255，清理native成功且显示身份/模式复查后交付；WpfJpegFrameEncoder最近邻缩放/BGR24/WPF JPEG、实际payloadLength、帧ID不回绕、输入raw借用。PooledByteOwner精确长度/清零整个租用数组。公开operation单飞、不排队，直接await原worker，取消不提前归还原操作使用的资源；两个internal只读worker观察非产品替换入口。Capture只加UseWPF不加版本化WinSDK；测试项目入solution（CLI将旧Acceptance配置块等价重排）。
+
+**发现与修复**：初145测144PASS/1FAIL，真实WPF Save吞MemoryStream.Write超限NotSupportedException并正常返回(length0)。新增JpegOutputStream锁存底层错误，Save后原错优先终检，吞错后正长度片段同样拒绝；Save自身与底层独立错误保留原树。追加12例共157（GDI92/JPEG57/owner8）。无扩展错误合同的GDI API不猜LastError；清理顺序/失败安全兜底与原错保留均覆盖。独立复审无剩余阻断。
+
+**变异实证**：`outputs/m5-capture-jpeg/mutation-20261001-065758-565d8928`中3–8有效24断言红；1/2仅8个Guard，不计。测试helper改从公开operation的任意awaiter Task正向登记后再Assert.Same原worker，不能将就绪条件绑定正确目标。独立`mutation-20261001-073113-a68737fa`仅复验1/2，实际身份断言5+3红，恢复157绿；八项跨版本联合有效32目标红（5/3/3/4/1/9/6/1），不称同批八轮。主线程逐条核验10份变异TRX的32断言与8Guard分类；14保护文件每轮恢复，旧181证据不改。两helper最后4处xUnit2031等价改Assert.Single谓词重载，未重跑六有效变异。
+
+**Last code commit：99dfd76。Working tree at validation：该提交源码/测试，最终验证后未改。** `outputs/m5-capture-jpeg/final-20261001-074525-215929`串行solution/IsolatedAcceptance双配置四次完整Rebuild均0警告/0错误；两配置全量各**3324 PASS/0失败/0跳过**（Core196/Security66/Protocol299/Integration3/Transport2210/Acceptance393/Capture157）。主线程独立解析14份实际TRX逐结果/counters与四日志，并核验319源码/工程/测试/脚本SHA前后及当前一致；非3167+157推算。六命令退出0，原runner和直接子命令均退出；没有全机进程扫描或Job级排空结论。
+
+**边界与下一片**：合成真实JPEG/离屏GDI通过，不是实时桌面或混合DPI验收；32MiB仅payload上限非总内存；不外推十分钟稳定。Sessions仍空，下一片实现独立会话两级容量1–2 raw/encoded DropOldest生产管线，初始5FPS/50%/quality60，不让网络阻塞采集；Stop完整join原Capture/Encode和清理，确认为内部队列Stop的ODE仅在干净全收尾后转EOF。再Host显式public装配（需会话stop/join，不仅read委托，不能加friend绕层）、WPF显示与十分钟DoD。M5仍未完成，不重跑M4/不改现网或防护/不绕过桌面权限/不出新包；App未变。

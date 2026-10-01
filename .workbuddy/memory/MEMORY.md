@@ -1,15 +1,16 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至061public视频及异步释放；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至062 GDI/JPEG；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-10-01，优先于下方历史记录）
 
 M4已收口（§18.25/c251d21）：2596357双配置1433/Python14；两机认证/联网/审批/短码/遮挡/关窗及b42a1553坏proof/0cd5d3b8停止通过。9月29日用户确认“上一轮询问的实屏情况都正常”，DoD/21步齐。原结局不翻绿、不重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；旧改网/Undo停用，SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界见§18.22–23。
 
-最新511ca6d/§19.17/ADR061：public AttachVideoAsync固定真实TLS/严格ACK/monitor，sealed AuthenticatedVideoSession只原Task ReadFrameAsync和异步释放。child预建wrapper，成功投影无后置终检；未启动空Task屏障→真实await投影→父gate发布→Start，修scheduler同步重入/抛错漏追踪，失败只停止join自己attempt。父DisposeAsync缓存报告等raw+accepted projection，子仅raw；稳定完整原错Aggregate保树，主动close的IO/ODE/OCE不隐藏，不消费其他观察者。50新例(42组件/8TLS)，8变异跨两目录联合有效20目标断言红(1/2/2/3/3/3/3/3)，旧Guard/非显式ODE不计；第2强化成功Assert.Null后单点复验，其余7不重复。14TRX/原bytes/311保护/4产物核验。首次final旧预算public白名单1红，最小修正后final-02双配置各3167 PASS(196/299/3/66/2210/393)，12TRX逐条/四Rebuild零警告错误，307冻结SHA一致。
-下一片主屏GDI raw+WPF JPEG实现Core既有接口(net10.0-windows不加WinSDK)，先合成像素/离屏GDI；上层5FPS/50%/quality60，再raw/encoded容量1–2管线、Host安全public装配/WPF显示/十分钟DoD。Capture/Sessions仍空，App未接Transport；Host router/frame source仍internal，不能加friend绕层。f3dbccc一次None-token Control监控及8ae502b真实第二TLS/b4febc5截止/00ecff3敏感wire不重做：父join含原同步前缀/AsTask/Task，EOF/错/额外数据撤销；旧入口Control-only零读/owner纯撤销。冻结IP/pin/actual proof/ACK SessionId与清零；212原wire等IO退出清零，success预算min(hint,15000)，负或>=拒。Task异常比原树不猜顺序。投影闸门不外推最窄Committed后worker未完窗口；83字节nonce transcript未擦除(无token/proof)，不外推TLS擦除。M5未完，无M4/改网/GUI/新包。
+最新99dfd76/§19.18/ADR062：主屏GDI物理模式/本地坐标/top-down BGRA alpha255；清理完成再交付。WPF JPEG最近邻缩放/实际payload/ID不回绕，借用raw；单飞公开operation直接await原worker，取消不提前结束。WPF实测吞固定MemoryStream.Write超限NotSupportedException，Save正常返回length0；JpegOutputStream锁存原错并Save后先终检，吞错后正长度片段仍拒绝。157新例(GDI92/JPEG57/owner8)，8变异跨两目录有效32目标红，首轮1/2的8Guard不计；从公开operation读任意awaitedTask判就绪再Assert.Same原worker，不能把就绪绑正确答案。只重验1/2，后等价消4警告。四Rebuild0警告错误、双配置各3324 PASS(196/66/299/3/2210/393/157)，主线程14TRX/319源码前后当前SHA一致，outputs/m5-capture-jpeg/final-20261001-074525-215929。
+下一片Sessions两级raw/encoded容量1–2 DropOldest生产管线，5FPS/50%/quality60；然后Host安全public装配/WPF显示/十分钟DoD。Sessions仍空，App未接Transport；不能加friend绕层。只验合成JPEG/离屏GDI，无实桌面/混合DPI/权限绕过/新包/M4重跑/改网，32MiB是输出非总内存上限。
+511ca6d public视频/异步释放及f3dbccc Control监控不重做，详§19.17/16：wrapper预建、成功投影无后置终检；调度先发布投影再Start，失败仅join自己attempt。父释放等raw+accepted projection，子仅raw；完整原树Aggregate，主动close错误不隐藏。冻结IP/pin/actual proof/ACK；212原wire等IO退出清零，success预算min(hint,15000)，负或>=拒。83字节nonce transcript未擦除(无token/proof)，不外推TLS擦除或最窄Committed窗口。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
 
@@ -56,7 +57,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
 | **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：`511ca6d`public视频/异步释放，各3167 PASS；采集显示/十分钟DoD未完，§19.17。 |
+| **M5** | 进行中：`99dfd76` GDI/JPEG，各3324 PASS；有界生产/Host装配/显示/十分钟DoD未完，§19.18。 |
 | M6~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。

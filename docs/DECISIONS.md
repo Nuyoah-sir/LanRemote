@@ -1483,3 +1483,15 @@ child构造时预建PublicSession；public读取直接返回底座原Task并透�
 八候选的有效证据跨两个目录：outputs/m5-public-video/mutation-20261001-043937-00a86d4f中1/3/4/5/6/7/8，加mutation-02-assert-null-20261001-050104-b231e5dc中的2。有效目标断言1/2/2/3/3/3/3/3共20；首轮1的组件Guard、首轮2的两个非显式断言ODE不计，原证据不覆盖。第2仅给成功合同加Guard外Record.ExceptionAsync及Assert.Null后单点复验；其余7项不重跑，不称单目录同测试版本8轮。主线程逐条核验14TRX及生产两文件原bytes，311保护文件、4产物前后核验；各基线/恢复50通过。最终双配置全量与具体提交见HANDOFF§19.17。
 
 **Limits / next**：投影闸门固定的是core已完成/public尚未完成窗口，不扩称底层Committed已设而原worker未退出最窄窗口。真实TLS只证明最终退出，强join依赖组件实际awaiter链。子报告不包含父拥有的投影调度错误；父会报告它。主动关闭可能返回IO/ODE/OCE诊断，调用层须保留主错并单独呈现收尾错误。M5仍欠GDI/JPEG/有界流水线/WPF显示/Host产品装配与十分钟DoD，本片不是产品看屏完成。未改M4、现网、防护或App。
+
+### ADR-062 — 主屏 GDI 拥有型采集与硬边界 JPEG 编码
+
+**日期**：2026-10-01。**Decision**：Capture实现既有IScreenCaptureBackend/IFrameEncoder，保持net10.0-windows，仅增加UseWPF，不引入System.Drawing或版本化WinSDK。GDI仅当前主屏，EnumDisplayDevices/Settings取物理模式，设备DC本地(0,0)，top-down32bit DIB、BitBlt(SRCCOPY|CAPTUREBLT)、GdiFlush后复制并设alpha255。交付前复查显示身份/几何；不修改DPI awareness、权限或桌面。旧选入对象与bits借用，先恢复再删除；恢复失败先删除memory DC，若也失败不得删仍可能选入的bitmap。所有清理错误保留，失败不交付；无扩展错误合同的API不猜LastError，仅BitBlt/CreateDIBSection捕获可信扩展错误。
+
+JPEG用确定性最近邻、BGR24、floor缩放到至少1×1，尊重源stride并清零padding；支持既有质量档位。输入raw借用直到原Encode完成，输出实际payloadLength独立owner；帧序号仅成功交付消耗，最大值后拒绝不回绕。PooledByteOwner只暴露精确长度、整个池数组清零归还。每实例单飞、不排队；Monitor.TryEnter保护公开operation登记，资格取决于其完成状态，公开operation直接await原Task.Run，取消不代理完成/不提前释放原生操作仍使用的资源。OriginalWorker仅internal只读测试观察，不作产品依赖。
+
+**关键实测**：固定数组MemoryStream限制输出容量，但WPF/WIC Save会吞底层Write的NotSupportedException并正常返回（本机超限样本length0），不能只依赖Save是否抛错或Length>0。JpegOutputStream锁存首个底层写/长度/定位错误，Save后先重抛原错；Save自身另错时完整保留两原对象及原树。测试吞错后写4字节正长度片段仍拒绝，不能交付截断JPEG。32MiB是编码输出上限，非raw/池桶/WIC总内存上限。TargetFps只校验，上层调度初始5FPS/50%/quality60。
+
+**Evidence**：99dfd76，157新增展开（GDI92/JPEG57/owner8），合成JPEG真实解码、3例真实离屏GDI，不读取实时桌面。首145中144绿/1红促成WIC吞错修复；追加12项回归。独立审查后修原await观察点：从公开operation读取任意已登记awaiter Task再Assert.Same原worker，就绪不能绑定正确目标；两批八变异有效32目标红(5/3/3/4/1/9/6/1)，首轮8Guard排除不追认，六有效不重跑。复验后4处xUnit2031等价改predicate重载。最终四完整Rebuild零警告错误，Debug/Release各3324 PASS，主线程14TRX与319源码SHA独立核验，详HANDOFF§19.18。
+
+**Limits / next**：无真实DISPLAY DC/混合DPI/长期内存稳定或产品看屏结论；原同步native/WIC不返回则不承诺停止时限。删除API失败可残留资源但明确报告。Sessions两级有界生产管线、Host公开安全装配、WPF显示及十分钟DoD随后实现；M4/现网/防护/App不动。
