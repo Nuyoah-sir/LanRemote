@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
+    <InternalsVisibleTo Include="LanRemote.Sessions.Tests" />
   </ItemGroup>
 
 </Project>
