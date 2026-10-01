@@ -1,25 +1,23 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至063 FramePipeline；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至064会话拥有型视频工厂；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-10-01，优先于下方历史记录）
 
-最新50d54af/§19.19/ADR063（7files/+3659）：Sessions FramePipeline双级raw/encoded容量1或2 DropOldest，5FPS/.5/60；capture/encoder专用借用至Completion，不由管线释放。单次Start发布屏障；internal观察仅friend Tests。直接await原Capture/Encode含同步前缀/尾部，完整join双循环+raw.Stop/encoded.Stop/Cancel三独立清理，再释放CTS；保留多fault原树不Flatten。EOF先可取消队列读/释放读槽，再不可取消等Completion，干净null否则稳定Aggregate；不自join/不回收已交付帧。
-104新例=Flow36/Lifecycle60/Start8。初82中2红为fixture提前读Worker（Expected null），改先等InvocationExited；initial xUnit2031/fixed CS4014均等价修，旧证据保留。八变异1/2/2/2/8/2/1/2共20目标红、0Guard，每轮恢复目标绿；3/4是首轮原await身份非取消时序，8明确Assert提前退出非注册数。主线程19变异TRX及final16TRX/六日志rc/hash核验：双配置各3428绿，四Rebuild零警告错误，328SHA前后/记账前当前一致。变异55保护与final328不同scope；final全机枚举被拦，仅runner+6direct退出，不沿用变异全机结论。证据outputs/m5-frame-pipeline/{20261001-093617-singlepoint8/report.json,final-20261001-094907-708217/summary.json}。
-下一片Core生产factory/producer安全contract+Sessions拥有型factory，再Transport每已认证会话生命周期public装配（ACK flush后创建、停止join、无迟到read初始化），再App/WPF显示。Host尚未落地；未App接线/实屏/十分钟DoD，M5未完成。不加friend绕层，不重跑M4/改网/绕权限/出新包。本轮仅四文档，无dotnet/代码测试修改/提交/任务。
+最新9cede86/§19.20/ADR064（6files/+2583）：Core public IVideoFrameProducer/Factory仅Guid/帧，不含Stream/会话token；Sessions factory每会话专用唯一主屏，原Task.Run创建取消不使用WaitAsync代理，失败完整回滚；适配器Completion覆盖管线和独立双依赖释放，共享引用一次，Read已交付帧归caller，EOF等清理，原多fault嵌套不Flatten。factory不验证认证；Host仍未落地。
+初factory200绿/2warning等价修；producer初build边写CS0246，次217/218仅tail夹具过早注错，修后218绿/0warn，旧日志保留。Sessions218=旧104+新114（Factory96/Producer18）；七变异3/1/2/2/12/6/3共29目标Assert红、0Guard，旧分类器首轮漏报但原TRX再次证实、各轮恢复绿；变异保护21≠final334 scope。final16TRX两配置各3542 PASS，四Rebuild0警告/错误，六命令rc0/hash核对；334源文件SHA前后及本轮编辑前当前一致（HANDOFF记账后例外）。仅runner+6direct退出，不称全机扫描。证据outputs/m5-frame-pipeline/factory-mutation-20261001-104604/report.json、outputs/m5-video-producer/final-20261001-105537-153331700/summary.json。
+下一片Transport每已认证Host会话ACK flush后创建并父子join、防迟到read初始化，然后App/WPF显示与十分钟DoD；M5未完成。不重跑M4/改网/防护/绕权限/出新包。
+上次记账历史：50d54af/§19.19/ADR063为双级有界FramePipeline(104新例)，八变异20目标红/0Guard；最终3428绿、四Rebuild0警告错误、328SHA；详情见原节及上次证据。本轮仅四文档，无dotnet/代码测试修改/提交/任务。
 
 M4已收口（§18.25/c251d21），不翻绿/重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界§18.22–23。
 
-前片99dfd76/§19.18/ADR062：GDI物理主屏/BGRA alpha255/清理后交付；JPEG最近邻、实际payload、ID不回绕、raw借用。单飞直接await原worker。WPF吞底层超限错，JpegOutputStream锁存并Save后先终检，正长度截断也拒绝。157新例、跨两目录32目标红（首轮8Guard不计），双配置3324绿/四Rebuild零警告错误/319SHA。只验合成JPEG/离屏GDI，32MiB是输出非总内存上限；详原节，不外推实屏/混合DPI。
-511ca6d public视频/异步释放及f3dbccc Control监控不重做，详§19.17/16：wrapper预建、成功投影无后置终检；调度先发布投影再Start，失败仅join自己attempt。父释放等raw+accepted projection，子仅raw；完整原树Aggregate，主动close错误不隐藏。冻结IP/pin/actual proof/ACK；212原wire等IO退出清零，success预算min(hint,15000)，负或>=拒。83字节nonce transcript未擦除(无token/proof)，不外推TLS擦除或最窄Committed窗口。
+历史速查：99dfd76/§19.18/ADR062主屏GDI物理BGRA/JPEG最近邻与原worker单飞；WPF吞底层写错须JpegOutputStream锁存，32MiB仅输出上限。157新例、32目标红（8Guard不计），双配置3324绿/四Rebuild0警告错误/319SHA；仅合成JPEG/离屏GDI，非实屏/混合DPI。511ca6d/§19.17 public外壳预建/投影先发布再Start，父等raw+accepted投影、子仅raw，完整Aggregate不吞主动close错；f3dbccc/§19.16 Control一次原读monitor。冻结IP/pin/proof/ACK，敏感wire等原IO退出再清零；83字节nonce transcript未擦除但无token/proof，不承诺TLS内部清零或最窄Committed窗口。
 
-用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
+审批按状态机接受时刻：elapsed>=budget拒，gate前计时含UI；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后终检，之前不改limiter；context loader至多一项实际store，迟到key先清零再释放准入，CTS不能硬中断同步DPAPI/gate/阻塞回调。客户端独占TLS到认证，presentedPin及grant proof验完才交会话，public无流/token/输入；hello后machine10s、challenge只收窄、独立approval60s。只消费首个终帧；DTO/TLS内部副本不保证擦除；clock变异须在被删检查之前客观固定到期，不把后置兜底误称单点覆盖。
 
-客户端高层入口独占TLS到认证，实际presentedPin+grant proof均验完才交会话；public无流/token/输入。hello后machine10s、challenge只收窄、一次pending后独立approval60s。只消费首个终帧；DTO string与TLS内部副本不保证擦除。变异抓到clock测试观察点依赖：到期事件必须放在被删检查之前，删检查不能顺带删掉到期事实；正确proof仍可被后置检查兜底，不把纵深防御误当单点覆盖。
-
-用户授权自主续作：自动测试通过即接下一任务，不等“继续”；仅真实人工/权限依赖停，不伪造。M4不再阻断M5；context单WorkLease先清零归还；Host180秒自然结束、提前停作废；成功按SessionId/负例四元组，采样跨度>=4s、最大/末间隔<=500ms、注销非强关才PASS。
+用户允许自动测试通过即接下一任务，只有真实人工/权限依赖停；M4不阻断M5。context单WorkLease先清零归还；Host180秒自然结束、提前停作废，成功SessionId/负例四元组，采样跨度>=4s、最大/末间隔<=500ms、非强关注销才PASS。
 
 ## 定位与硬约束
 
@@ -60,7 +58,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | 完成，2026-09-21两机24步/574绿，证据配对与机械INVALID_RUN见HANDOFF§15。 |
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：50d54af有界FramePipeline，各3428 PASS；Host/App/实屏/十分钟DoD未完，§19.19。 |
+| **M5** | 进行中：9cede86拥有型生产工厂，各3542 PASS；Host/App/实屏/十分钟DoD未完，§19.20。 |
 | M6~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。

@@ -1513,3 +1513,15 @@ Start为一次性CAS；Stop先赢则永不启动，Start先赢则收尾必须等
 最终`final-20261001-094907-708217/summary.json`（同上根目录）：四Rebuild零警告错误，六命令rc/hash核验一致；主线程16TRX逐条确认Debug/Release各3428 PASS（Core196/Security66/Protocol299/Integration3/Transport2210/Acceptance393/Capture157/Sessions104），0失败/跳过。328文件前后及记账前当前SHA一致，含HANDOFF，后续文档变更不冒充全清单仍相同。final枚举被拦，仅确认runner与6direct退出，不外推间接子进程或全机排空，不套用变异进程结论。完整实证见HANDOFF§19.19。
 
 **Limits / next**：无App接线/实屏/十分钟DoD，M5未完成。下一片Core生产factory/producer安全contract + Sessions拥有型factory；之后Transport每已认证会话生命周期public装配，ACK flush后创建、停止join、无迟到read初始化，再App/WPF显示。以上Host合同是计划而非已实现，不以read委托或friend绕过生命周期/分层。无M4重跑、现网/防护修改、权限绕过或新包；本轮仅文档记账，不运行dotnet、不改代码测试、不提交。
+
+### ADR-064 — 会话拥有型视频生产契约、完整依赖清理与Host认证装配边界
+
+**日期**：2026-10-01。**Context / Decision**：`9cede86`（6 files/+2583）在Core增加public `IVideoFrameProducerFactory`与`IVideoFrameProducer`，供未来Transport真实Host生命周期装配，而非通过internal friend/裸read委托绕层。`CreateAsync(Guid sessionId, token)`接受非空会话关联ID，返回尚未启动的生产者；Guid不是凭证，工厂不验证认证。生产者只暴露稳定`Completion`、一次`Start`、单消费者`ReadNextAsync`、`StopAsync`和`DisposeAsync`，读取只交付`EncodedFrame`/EOF，不暴露Stream、TLS、secret、会话token或认证状态。工厂构造仅保存委托、1或2的raw/encoded容量与时钟，不采集；对象由调用方停止/释放，工厂本身借用。
+
+Sessions公共`FramePipelineVideoProducerFactory`对每次创建依次取得会话专用capture、列表内唯一IsPrimary显示（不默认第一个）、会话专用encoder及未启动FramePipeline。委托同步前缀在不携带取消调度token的原`Task.Run`内，直接await原创建，不以`WaitAsync`/取消代理提前完成；各取得阶段返回后查创建取消，失败/取消完整回滚实际持有对象，全部原错和清理错保留。交付后创建token不再支配生产者。依赖须专用且不得由外部并发操作/释放；同一实例实现两个接口时仅按`ReferenceEquals`清理一次，不按值相等合并；工厂、委托目标、时钟不归生产者拥有。
+
+适配器创建即观察管线Completion，生产失败自动收尾，停止/异步释放共享稳定任务。先完整等管线原循环及清理，再并行调度两个依赖清理并完整join，包括Dispose同步前缀和异步尾部；同时实现`IAsyncDisposable`/`IDisposable`时优先异步，不再重试同步。已交付帧属caller；普通读取取消不停止生产，EOF/生产错误须等依赖清理完成并给同一完整结果。收集原Task多个fault根和嵌套Aggregate实例，不Flatten，不将faulted任务的OCE/清理异常伪装为正常取消；不join读取以免EOF反向等待产生环。依赖和回调不得等待自身生产者Completion/Stop/Dispose；不合作原操作没有硬停止时限。
+
+**Evidence**：工厂首轮200绿但CS4014/xUnit2031两警告，测试写法等价修复；生产适配器首编译CS0246来自边写边编译的夹具，第二轮217/218唯一tail故障夹具过早注错，修复后218绿及零警告/错误；原日志均保留，不把旧红改绿。Sessions新增114（Factory96/Producer18）加原104=218。七单点变异：创建取消代理/采集后漏取消/首显示/只等管线/WhenAny清理/值相等去重/只取首错，目标断言红3/1/2/2/12/6/3共29、0Guard，各轮恢复绿；旧分类器第1轮`not_killed`为漏报，审计及直接原TRX证实真红，变异保护21项不同于final334项。证据`outputs/m5-frame-pipeline/factory-mutation-20261001-104604/report.json`、14份变异/恢复TRX及`outputs/m5-video-producer/final-20261001-105537-153331700/summary.json`。最终四次solution/IsolatedAcceptance双配置完整Rebuild零警告/错误、六命令rc0及日志SHA一致；16份final TRX实际逐条Debug/Release各3542 PASS（196/66/299/3/2210/393/157/218），0失败跳过；334项SHA阶段前后及记账前当前一致，含HANDOFF，文档更改后此项例外。仅runner与六个直接dotnet子命令退出可证，全机进程枚举未有效，不能外推间接进程排空。详情见HANDOFF§19.20。
+
+**Limits / next**：本工厂不承担认证，Transport Host公共入口尚未落地。下一片在每个已认证Host会话ACK flush成功后创建producer，父子停止完整join且禁止迟到read触发初始化；随后App/WPF显示及实屏/十分钟DoD。现阶段没有产品看屏闭环，M5仍未完成；不重跑M4、改现网/防护、绕过桌面权限或出新包。此轮仅文档记账，不运行dotnet、不改代码测试、不提交。
