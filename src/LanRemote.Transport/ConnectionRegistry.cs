@@ -10,7 +10,8 @@ namespace LanRemote.Transport;
 /// <list type="number">
 /// <item><description>先<b>取消</b>，给 handler 自己收尾的机会；</description></item>
 /// <item><description>仍没结束的直接<b>砸掉底层 socket</b>——取消只是请求，
-/// 卡在不可中断的读里时不够。两段异步等待各有 deadline；同步取消回调及资源释放不受预算约束。</description></item>
+/// 卡在不可中断的读里时不够。两段等待各有 deadline；同步取消回调与资源释放异步发起，
+/// 完整回收时仍会 join 原任务。</description></item>
 /// </list>
 /// </remarks>
 public sealed class ConnectionRegistry
@@ -19,6 +20,8 @@ public sealed class ConnectionRegistry
     private readonly Dictionary<int, Entry> _entries = new();
     private readonly CancellationTokenSource _shutdown = new();
 
+    private readonly List<Task> _forceDisposals = new();
+    private Task? _cancellationTask;
     private int _nextId;
     private bool _stopping;
     private bool _canceling;
@@ -78,7 +81,7 @@ public sealed class ConnectionRegistry
     /// <summary>
     /// 停止并等待所有已登记连接结束。
     /// </summary>
-    /// <param name="timeout">两段异步等待的总预算；不约束同步取消回调和资源释放。</param>
+    /// <param name="timeout">两段等待的总预算；原取消与物理关闭回调仍由完整释放路径继续跟踪。</param>
     /// <returns>停机报告：总数、预算内未结束数、是否全部干净结束。</returns>
     /// <remarks>
     /// <b>不要用 bool 表达停机结局</b>（评审 B18）：预算超限与干净成功必须可区分，
@@ -92,53 +95,34 @@ public sealed class ConnectionRegistry
         }
 
         Entry[] snapshot;
-        bool cancel;
-        Task[] pendingCancellationDisposals;
+        Task cancellation;
         lock (_gate)
         {
-            cancel = !_stopping;
-            _stopping = true;
-            snapshot = _entries.Values.ToArray();
-            if (cancel)
+            if (!_stopping)
             {
+                _stopping = true;
                 _canceling = true;
+                snapshot = _entries.Values.ToArray();
+                // 已认领的 linked CTS 必须先解绑；取消回调可能同步阻塞，不能拦住 force。
+                Task[] pendingDisposals = snapshot.Where(entry => entry.CancellationDisposeStarted)
+                    .Select(entry => entry.CancellationDisposed.Task).ToArray();
+                _cancellationTask = Task.Run(() => CancelCoreAsync(snapshot, pendingDisposals));
+            }
+            else
+            {
+                snapshot = _entries.Values.ToArray();
             }
 
-            // 已认领的 CTS 回收仍留在表里；先等它们解绑，才能开始根取消。
-            pendingCancellationDisposals = cancel
-                ? snapshot.Where(entry => entry.CancellationDisposeStarted)
-                    .Select(entry => entry.CancellationDisposed.Task).ToArray()
-                : Array.Empty<Task>();
+            cancellation = _cancellationTask!;
         }
 
-        // 阶段 1：只有首个 Stop 发起根取消，期间租约结束不能同步解绑 linked CTS。
-        if (cancel)
+        await WaitAllAsync(snapshot, cancellation, Array.Empty<Task>(), Half(timeout)).ConfigureAwait(false);
+
+        // 即使根取消回调仍阻塞，也要在半预算后独立发出物理关闭请求。
+        Task[] forced;
+        lock (_gate)
         {
-            try
-            {
-                await Task.WhenAll(pendingCancellationDisposals).ConfigureAwait(false);
-                _shutdown.Cancel();
-            }
-            finally
-            {
-                lock (_gate)
-                {
-                    _canceling = false;
-                }
-
-                foreach (Entry entry in snapshot)
-                {
-                    DisposeCompletedEntry(entry);
-                }
-            }
-        }
-
-        await WaitAllAsync(snapshot, Half(timeout)).ConfigureAwait(false);
-
-        // 阶段 2：锁内检查并认领，锁外释放；旧快照不能再次释放已结束的连接。
-        foreach (Entry entry in snapshot)
-        {
-            lock (_gate)
+            foreach (Entry entry in snapshot)
             {
                 if (entry.RegistrationDisposed || entry.ForceDisposeStarted)
                 {
@@ -147,29 +131,17 @@ public sealed class ConnectionRegistry
 
                 entry.ForceDisposeStarted = true;
                 entry.ForceDisposeInProgress = true;
+                entry.ForceDisposeTask = Task.Run(() => ForceDispose(entry));
+                _forceDisposals.Add(entry.ForceDisposeTask);
             }
 
-            try
-            {
-                entry.Resources.Dispose();
-            }
-            catch (ObjectDisposedException)
-            {
-            }
-            finally
-            {
-                lock (_gate)
-                {
-                    entry.ForceDisposeInProgress = false;
-                }
-
-                DisposeCompletedEntry(entry);
-            }
+            forced = snapshot.Where(entry => entry.ForceDisposeTask is not null)
+                .Select(entry => entry.ForceDisposeTask!).ToArray();
         }
 
-        await WaitAllAsync(snapshot, Half(timeout)).ConfigureAwait(false);
+        await WaitAllAsync(snapshot, cancellation, forced, timeout - Half(timeout)).ConfigureAwait(false);
 
-        // 超时只报告，不撤销仍在使用的租约和 CTS。
+        List<Exception> errors = new();
         int unfinished = 0;
         foreach (Entry entry in snapshot)
         {
@@ -178,9 +150,189 @@ public sealed class ConnectionRegistry
             {
                 unfinished++;
             }
+
+            if (entry.CancellationDisposed.Task.Exception is { } failure)
+            {
+                errors.AddRange(failure.InnerExceptions);
+            }
+        }
+
+        if (cancellation.Exception is { } cancellationFailure)
+        {
+            errors.AddRange(cancellationFailure.InnerExceptions);
+        }
+
+        foreach (Task force in forced)
+        {
+            if (force.Exception is { } failure)
+            {
+                errors.AddRange(failure.InnerExceptions);
+            }
+        }
+
+        // 取消或物理关闭超预算时原 Task 继续由完整释放路径持有；
+        // 每条连接只有 Completion 与 CancellationDisposed 均成功才算完成。
+
+        if (errors.Count != 0)
+        {
+            throw new AggregateException("连接停机清理失败。", errors);
         }
 
         return new ConnectionStopReport(snapshot.Length, unfinished);
+    }
+
+    private async Task CancelCoreAsync(Entry[] snapshot, Task[] pendingDisposals)
+    {
+        List<Exception> errors = new();
+        try
+        {
+            Task all = Task.WhenAll(pendingDisposals);
+            try
+            {
+                await all.ConfigureAwait(false);
+            }
+            catch
+            {
+                if (all.Exception is { } failure)
+                {
+                    errors.AddRange(failure.InnerExceptions);
+                }
+            }
+
+            try
+            {
+                _shutdown.Cancel();
+            }
+            catch (Exception error)
+            {
+                errors.Add(error);
+            }
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _canceling = false;
+            }
+
+            foreach (Entry entry in snapshot)
+            {
+                try
+                {
+                    DisposeCompletedEntry(entry);
+                }
+                catch (Exception error)
+                {
+                    errors.Add(error);
+                }
+            }
+        }
+
+        if (errors.Count != 0)
+        {
+            throw new AggregateException("连接根取消清理失败。", errors);
+        }
+    }
+
+    private void ForceDispose(Entry entry)
+    {
+        List<Exception> errors = new();
+        try
+        {
+            entry.Resources.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception error)
+        {
+            errors.Add(error);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                entry.ForceDisposeInProgress = false;
+            }
+
+            try
+            {
+                DisposeCompletedEntry(entry);
+            }
+            catch (Exception error)
+            {
+                errors.Add(error);
+            }
+        }
+
+        if (errors.Count != 0)
+        {
+            throw new AggregateException("连接物理关闭失败。", errors);
+        }
+    }
+
+    /// <summary>Host 已完整 join 所有 Stop 后，再 join 原取消、强制释放及各租约。</summary>
+    internal async Task JoinAndDisposeAsync()
+    {
+        Entry[] snapshot;
+        Task[] forced;
+        Task cancellation;
+        lock (_gate)
+        {
+            if (!_stopping)
+            {
+                throw new InvalidOperationException("必须先发起连接停机。");
+            }
+
+            snapshot = _entries.Values.ToArray();
+            forced = _forceDisposals.ToArray();
+            cancellation = _cancellationTask!;
+        }
+
+        Task[] tasks = snapshot.SelectMany(entry =>
+            new[] { entry.Completion.Task, entry.CancellationDisposed.Task })
+            .Concat(forced).Append(cancellation).ToArray();
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch
+        {
+            // WhenAll 的 await 只抛首个故障；下面逐项保留全部原错误树。
+        }
+
+        List<Exception> errors = new();
+        foreach (Task task in tasks)
+        {
+            if (task.Exception is { } failure)
+            {
+                errors.AddRange(failure.InnerExceptions);
+            }
+        }
+
+        // 根回调与全部强制释放已退出、所有 linked CTS 已解绑，才可释放根。
+        if (cancellation.IsCompleted && forced.All(task => task.IsCompleted) &&
+            snapshot.All(entry => entry.CancellationDisposed.Task.IsCompletedSuccessfully))
+        {
+            try
+            {
+                _shutdown.Dispose();
+            }
+            catch (Exception error)
+            {
+                errors.Add(error);
+            }
+        }
+        else
+        {
+            errors.Add(new InvalidOperationException(
+                "连接根取消源未释放：仍有 linked CTS 解绑失败或取消/物理关闭尚未结束。"));
+        }
+
+        if (errors.Count != 0)
+        {
+            throw new AggregateException("连接完整停机清理失败。", errors);
+        }
     }
 
     internal void Remove(int id)
@@ -216,31 +368,49 @@ public sealed class ConnectionRegistry
         }
 
         // linked CTS.Dispose 可能等待父取消回调，绝不能持锁或与根取消交叉执行。
-        entry.Cancellation.Dispose();
+        Exception? failure = null;
+        try
+        {
+            entry.Cancellation.Dispose();
+        }
+        catch (Exception error)
+        {
+            failure = error;
+        }
+
         lock (_gate)
         {
-            _entries.Remove(entry.Id);
-            // 强制 Dispose 已退出且 CTS 已回收，其他 Stop 才能报告完成。
-            entry.CancellationDisposed.TrySetResult();
+            if (failure is null)
+            {
+                _entries.Remove(entry.Id);
+                // 强制 Dispose 已退出且 CTS 已回收，其他 Stop 才能报告完成。
+                entry.CancellationDisposed.TrySetResult();
+            }
+            else
+            {
+                // 回收失败不能伪装成 Count=0；故障完成通知，避免完整 join 永久悬挂。
+                entry.CancellationDisposed.TrySetException(failure);
+            }
         }
     }
 
-    private static async Task WaitAllAsync(Entry[] entries, TimeSpan timeout)
+    private static async Task WaitAllAsync(
+        Entry[] entries, Task cancellation, Task[] forced, TimeSpan timeout)
     {
-        if (entries.Length == 0)
-        {
-            return;
-        }
-
         Task all = Task.WhenAll(entries.SelectMany(entry =>
-            new[] { entry.Completion.Task, entry.CancellationDisposed.Task }));
+            new[] { entry.Completion.Task, entry.CancellationDisposed.Task })
+            .Concat(forced).Append(cancellation));
         try
         {
             await all.WaitAsync(timeout).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            // 预算内没结束：交给下一阶段兜底，或报告未完成并继续跟踪。
+            // 同步取消回调及资源释放不能拖住预算；未结束状态在报告阶段明确处理。
+        }
+        catch (Exception) when (all.IsFaulted)
+        {
+            // 清理故障由 StopAllAsync 在 force 已发出后逐项上报。
         }
     }
 
@@ -269,6 +439,8 @@ public sealed class ConnectionRegistry
         public bool ForceDisposeStarted { get; set; }
 
         public bool ForceDisposeInProgress { get; set; }
+
+        public Task? ForceDisposeTask { get; set; }
 
         public bool CancellationDisposeStarted { get; set; }
     }

@@ -393,6 +393,7 @@ public sealed partial class ControlAuthSessionTests
         byte[]? wireToken = null;
         byte[]? proof = null;
         byte[]? registryToken = null;
+        VideoAttachLease? videoLease = null;
         List<string> callbacks = new();
 
         void AssertNotRegistered()
@@ -453,25 +454,38 @@ public sealed partial class ControlAuthSessionTests
             // 写前时刻 + 15 秒 - 1 tick 可附着；恰好 + 15 秒拒绝。不能从登记时刻再给 15 秒。
             clock.Advance(TimeSpan.FromSeconds(5) + TimeSpan.FromTicks(deadlineOffsetTicks), fireTimers: false);
             Assert.Equal(TimeSpan.FromSeconds(38).Ticks + deadlineOffsetTicks, clock.GetTimestamp());
-            Assert.Equal(canAttach ? VideoAttachStatus.Attached : VideoAttachStatus.Expired,
-                context.SessionRegistry.TryAttachVideo(session.SessionId, video, nonce,
-                    Assert.IsType<byte[]>(proof), default, out var lease));
-            Assert.Equal(canAttach, lease is not null);
-            if (lease is not null)
+            VideoAttachStatus attachStatus = context.SessionRegistry.TryAttachVideo(
+                session.SessionId, video, nonce, Assert.IsType<byte[]>(proof), default, out videoLease);
+            Assert.Equal(canAttach ? VideoAttachStatus.Attached : VideoAttachStatus.Expired, attachStatus);
+            Assert.Equal(canAttach, videoLease is not null);
+            if (videoLease is not null)
             {
-                Assert.Equal(session.SessionId, lease.SessionId);
-                Assert.Equal(video.ConnectionId, lease.VideoConnectionId);
-                Assert.False(lease.Revoked.IsCompleted);
+                Assert.Equal(session.SessionId, videoLease.SessionId);
+                Assert.Equal(video.ConnectionId, videoLease.VideoConnectionId);
+                Assert.False(videoLease.Revoked.IsCompleted);
             }
             Assert.Equal(1, context.SessionRegistry.ActiveSessionCount);
             Assert.False(run.IsCompleted);
             Assert.False(stream.PendingRead.IsCompleted);
             Assert.Equal(1, stream.PendingReadCalls);
+
+            stream.Dispose();
+            if (canAttach)
+            {
+                VideoAttachLease attachedLease = Assert.IsType<VideoAttachLease>(videoLease);
+                await attachedLease.Revoked.WaitAsync(FrameDeadline);
+                Assert.True(attachedLease.Revoked.IsCompletedSuccessfully);
+                Assert.False(attachedLease.Completed.IsCompleted);
+                Assert.False(run.IsCompleted);
+                Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+                Assert.All(Assert.IsType<byte[]>(registryToken), value => Assert.Equal((byte)0, value));
+            }
         }
         finally
         {
-            // 断言失败也让唯一读以 EOF 结束，并等待认证任务完成注销；不靠取消一个不合作的读。
+            // 断言失败也让唯一读以 EOF 结束；先完成合成视频，再 join 原认证任务。
             stream.Dispose();
+            videoLease?.Complete();
             await run.WaitAsync(FrameDeadline);
         }
 
@@ -1123,12 +1137,21 @@ public sealed partial class ControlAuthSessionTests
             Assert.False(videoLease.Revoked.IsCompleted);
             Assert.Contains(registryToken, value => value != 0);
             Assert.False(run.IsCompleted);
+
+            stream.Dispose();
+            await videoLease.Revoked.WaitAsync(FrameDeadline);
+            Assert.True(videoLease.Revoked.IsCompletedSuccessfully);
+            Assert.False(videoLease.Completed.IsCompleted);
+            Assert.False(run.IsCompleted);
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+            Assert.All(registryToken, value => Assert.Equal((byte)0, value));
         }
         finally
         {
             resumeSuccessWrite.TrySetResult();
             successWriteEntered.TrySetCanceled();
             stream.Dispose();
+            videoLease?.Complete();
             await run.WaitAsync(FrameDeadline);
         }
 

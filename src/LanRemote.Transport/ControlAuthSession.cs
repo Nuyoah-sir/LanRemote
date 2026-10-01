@@ -377,9 +377,18 @@ public sealed class ControlAuthSession
                 return await FailAsync(RejectSuccessNotDelivered, cancellationToken).ConfigureAwait(false);
             }
 
-            using (registration)
+            try
             {
-                await HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken).ConfigureAwait(false);
+                using (registration)
+                {
+                    await HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                // 先撤销并注销自身，再在锁外等已经预约的子连接完整收尾。
+                // 子任务只报告 join 完成，不传播视频故障覆盖原控制结局。
+                await registration!.VideoCompletion.ConfigureAwait(false);
             }
 
             return new ControlAuthResult(true, ControlSessionState.Authenticated, null, SessionId);

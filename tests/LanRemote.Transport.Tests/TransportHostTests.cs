@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using LanRemote.Core.Abstractions;
@@ -637,6 +638,92 @@ public sealed class TransportHostTests
     }
 
     [Fact(Timeout = 60_000)]
+    public async Task Stop_Published_During_Subnet_Check_Prevents_Late_Registration()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        using ManualResetEventSlim releasePolicy = new(false);
+        BlockingSubnetPolicy policy = new(releasePolicy);
+        int port = GetFreePort();
+        int handlerCalls = 0;
+
+        TransportHost host = new(
+            new[] { IPAddress.Loopback },
+            policy,
+            certificate,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref handlerCalls);
+                return Task.CompletedTask;
+            },
+            new TransportHostOptions { Port = port, MaxConnections = 1, MaxConnectionsPerAddress = 1 });
+
+        TcpClient? client = null;
+        try
+        {
+            Assert.True(host.Start().IsListening);
+            client = await ConnectRawAsync(IPAddress.Loopback, IPAddress.Loopback, port);
+            await WaitAsync(policy.Entered.Task);
+
+            // 已 accept，但同步子网校验还没返回；Stop 必须先发布，不能等这条连接。
+            Task<TransportHostStopReport> pending = host.StopAsync(TimeSpan.FromMilliseconds(200));
+            Assert.False(host.IsRunning);
+            InvalidOperationException restart = Assert.Throws<InvalidOperationException>(() => host.Start());
+            Assert.Contains("已停止", restart.Message);
+
+            TransportHostStopReport blocked = await pending.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(blocked.AcceptLoopsFinished);
+            Assert.False(blocked.AllFinished);
+            Assert.Equal(0, blocked.UnfinishedConnections);
+            Assert.False(releasePolicy.IsSet);
+            Assert.Equal(0, host.ActiveConnections);
+            Assert.Equal(0, host.AdmittedConnections);
+
+            // 放行策略后它会许可该 peer，但已发布的 Stop 必须阻止登记和 TLS。
+            releasePolicy.Set();
+            TransportHostStopReport finished =
+                await host.StopAsync(TimeSpan.FromSeconds(10)).WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.True(finished.AcceptLoopsFinished);
+            Assert.True(finished.AllFinished);
+            Assert.Equal(0, finished.UnfinishedConnections);
+            Assert.Equal(0, host.ActiveConnections);
+            Assert.Equal(0, host.AdmittedConnections);
+            Assert.Equal(0, host.Limiter.InUseFor(IPAddress.Loopback));
+            Assert.Equal(0, Volatile.Read(ref handlerCalls));
+
+            // Count=0 无法排除曾登记又摘表；单调编号必须从未递增。
+            ConnectionRegistry registry = Assert.IsType<ConnectionRegistry>(typeof(TransportHost)
+                .GetField("_registry", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host));
+            FieldInfo nextId = typeof(ConnectionRegistry)
+                .GetField("_nextId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            Assert.Equal(0, (int)nextId.GetValue(registry)!);
+
+            try
+            {
+                Assert.Equal(0, await client.GetStream().ReadAsync(new byte[1]).AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(10)));
+            }
+            catch (IOException)
+            {
+                // 物理关闭也可能表现为连接重置，而非 EOF。
+            }
+        }
+        finally
+        {
+            releasePolicy.Set();
+            client?.Dispose();
+            try
+            {
+                await host.StopAsync(TimeSpan.FromSeconds(10)).WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            finally
+            {
+                // Stop 的预算报告不代替对原 accept 循环和未登记关闭任务的完整 join。
+                await host.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
     public async Task Start_Degrades_Per_Address_Instead_Of_Failing_Whole_Host()
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
@@ -821,6 +908,23 @@ public sealed class TransportHostTests
         }
 
         return false;
+    }
+
+    private sealed class BlockingSubnetPolicy(ManualResetEventSlim release) : ISubnetPolicy
+    {
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool IsAllowedPeer(IPAddress localAddress, IPAddress remoteAddress)
+        {
+            Entered.TrySetResult();
+            if (!release.Wait(TimeSpan.FromSeconds(20)))
+            {
+                throw new TimeoutException("测试同步子网策略未被放行。");
+            }
+
+            return true;
+        }
     }
 
     private sealed class StubSubnetPolicy : ISubnetPolicy

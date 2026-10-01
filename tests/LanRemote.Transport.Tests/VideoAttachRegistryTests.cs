@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Reflection;
 using System.Security.Authentication;
@@ -26,18 +27,28 @@ public sealed class VideoAttachRegistryTests
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
 
         byte[] proof = IndependentProof(token, SessionId, nonce, pin);
-        // Python uuid.UUID.bytes + hmac/hashlib 独立计算的黄金值。
-        Assert.Equal(Convert.FromHexString("ade67adfb898996be504dec92b6ba6bb449772e41e67d5f36210d666f77022d9"), proof);
-        Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
-            SessionId, video, nonce, proof, default, out var lease));
+        VideoAttachLease? lease = null;
+        try
+        {
+            // Python uuid.UUID.bytes + hmac/hashlib 独立计算的黄金值。
+            Assert.Equal(Convert.FromHexString("ade67adfb898996be504dec92b6ba6bb449772e41e67d5f36210d666f77022d9"), proof);
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                SessionId, video, nonce, proof, default, out lease));
 
-        Assert.NotNull(lease);
-        Assert.Equal(SessionId, lease.SessionId);
-        Assert.Equal(video.ConnectionId, lease.VideoConnectionId);
-        Assert.False(lease.Revoked.IsCompleted);
-        Assert.Equal(1, registry.ActiveSessionCount);
-        Assert.Equal(SessionId, Assert.Single(registry.Snapshot()).SessionId);
-        Assert.Equal(0, clock.TimerCount);
+            Assert.NotNull(lease);
+            Assert.Equal(SessionId, lease.SessionId);
+            Assert.Equal(video.ConnectionId, lease.VideoConnectionId);
+            Assert.False(lease.Revoked.IsCompleted);
+            Assert.Equal(1, registry.ActiveSessionCount);
+            Assert.Equal(SessionId, Assert.Single(registry.Snapshot()).SessionId);
+            Assert.Equal(0, clock.TimerCount);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Fact]
@@ -56,15 +67,25 @@ public sealed class VideoAttachRegistryTests
         ConnectionSecurityContext video = Security(pin);
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
 
-        Assert.Equal(VideoAttachStatus.InvalidProof,
-            registry.TryAttachVideo(SessionId, video, nonce, wrongProof, default, out var wrongLease));
-        Assert.Null(wrongLease);
-        Assert.Equal(VideoAttachStatus.InvalidProof,
-            registry.TryAttachVideo(SessionId, video, otherNonce, proof, default, out var replayLease));
-        Assert.Null(replayLease);
-        Assert.Equal(VideoAttachStatus.Attached,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, default, out var lease));
-        Assert.NotNull(lease);
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.InvalidProof,
+                registry.TryAttachVideo(SessionId, video, nonce, wrongProof, default, out var wrongLease));
+            Assert.Null(wrongLease);
+            Assert.Equal(VideoAttachStatus.InvalidProof,
+                registry.TryAttachVideo(SessionId, video, otherNonce, proof, default, out var replayLease));
+            Assert.Null(replayLease);
+            Assert.Equal(VideoAttachStatus.Attached,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, default, out lease));
+            Assert.NotNull(lease);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Fact]
@@ -79,18 +100,28 @@ public sealed class VideoAttachRegistryTests
         ConnectionSecurityContext video = Security(pin);
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
         using CancellationTokenSource caller = new();
-        Assert.Equal(VideoAttachStatus.Attached,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, caller.Token, out var lease));
-        caller.Cancel();
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.Attached,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, caller.Token, out lease));
+            caller.Cancel();
 
-        Assert.Equal(VideoAttachStatus.AlreadyAttached,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, default, out var duplicate));
-        Assert.Null(duplicate);
-        nonce[0] ^= 1;
-        Assert.Equal(VideoAttachStatus.AlreadyAttached, registry.TryAttachVideo(
-            SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out var fresh));
-        Assert.Null(fresh);
-        Assert.False(lease!.Revoked.IsCompleted);
+            Assert.Equal(VideoAttachStatus.AlreadyAttached,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, default, out var duplicate));
+            Assert.Null(duplicate);
+            nonce[0] ^= 1;
+            Assert.Equal(VideoAttachStatus.AlreadyAttached, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out var fresh));
+            Assert.Null(fresh);
+            Assert.False(lease!.Revoked.IsCompleted);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Fact]
@@ -102,6 +133,7 @@ public sealed class VideoAttachRegistryTests
         byte[] pin = Pin();
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
         TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConcurrentBag<VideoAttachLease> successfulLeases = new();
         var contenders = Enumerable.Range(0, 32).Select(async index =>
         {
             byte[] nonce = Nonce();
@@ -111,19 +143,38 @@ public sealed class VideoAttachRegistryTests
             await start.Task;
             VideoAttachStatus status = registry.TryAttachVideo(
                 SessionId, video, nonce, proof, default, out var lease);
+            if (lease is not null) successfulLeases.Add(lease);
             return (Status: status, Lease: lease, video.ConnectionId);
         }).ToArray();
 
-        start.SetResult();
-        var results = await Task.WhenAll(contenders).WaitAsync(TimeSpan.FromSeconds(10));
-        var winner = Assert.Single(results, result => result.Status == VideoAttachStatus.Attached);
-        Assert.NotNull(winner.Lease);
-        Assert.Equal(winner.ConnectionId, winner.Lease.VideoConnectionId);
-        Assert.All(results.Where(result => result.Status != VideoAttachStatus.Attached), result =>
+        try
         {
-            Assert.Equal(VideoAttachStatus.AlreadyAttached, result.Status);
-            Assert.Null(result.Lease);
-        });
+            start.SetResult();
+            var results = await Task.WhenAll(contenders).WaitAsync(TimeSpan.FromSeconds(10));
+            var winner = Assert.Single(results, result => result.Status == VideoAttachStatus.Attached);
+            Assert.NotNull(winner.Lease);
+            Assert.Equal(winner.ConnectionId, winner.Lease.VideoConnectionId);
+            Assert.All(results.Where(result => result.Status != VideoAttachStatus.Attached), result =>
+            {
+                Assert.Equal(VideoAttachStatus.AlreadyAttached, result.Status);
+                Assert.Null(result.Lease);
+            });
+        }
+        finally
+        {
+            start.TrySetResult();
+            try
+            {
+                await Task.WhenAll(contenders);
+            }
+            finally
+            {
+                foreach (VideoAttachLease lease in successfulLeases) lease.Complete();
+            }
+        }
+        VideoAttachLease completed = Assert.Single(successfulLeases);
+        Assert.True(completed.Completed.IsCompletedSuccessfully);
+        Assert.Same(completed.Completed, registration.VideoCompletion);
     }
 
     [Theory]
@@ -152,13 +203,22 @@ public sealed class VideoAttachRegistryTests
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin,
             connectionId: control.ConnectionId);
         byte[] proof = IndependentProof(token, SessionId, nonce, video.ServerCertificateSha256.ToArray());
-
-        Assert.Equal(VideoAttachStatus.IdentityMismatch,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, default, out var rejected));
-        Assert.Null(rejected);
-        Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
-            SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out var lease));
-        Assert.NotNull(lease);
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.IdentityMismatch,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, default, out var rejected));
+            Assert.Null(rejected);
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out lease));
+            Assert.NotNull(lease);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Theory]
@@ -178,12 +238,22 @@ public sealed class VideoAttachRegistryTests
         ConnectionSecurityContext video = Security(pin);
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
 
-        Assert.Equal(VideoAttachStatus.InvalidInput, registry.TryAttachVideo(
-            SessionId, video, new byte[nonceLength], new byte[proofLength], default, out var rejected));
-        Assert.Null(rejected);
-        Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
-            SessionId, video, nonce, IndependentProof(token, SessionId, nonce, pin), default, out var lease));
-        Assert.NotNull(lease);
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.InvalidInput, registry.TryAttachVideo(
+                SessionId, video, new byte[nonceLength], new byte[proofLength], default, out var rejected));
+            Assert.Null(rejected);
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                SessionId, video, nonce, IndependentProof(token, SessionId, nonce, pin), default, out lease));
+            Assert.NotNull(lease);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Fact]
@@ -201,11 +271,22 @@ public sealed class VideoAttachRegistryTests
         Assert.Null(missing);
 
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
-        Assert.Equal(VideoAttachStatus.InvalidInput,
-            registry.TryAttachVideo(SessionId, null!, nonce, proof, default, out var invalid));
-        Assert.Null(invalid);
-        Assert.Equal(VideoAttachStatus.Attached,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, default, out _));
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.InvalidInput,
+                registry.TryAttachVideo(SessionId, null!, nonce, proof, default, out var invalid));
+            Assert.Null(invalid);
+            Assert.Equal(VideoAttachStatus.Attached,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, default, out lease));
+            Assert.NotNull(lease);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Theory]
@@ -297,9 +378,19 @@ public sealed class VideoAttachRegistryTests
         using var registration = Register(registry, new VideoAttachWindow(clock, 100), token, pin);
         clock.Advance(TimeSpan.FromMilliseconds(100) + TimeSpan.FromTicks(offsetTicks), false);
 
-        Assert.Equal(accepted ? VideoAttachStatus.Attached : VideoAttachStatus.Expired, registry.TryAttachVideo(
-            SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out var lease));
-        Assert.Equal(accepted, lease is not null);
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(accepted ? VideoAttachStatus.Attached : VideoAttachStatus.Expired, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out lease));
+            Assert.Equal(accepted, lease is not null);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(registration.VideoCompletion.IsCompletedSuccessfully);
+        if (accepted) Assert.True(lease!.Completed.IsCompletedSuccessfully);
     }
 
     [Theory]
@@ -315,8 +406,19 @@ public sealed class VideoAttachRegistryTests
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
         clock.Advance(TimeSpan.FromSeconds(14), false);
         clock.AdvanceUtc(TimeSpan.FromDays(days));
-        Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
-            SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out _));
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out lease));
+            Assert.NotNull(lease);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Fact]
@@ -454,18 +556,29 @@ public sealed class VideoAttachRegistryTests
             registry.TryAttachVideo(SessionId, video, nonce, proof, caller.Token, out var missing));
         Assert.Null(missing);
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
-        Assert.Equal(VideoAttachStatus.Cancelled,
-            registry.TryAttachVideo(SessionId, null!, [], [], caller.Token, out var invalid));
-        Assert.Null(invalid);
-        Assert.Equal(VideoAttachStatus.Attached,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, default, out _));
-        Assert.Equal(VideoAttachStatus.Cancelled,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, caller.Token, out var consumed));
-        Assert.Null(consumed);
-        clock.Advance(TimeSpan.FromSeconds(15), false);
-        Assert.Equal(VideoAttachStatus.Cancelled,
-            registry.TryAttachVideo(SessionId, video, nonce, proof, caller.Token, out var expired));
-        Assert.Null(expired);
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.Cancelled,
+                registry.TryAttachVideo(SessionId, null!, [], [], caller.Token, out var invalid));
+            Assert.Null(invalid);
+            Assert.Equal(VideoAttachStatus.Attached,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, default, out lease));
+            Assert.NotNull(lease);
+            Assert.Equal(VideoAttachStatus.Cancelled,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, caller.Token, out var consumed));
+            Assert.Null(consumed);
+            clock.Advance(TimeSpan.FromSeconds(15), false);
+            Assert.Equal(VideoAttachStatus.Cancelled,
+                registry.TryAttachVideo(SessionId, video, nonce, proof, caller.Token, out var expired));
+            Assert.Null(expired);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Theory]
@@ -508,21 +621,31 @@ public sealed class VideoAttachRegistryTests
         using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
         VideoAttachLease? innerLease = null;
         int reentrantSample = clock.TimestampReads + sampleOffset;
-        clock.AfterSample = read =>
+        try
         {
-            if (read != reentrantSample) return;
-            clock.AfterSample = null;
-            Assert.Equal(VideoAttachStatus.Attached,
-                registry.TryAttachVideo(SessionId, innerVideo, nonce, proof, default, out innerLease));
-        };
+            clock.AfterSample = read =>
+            {
+                if (read != reentrantSample) return;
+                clock.AfterSample = null;
+                Assert.Equal(VideoAttachStatus.Attached,
+                    registry.TryAttachVideo(SessionId, innerVideo, nonce, proof, default, out innerLease));
+            };
 
-        Assert.Equal(VideoAttachStatus.AlreadyAttached,
-            registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var outerLease));
-        Assert.Null(outerLease);
-        Assert.NotNull(innerLease);
-        Assert.Equal(innerVideo.ConnectionId, innerLease.VideoConnectionId);
-        registration.Dispose();
-        Assert.True(innerLease.Revoked.IsCompletedSuccessfully);
+            Assert.Equal(VideoAttachStatus.AlreadyAttached,
+                registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var outerLease));
+            Assert.Null(outerLease);
+            Assert.NotNull(innerLease);
+            Assert.Equal(innerVideo.ConnectionId, innerLease.VideoConnectionId);
+            registration.Dispose();
+            Assert.True(innerLease.Revoked.IsCompletedSuccessfully);
+        }
+        finally
+        {
+            clock.AfterSample = null;
+            innerLease?.Complete();
+        }
+        Assert.True(innerLease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(innerLease.Completed, registration.VideoCompletion);
     }
 
     [Theory]
@@ -546,6 +669,7 @@ public sealed class VideoAttachRegistryTests
         using var original = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
         byte[] ownedToken = OwnedToken(registry);
         SessionRegistry.SessionRegistration? replacement = null;
+        VideoAttachLease? currentLease = null;
         int finalSample = clock.TimestampReads + 2;
         clock.AfterSample = read =>
         {
@@ -573,7 +697,7 @@ public sealed class VideoAttachRegistryTests
                     registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var replay));
                 Assert.Null(replay);
                 Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(SessionId, Security(pin), nonce,
-                    IndependentProof(replacementToken, SessionId, nonce, pin), default, out var currentLease));
+                    IndependentProof(replacementToken, SessionId, nonce, pin), default, out currentLease));
                 Assert.NotNull(currentLease);
                 Assert.False(currentLease.Revoked.IsCompleted);
                 replacement!.Dispose();
@@ -588,7 +712,15 @@ public sealed class VideoAttachRegistryTests
         }
         finally
         {
+            clock.AfterSample = null;
+            currentLease?.Complete();
             replacement?.Dispose();
+        }
+        Assert.True(original.VideoCompletion.IsCompletedSuccessfully);
+        if (replace)
+        {
+            Assert.True(currentLease!.Completed.IsCompletedSuccessfully);
+            Assert.Same(currentLease.Completed, replacement!.VideoCompletion);
         }
     }
 
@@ -608,32 +740,42 @@ public sealed class VideoAttachRegistryTests
         byte[] ownedToken = OwnedToken(registry);
         Assert.NotSame(token, ownedToken);
         Assert.Equal(originalToken, ownedToken);
-        Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
-            SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out var lease));
-        Assert.NotNull(lease);
-        Assert.True(lease.Revoked.CreationOptions.HasFlag(TaskCreationOptions.RunContinuationsAsynchronously));
-        int disposingThread = 0;
-        Task continuation = lease.Revoked.ContinueWith(_ =>
+        VideoAttachLease? lease = null;
+        try
         {
-            Assert.NotEqual(disposingThread, Environment.CurrentManagedThreadId);
-            Assert.Equal(0, registry.ActiveSessionCount);
-            Assert.All(ownedToken, value => Assert.Equal((byte)0, value));
-        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        Exception? disposeError = null;
-        Thread worker = new(() =>
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out lease));
+            Assert.NotNull(lease);
+            Assert.True(lease.Revoked.CreationOptions.HasFlag(TaskCreationOptions.RunContinuationsAsynchronously));
+            int disposingThread = 0;
+            Task continuation = lease.Revoked.ContinueWith(_ =>
+            {
+                Assert.NotEqual(disposingThread, Environment.CurrentManagedThreadId);
+                Assert.Equal(0, registry.ActiveSessionCount);
+                Assert.All(ownedToken, value => Assert.Equal((byte)0, value));
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            Exception? disposeError = null;
+            Thread worker = new(() =>
+            {
+                disposingThread = Environment.CurrentManagedThreadId;
+                disposeError = Record.Exception(registration.Dispose);
+            }) { IsBackground = true };
+            worker.Start();
+            Assert.True(worker.Join(TimeSpan.FromSeconds(10)));
+            Assert.Null(disposeError);
+            await continuation.WaitAsync(TimeSpan.FromSeconds(10));
+            registration.Dispose();
+            Assert.True(lease.Revoked.IsCompletedSuccessfully);
+            Assert.Equal(originalToken, token);
+            Assert.False(control.IsCancellationRequested);
+            Assert.Equal(0, cancellations);
+        }
+        finally
         {
-            disposingThread = Environment.CurrentManagedThreadId;
-            disposeError = Record.Exception(registration.Dispose);
-        }) { IsBackground = true };
-        worker.Start();
-        Assert.True(worker.Join(TimeSpan.FromSeconds(10)));
-        Assert.Null(disposeError);
-        await continuation.WaitAsync(TimeSpan.FromSeconds(10));
-        registration.Dispose();
-        Assert.True(lease.Revoked.IsCompletedSuccessfully);
-        Assert.Equal(originalToken, token);
-        Assert.False(control.IsCancellationRequested);
-        Assert.Equal(0, cancellations);
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Fact]
@@ -646,27 +788,43 @@ public sealed class VideoAttachRegistryTests
         byte[] nonce = Nonce();
         byte[] proof = IndependentProof(token, SessionId, nonce, pin);
         using var original = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
-        Assert.Equal(VideoAttachStatus.Attached,
-            registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var oldLease));
-        Assert.NotNull(oldLease);
-        clock.Advance(TimeSpan.FromDays(1));
-        Assert.False(oldLease.Revoked.IsCompleted);
-        Assert.Equal(0, clock.TimerCount);
-        original.Dispose();
-        Assert.True(oldLease.Revoked.IsCompletedSuccessfully);
-        Assert.Equal(VideoAttachStatus.NotRegistered,
-            registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out _));
+        SessionRegistry.SessionRegistration? replacement = null;
+        VideoAttachLease? oldLease = null;
+        VideoAttachLease? newLease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.Attached,
+                registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out oldLease));
+            Assert.NotNull(oldLease);
+            clock.Advance(TimeSpan.FromDays(1));
+            Assert.False(oldLease.Revoked.IsCompleted);
+            Assert.Equal(0, clock.TimerCount);
+            original.Dispose();
+            Assert.True(oldLease.Revoked.IsCompletedSuccessfully);
+            Assert.Equal(VideoAttachStatus.NotRegistered,
+                registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out _));
 
-        using var replacement = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
-        original.Dispose();
-        Assert.Equal(1, registry.ActiveSessionCount);
-        Assert.Equal(VideoAttachStatus.Attached,
-            registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out var newLease));
-        Assert.NotNull(newLease);
-        Assert.NotSame(oldLease.Revoked, newLease.Revoked);
-        Assert.False(newLease.Revoked.IsCompleted);
-        replacement.Dispose();
-        Assert.True(newLease.Revoked.IsCompletedSuccessfully);
+            replacement = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
+            original.Dispose();
+            Assert.Equal(1, registry.ActiveSessionCount);
+            Assert.Equal(VideoAttachStatus.Attached,
+                registry.TryAttachVideo(SessionId, Security(pin), nonce, proof, default, out newLease));
+            Assert.NotNull(newLease);
+            Assert.NotSame(oldLease.Revoked, newLease.Revoked);
+            Assert.False(newLease.Revoked.IsCompleted);
+            replacement.Dispose();
+            Assert.True(newLease.Revoked.IsCompletedSuccessfully);
+        }
+        finally
+        {
+            newLease?.Complete();
+            oldLease?.Complete();
+            replacement?.Dispose();
+        }
+        Assert.True(oldLease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(oldLease.Completed, original.VideoCompletion);
+        Assert.True(newLease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(newLease.Completed, replacement!.VideoCompletion);
     }
 
     [Theory]
@@ -718,20 +876,31 @@ public sealed class VideoAttachRegistryTests
         byte[] conflictTokenBefore = (byte[])conflictingToken.Clone();
         byte[] conflictPinBefore = (byte[])conflictingPin.Clone();
 
-        Assert.Throws<ArgumentException>(() => Register(
-            registry, new VideoAttachWindow(clock, 15_000), conflictingToken, conflictingPin));
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Throws<ArgumentException>(() => Register(
+                registry, new VideoAttachWindow(clock, 15_000), conflictingToken, conflictingPin));
 
-        Assert.Equal(1, registry.ActiveSessionCount);
-        Assert.Equal(Token(), ownedToken);
-        Assert.Equal(Token(), token);
-        Assert.Equal(Pin(), pin);
-        Assert.Equal(conflictTokenBefore, conflictingToken);
-        Assert.Equal(conflictPinBefore, conflictingPin);
-        Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
-            SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out _));
-        registration.Dispose();
-        Assert.All(ownedToken, value => Assert.Equal((byte)0, value));
-        Assert.Equal(conflictTokenBefore, conflictingToken);
+            Assert.Equal(1, registry.ActiveSessionCount);
+            Assert.Equal(Token(), ownedToken);
+            Assert.Equal(Token(), token);
+            Assert.Equal(Pin(), pin);
+            Assert.Equal(conflictTokenBefore, conflictingToken);
+            Assert.Equal(conflictPinBefore, conflictingPin);
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out lease));
+            Assert.NotNull(lease);
+            registration.Dispose();
+            Assert.All(ownedToken, value => Assert.Equal((byte)0, value));
+            Assert.Equal(conflictTokenBefore, conflictingToken);
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
     }
 
     [Fact]
@@ -749,12 +918,269 @@ public sealed class VideoAttachRegistryTests
         Array.Fill(token, (byte)0xA5);
         Array.Fill(pin, (byte)0x5A);
 
-        Assert.Equal(VideoAttachStatus.Attached,
-            registry.TryAttachVideo(SessionId, Security(originalPin), nonce, proof, default, out _));
-        registration.Dispose();
-        Assert.All(ownedToken, value => Assert.Equal((byte)0, value));
-        Assert.All(token, value => Assert.Equal((byte)0xA5, value));
-        Assert.All(pin, value => Assert.Equal((byte)0x5A, value));
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.Attached,
+                registry.TryAttachVideo(SessionId, Security(originalPin), nonce, proof, default, out lease));
+            Assert.NotNull(lease);
+            registration.Dispose();
+            Assert.All(ownedToken, value => Assert.Equal((byte)0, value));
+            Assert.All(token, value => Assert.Equal((byte)0xA5, value));
+            Assert.All(pin, value => Assert.Equal((byte)0x5A, value));
+        }
+        finally
+        {
+            lease?.Complete();
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+        Assert.Same(lease.Completed, registration.VideoCompletion);
+    }
+
+    [Theory]
+    [InlineData("proof")]
+    [InlineData("identity")]
+    [InlineData("expired")]
+    [InlineData("cancel")]
+    [InlineData("control-cancel")]
+    public void Rejected_Attach_Never_Reserves_A_Child(string reason)
+    {
+        ManualDeadlineClock clock = new();
+        SessionRegistry registry = new();
+        byte[] token = Token();
+        byte[] pin = Pin();
+        byte[] nonce = Nonce();
+        byte[] proof = IndependentProof(token, SessionId, nonce, pin);
+        byte[] wrongProof = (byte[])proof.Clone();
+        wrongProof[0] ^= 1;
+        using CancellationTokenSource caller = new();
+        using CancellationTokenSource control = new();
+        SessionRegistry.SessionRegistration registration = Register(
+            registry, new VideoAttachWindow(clock, 15_000), token, pin, control.Token);
+        Task noChild = registration.VideoCompletion;
+        VideoAttachLease? rejected = null;
+        VideoAttachLease? accepted = null;
+        try
+        {
+            if (reason == "expired") clock.Advance(TimeSpan.FromSeconds(15), false);
+            if (reason == "cancel") caller.Cancel();
+            if (reason == "control-cancel") control.Cancel();
+            VideoAttachStatus expected = reason switch
+            {
+                "proof" => VideoAttachStatus.InvalidProof,
+                "identity" => VideoAttachStatus.IdentityMismatch,
+                "expired" => VideoAttachStatus.Expired,
+                "cancel" or "control-cancel" => VideoAttachStatus.Cancelled,
+                _ => throw new InvalidOperationException()
+            };
+            Assert.Equal(expected, registry.TryAttachVideo(SessionId,
+                reason == "identity" ? Security(pin, IPAddress.Parse("192.168.10.21")) : Security(pin),
+                nonce, reason == "proof" ? wrongProof : proof, caller.Token, out rejected));
+            Assert.Null(rejected);
+            Assert.True(noChild.IsCompletedSuccessfully);
+            Assert.Same(noChild, registration.VideoCompletion);
+
+            if (reason is not ("expired" or "control-cancel"))
+            {
+                Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                    SessionId, Security(pin), nonce, proof, default, out accepted));
+                Assert.NotNull(accepted);
+                Assert.Same(accepted.Completed, registration.VideoCompletion);
+            }
+        }
+        finally
+        {
+            rejected?.Complete();
+            accepted?.Complete();
+            registration.Dispose();
+        }
+        Assert.True(registration.VideoCompletion.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task Final_Proof_Reserves_Exactly_One_Child_And_Unregister_Waits_For_Completion()
+    {
+        ManualDeadlineClock clock = new();
+        SessionRegistry registry = new();
+        byte[] token = Token();
+        byte[] pin = Pin();
+        byte[] nonce = Nonce();
+        byte[] proof = IndependentProof(token, SessionId, nonce, pin);
+        SessionRegistry.SessionRegistration registration = Register(
+            registry, new VideoAttachWindow(clock, 15_000), token, pin);
+        byte[] ownedToken = OwnedToken(registry);
+        VideoAttachLease? child = null;
+        VideoAttachLease? duplicate = null;
+        VideoAttachLease? fresh = null;
+        Task? parentJoin = null;
+        try
+        {
+            Assert.True(registration.VideoCompletion.IsCompletedSuccessfully);
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, proof, default, out child));
+            Assert.NotNull(child);
+            parentJoin = registration.VideoCompletion;
+            Assert.Same(child.Completed, parentJoin);
+            Assert.False(parentJoin.IsCompleted);
+            Assert.True(child.Completed.CreationOptions.HasFlag(TaskCreationOptions.RunContinuationsAsynchronously));
+
+            Assert.Equal(VideoAttachStatus.AlreadyAttached, registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, proof, default, out duplicate));
+            Assert.Null(duplicate);
+            nonce[0] ^= 1;
+            Assert.Equal(VideoAttachStatus.AlreadyAttached, registry.TryAttachVideo(SessionId,
+                Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out fresh));
+            Assert.Null(fresh);
+            Assert.Same(parentJoin, registration.VideoCompletion);
+            Assert.False(parentJoin.IsCompleted);
+
+            registration.Dispose();
+            Assert.Equal(0, registry.ActiveSessionCount);
+            Assert.All(ownedToken, value => Assert.Equal((byte)0, value));
+            Assert.True(child.Revoked.IsCompletedSuccessfully);
+            Assert.False(parentJoin.IsCompleted);
+            child.Complete();
+            child.Complete();
+            await parentJoin.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(parentJoin, registration.VideoCompletion);
+            registration.Dispose();
+        }
+        finally
+        {
+            duplicate?.Complete();
+            fresh?.Complete();
+            child?.Complete();
+            registration.Dispose();
+        }
+        Assert.True(registration.VideoCompletion.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task Concurrent_Dispose_And_VideoCompletion_Wait_For_Attach_Reservation()
+    {
+        ManualDeadlineClock manual = new();
+        SampleClock clock = new(manual);
+        SessionRegistry registry = new();
+        byte[] token = Token();
+        byte[] pin = Pin();
+        byte[] nonce = Nonce();
+        byte[] proof = IndependentProof(token, SessionId, nonce, pin);
+        using var registration = Register(registry, new VideoAttachWindow(clock, 15_000), token, pin);
+        object gate = typeof(SessionRegistry)
+            .GetField("_gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(registry)!;
+        FieldInfo releasedField = typeof(SessionRegistry.SessionRegistration)
+            .GetField("_released", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        using ManualResetEventSlim attachBlocked = new();
+        using ManualResetEventSlim releaseAttach = new();
+        using ManualResetEventSlim disposeEntered = new();
+        using ManualResetEventSlim getterEntered = new();
+        VideoAttachLease? lease = null;
+        Task<VideoAttachStatus>? attachTask = null;
+        Thread? disposeThread = null;
+        Thread? getterThread = null;
+        Task? observedCompletion = null;
+        Exception? disposeError = null;
+        Exception? getterError = null;
+        int finalSample = clock.TimestampReads + 2;
+        try
+        {
+            clock.AfterSample = read =>
+            {
+                if (read != finalSample) return;
+                Assert.True(Monitor.IsEntered(gate));
+                attachBlocked.Set();
+                releaseAttach.Wait();
+            };
+            attachTask = Task.Run(() => registry.TryAttachVideo(
+                SessionId, Security(pin), nonce, proof, default, out lease));
+            Assert.True(attachBlocked.Wait(TimeSpan.FromSeconds(10)));
+
+            disposeThread = new Thread(() =>
+            {
+                disposeEntered.Set();
+                disposeError = Record.Exception(registration.Dispose);
+            }) { IsBackground = true };
+            disposeThread.Start();
+            Assert.True(disposeEntered.Wait(TimeSpan.FromSeconds(10)));
+
+            getterThread = new Thread(() =>
+            {
+                getterEntered.Set();
+                getterError = Record.Exception(() =>
+                {
+                    observedCompletion = registration.VideoCompletion;
+                });
+            }) { IsBackground = true };
+            getterThread.Start();
+            Assert.True(getterEntered.Wait(TimeSpan.FromSeconds(10)));
+            Assert.False(disposeThread.Join(TimeSpan.Zero));
+            Assert.False(getterThread.Join(TimeSpan.Zero));
+            Assert.Equal(0, (int)releasedField.GetValue(registration)!);
+
+            releaseAttach.Set();
+            Assert.Equal(VideoAttachStatus.Attached,
+                await attachTask.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.True(disposeThread.Join(TimeSpan.FromSeconds(10)));
+            Assert.True(getterThread.Join(TimeSpan.FromSeconds(10)));
+            Assert.Null(disposeError);
+            Assert.Null(getterError);
+            Assert.NotNull(lease);
+            Assert.Same(lease.Completed, observedCompletion);
+            Assert.False(observedCompletion!.IsCompleted);
+            Assert.True(lease.Revoked.IsCompletedSuccessfully);
+            Assert.Equal(0, registry.ActiveSessionCount);
+        }
+        finally
+        {
+            releaseAttach.Set();
+            clock.AfterSample = null;
+            bool attachStopped = attachTask is null ||
+                SpinWait.SpinUntil(() => attachTask!.IsCompleted, TimeSpan.FromSeconds(10));
+            bool disposeStopped = disposeThread?.Join(TimeSpan.FromSeconds(10)) ?? true;
+            bool getterStopped = getterThread?.Join(TimeSpan.FromSeconds(10)) ?? true;
+            lease?.Complete();
+            registration.Dispose();
+            Assert.True(attachStopped);
+            Assert.True(disposeStopped);
+            Assert.True(getterStopped);
+        }
+        Assert.True(lease!.Completed.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public void Completing_Child_Does_Not_Reopen_Consumed_Eligibility()
+    {
+        SessionRegistry registry = new();
+        byte[] token = Token();
+        byte[] pin = Pin();
+        byte[] nonce = Nonce();
+        SessionRegistry.SessionRegistration registration = Register(
+            registry, new VideoAttachWindow(new ManualDeadlineClock(), 15_000), token, pin);
+        VideoAttachLease? child = null;
+        VideoAttachLease? duplicate = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(SessionId, Security(pin),
+                nonce, IndependentProof(token, SessionId, nonce, pin), default, out child));
+            Assert.NotNull(child);
+            Task childJoin = registration.VideoCompletion;
+            child.Complete();
+            child.Complete();
+            Assert.True(childJoin.IsCompletedSuccessfully);
+            Assert.Same(childJoin, registration.VideoCompletion);
+
+            nonce[0] ^= 1;
+            Assert.Equal(VideoAttachStatus.AlreadyAttached, registry.TryAttachVideo(SessionId, Security(pin),
+                nonce, IndependentProof(token, SessionId, nonce, pin), default, out duplicate));
+            Assert.Null(duplicate);
+            Assert.Same(childJoin, registration.VideoCompletion);
+        }
+        finally
+        {
+            duplicate?.Complete();
+            child?.Complete();
+            registration.Dispose();
+        }
     }
 
     [Fact]
@@ -778,11 +1204,20 @@ public sealed class VideoAttachRegistryTests
         Assert.False(typeof(VideoAttachWindow).IsVisible);
         Assert.False(typeof(VideoAttachStatus).IsVisible);
         Assert.False(typeof(VideoAttachLease).IsVisible);
+        Assert.False(typeof(SessionRegistry.SessionRegistration).IsVisible);
+        PropertyInfo[] registrationProperties = typeof(SessionRegistry.SessionRegistration).GetProperties(declared);
+        Assert.Equal(new[] { "SessionId", "VideoCompletion" },
+            registrationProperties.Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        PropertyInfo completion = Assert.Single(registrationProperties,
+            property => property.Name == "VideoCompletion");
+        Assert.Equal(typeof(Task), completion.PropertyType);
+        Assert.Null(completion.SetMethod);
+        Assert.True(completion.GetMethod!.IsAssembly);
         Assert.True(typeof(VideoAttachLease).IsSealed);
         Assert.False(typeof(IDisposable).IsAssignableFrom(typeof(VideoAttachLease)));
         Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(VideoAttachLease)));
         PropertyInfo[] properties = typeof(VideoAttachLease).GetProperties(declared);
-        Assert.Equal(new[] { "Revoked", "SessionId", "VideoConnectionId" },
+        Assert.Equal(new[] { "Completed", "Revoked", "SessionId", "VideoConnectionId" },
             properties.Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         Assert.All(properties, property =>
         {
@@ -790,7 +1225,14 @@ public sealed class VideoAttachRegistryTests
             Assert.True(property.GetMethod!.IsAssembly);
         });
         Assert.Equal(typeof(Task), properties.Single(property => property.Name == "Revoked").PropertyType);
-        Assert.All(typeof(VideoAttachLease).GetMethods(declared), method => Assert.True(method.IsSpecialName));
+        Assert.Equal(typeof(Task), properties.Single(property => property.Name == "Completed").PropertyType);
+        MethodInfo[] leaseMethods = typeof(VideoAttachLease).GetMethods(declared);
+        Assert.Equal(new[] { "Complete", "get_Completed", "get_Revoked", "get_SessionId", "get_VideoConnectionId" },
+            leaseMethods.Select(method => method.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        Assert.All(leaseMethods, method => Assert.True(method.IsAssembly));
+        MethodInfo complete = Assert.Single(leaseMethods, method => method.Name == "Complete");
+        Assert.Equal(typeof(void), complete.ReturnType);
+        Assert.Empty(complete.GetParameters());
     }
 
     private static SessionRegistry.SessionRegistration Register(

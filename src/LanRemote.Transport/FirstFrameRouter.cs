@@ -62,13 +62,30 @@ internal sealed class FirstFrameRouter
 
         long enteredAt = _context.TimeProvider.GetTimestamp();
         ControlAuthSession? auth = null;
+        VideoAttachLease? attachedLease = null;
         List<Exception> errors = new(5);
-        // 主体的早退或故障都不能跳过收尾；各项 join 只收集错误，最后统一传播。
-        await JoinAsync(RunCoreAsync(), errors).ConfigureAwait(false);
-        // 关闭请求不是 join；先解堵原流，再等待原审批读和决定，绝不新增 Control reader。
-        await JoinAsync(connection.CloseAsync(), errors).ConfigureAwait(false);
-        if (auth is not null)
-            await JoinAsync(auth.JoinOwnedOperationsAsync(), errors).ConfigureAwait(false);
+        try
+        {
+            // 主体的早退或故障都不能跳过收尾；各项 join 只收集错误，最后统一传播。
+            await JoinAsync(RunCoreAsync(), errors).ConfigureAwait(false);
+            // 关闭请求不是 join；先解堵原流，再等待原审批读和决定，绝不新增 Control reader。
+            try
+            {
+                await JoinAsync(connection.CloseAsync(), errors).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                // 若授权关闭在返回任务前同步失败，不可宣称物理关闭已 join。
+                AddError(errors, error);
+            }
+            if (auth is not null)
+                await JoinAsync(auth.JoinOwnedOperationsAsync(), errors).ConfigureAwait(false);
+        }
+        finally
+        {
+            // 父 Control 只能在本视频路由和已启动的 Host 原关闭任务收尾后解除子连接预约。
+            attachedLease?.Complete();
+        }
         if (errors.Count == 1) ExceptionDispatchInfo.Capture(errors[0]).Throw();
         if (errors.Count > 1) throw new AggregateException("连接路由收尾发生多个错误。", errors);
 
@@ -95,8 +112,8 @@ internal sealed class FirstFrameRouter
                     return;
                 }
                 CheckEnvelope(enteredAt, cancellationToken);
-                lease = await AttachAsync(hello, connection.Security, enteredAt, cancellationToken)
-                    .ConfigureAwait(false);
+                lease = await AttachAsync(hello, connection.Security, enteredAt, cancellationToken,
+                    attached => attachedLease = attached).ConfigureAwait(false);
                 if (lease is null)
                 {
                     Rejection = "video-attach-rejected";
@@ -149,7 +166,8 @@ internal sealed class FirstFrameRouter
     }
 
     private async Task<VideoAttachLease?> AttachAsync(
-        VideoHelloFrame hello, ConnectionSecurityContext security, long enteredAt, CancellationToken cancellationToken)
+        VideoHelloFrame hello, ConnectionSecurityContext security, long enteredAt, CancellationToken cancellationToken,
+        Action<VideoAttachLease> onAttached)
     {
         long waitStarted = _context.TimeProvider.GetTimestamp();
         using AuthenticationDeadline wait = new(
@@ -164,6 +182,8 @@ internal sealed class FirstFrameRouter
             AttachStatus = _context.SessionRegistry.TryAttachVideo(
                 hello.SessionId, security, hello.AttachNonce.Span, hello.AttachProof.Span,
                 wait.Token, out VideoAttachLease? lease);
+            if (AttachStatus == VideoAttachStatus.Attached && lease is not null)
+                onAttached(lease);
             // 即使本机调度/时钟使调用跨越路由预算，也不得发送 ACK；已消费资格不回滚。
             CheckStage(wait, cancellationToken);
             CheckEnvelope(enteredAt, cancellationToken);

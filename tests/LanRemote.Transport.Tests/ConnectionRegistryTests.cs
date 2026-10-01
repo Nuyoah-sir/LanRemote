@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 
 namespace LanRemote.Transport.Tests;
 
@@ -374,21 +375,211 @@ public sealed class ConnectionRegistryTests
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            ConnectionStopReport second = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
             Assert.False(first.IsCompleted);
-            Assert.Equal(1, second.Total);
-            Assert.Equal(1, second.Unfinished);
+            ConnectionStopReport firstReport = await first.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, firstReport.Unfinished);
+            Assert.False(firstReport.AllFinished);
+            ConnectionStopReport secondReport =
+                await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+            Assert.Equal(1, secondReport.Unfinished);
+            Assert.False(secondReport.AllFinished);
             Assert.Equal(1, registry.Count);
         }
         finally
         {
             release.TrySetResult();
-            await first.WaitAsync(TimeSpan.FromSeconds(5));
             registration.Dispose();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.True((await registry.StopAllAsync(TimeSpan.FromMilliseconds(80))).AllFinished);
+        await registry.JoinAndDisposeAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, registry.Count);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Dispose_JoinsOriginalRegistrationAfterTimedOutStop()
+    {
+        ConnectionRegistry registry = new();
+        CountingResource resource = new();
+        ConnectionRegistration registration = Assert.IsType<ConnectionRegistration>(registry.TryRegister(resource));
+        TaskCompletionSource handlerEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseHandler = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task handler = Task.Run(async () =>
+        {
+            handlerEntered.TrySetResult();
+            try
+            {
+                await releaseHandler.Task;
+            }
+            finally
+            {
+                registration.Dispose();
+            }
+        });
+        Task? disposal = null;
+
+        try
+        {
+            await handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            ConnectionStopReport first = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+            Assert.Equal(1, first.Unfinished);
+            Assert.False(first.AllFinished);
+            Assert.Equal(1, registry.Count);
+
+            ConnectionStopReport concurrent = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80));
+            Assert.Equal(1, concurrent.Unfinished);
+            Assert.False(concurrent.AllFinished);
+            disposal = registry.JoinAndDisposeAsync();
+            Assert.False(disposal.IsCompleted);
+            Assert.Equal(1, registry.Count);
+            Assert.Equal(1, resource.DisposeCount);
+
+            releaseHandler.TrySetResult();
+            await handler.WaitAsync(TimeSpan.FromSeconds(5));
+            await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, registry.Count);
+        }
+        finally
+        {
+            releaseHandler.TrySetResult();
+            await handler.WaitAsync(TimeSpan.FromSeconds(5));
+            registration.Dispose();
+            if (disposal is not null)
+            {
+                await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Stop_WaitsForItsCancellationCallbackBeforeRegistryJoin()
+    {
+        ConnectionRegistry registry = new();
+        ConnectionRegistration registration = Assert.IsType<ConnectionRegistration>(registry.TryRegister(new NoopResource()));
+        TaskCompletionSource cancellationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseCancellation = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using CancellationTokenRegistration callback = registration.Cancellation.Register(() =>
+        {
+            cancellationEntered.TrySetResult();
+            releaseCancellation.Task.GetAwaiter().GetResult();
+        });
+        Task<ConnectionStopReport> stop = Task.Run(() => registry.StopAllAsync(TimeSpan.FromMilliseconds(80)));
+        Task? disposal = null;
+
+        try
+        {
+            await cancellationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // 旧 Stop 已持有快照，回调未退出时，即使租约随后结束也不能释放根 CTS。
+            registration.Dispose();
+            ConnectionStopReport report = await stop.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, report.Total);
+            Assert.Equal(1, report.Unfinished);
+            Assert.False(report.AllFinished);
+            Assert.False(releaseCancellation.Task.IsCompleted);
+            releaseCancellation.TrySetResult();
+            disposal = registry.JoinAndDisposeAsync();
+            await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            releaseCancellation.TrySetResult();
+            registration.Dispose();
+            await stop.WaitAsync(TimeSpan.FromSeconds(5));
+            if (disposal is not null)
+            {
+                await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
 
         Assert.Equal(0, registry.Count);
-        Assert.True((await registry.StopAllAsync(TimeSpan.FromMilliseconds(80))).AllFinished);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task JoinAndDispose_AggregatesTwoCancellationDisposeFailures_WithoutReleasingRoot()
+    {
+        ConnectionRegistry registry = new();
+        ConnectionRegistration first = Assert.IsType<ConnectionRegistration>(registry.TryRegister(new NoopResource()));
+        ConnectionRegistration second = Assert.IsType<ConnectionRegistration>(registry.TryRegister(new NoopResource()));
+        Exception firstError = new IOException("第一条连接的取消源释放失败");
+        Exception secondError = new InvalidOperationException("第二条连接的取消源释放失败");
+
+        FieldInfo entriesField = typeof(ConnectionRegistry).GetField("_entries",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var entries = Assert.IsAssignableFrom<System.Collections.IDictionary>(entriesField.GetValue(registry));
+        object firstEntry = entries[first.Id]!;
+        object secondEntry = entries[second.Id]!;
+        Assert.NotNull(firstEntry);
+        Assert.NotNull(secondEntry);
+        FieldInfo cancellationField = firstEntry.GetType().GetField("<Cancellation>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        CancellationTokenSource firstLinked = Assert.IsAssignableFrom<CancellationTokenSource>(
+            cancellationField.GetValue(firstEntry));
+        CancellationTokenSource secondLinked = Assert.IsAssignableFrom<CancellationTokenSource>(
+            cancellationField.GetValue(secondEntry));
+        CancellationTokenSource root = Assert.IsType<CancellationTokenSource>(typeof(ConnectionRegistry)
+            .GetField("_shutdown", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(registry));
+        FailingCancellationSource firstFault = new(firstError);
+        FailingCancellationSource secondFault = new(secondError);
+
+        try
+        {
+            ConnectionStopReport budget = await registry.StopAllAsync(TimeSpan.FromMilliseconds(80))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(2, budget.Total);
+            Assert.Equal(2, budget.Unfinished);
+            Assert.False(budget.AllFinished);
+            Task cancellation = Assert.IsAssignableFrom<Task>(typeof(ConnectionRegistry)
+                .GetField("_cancellationTask", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(registry));
+            await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+            var forced = Assert.IsType<List<Task>>(typeof(ConnectionRegistry)
+                .GetField("_forceDisposals", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(registry));
+            await Task.WhenAll(forced).WaitAsync(TimeSpan.FromSeconds(5));
+
+            // CreateLinkedTokenSource 返回的真实 linked CTS 没有可控的 Dispose 故障注入点；
+            // 此处替换 Entry 的释放目标，仅覆盖异常传播、完整 join 聚合及根源保留。
+            cancellationField.SetValue(firstEntry, firstFault);
+            cancellationField.SetValue(secondEntry, secondFault);
+            first.Dispose();
+            second.Dispose();
+            Assert.Equal(1, firstFault.DisposeCount);
+            Assert.Equal(1, secondFault.DisposeCount);
+            Assert.Equal(2, registry.Count);
+
+            AggregateException joinFailure = await Assert.ThrowsAsync<AggregateException>(() =>
+                registry.JoinAndDisposeAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(3, joinFailure.InnerExceptions.Count);
+            Assert.Contains(joinFailure.InnerExceptions, error => ReferenceEquals(firstError, error));
+            Assert.Contains(joinFailure.InnerExceptions, error => ReferenceEquals(secondError, error));
+            Assert.Contains(joinFailure.InnerExceptions, error => error is InvalidOperationException &&
+                error.Message.Contains("连接根取消源未释放", StringComparison.Ordinal));
+            Assert.Equal(2, registry.Count);
+            Assert.Null(Record.Exception(() => { _ = root.Token; }));
+        }
+        finally
+        {
+            first.Dispose();
+            second.Dispose();
+            firstLinked.Dispose();
+            secondLinked.Dispose();
+            root.Dispose();
+        }
+    }
+
+    private sealed class FailingCancellationSource(Exception error) : CancellationTokenSource
+    {
+        public int DisposeCount { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                DisposeCount++;
+                throw error;
+            }
+
+            base.Dispose(disposing);
+        }
     }
 
     private sealed class ActionResource(Action dispose) : IDisposable

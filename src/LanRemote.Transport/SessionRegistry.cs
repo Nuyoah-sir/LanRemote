@@ -184,9 +184,6 @@ public sealed class SessionRegistry
             try
             {
                 bool proofMatches = CryptographicOperations.FixedTimeEquals(expectedProof, attachProof);
-                VideoAttachLease? candidate = proofMatches
-                    ? new VideoAttachLease(sessionId, videoSecurity.ConnectionId, entry.Revoked.Task)
-                    : null;
 
                 // 错误 proof 也必须先服从最终取消/截止，不能抢先返回 InvalidProof。
                 unavailable = CheckAvailability(sessionId, entry, cancellationToken);
@@ -200,6 +197,9 @@ public sealed class SessionRegistry
                     return VideoAttachStatus.InvalidProof;
                 }
 
+                // 最终核对之后在同一把锁内预约子连接，父句柄持有该单次租约直至子连接收尾。
+                VideoAttachLease candidate = new(sessionId, videoSecurity.ConnectionId, entry.Revoked.Task);
+                entry.VideoLease = candidate;
                 entry.VideoAttached = true;
                 lease = candidate;
                 return VideoAttachStatus.Attached;
@@ -239,7 +239,7 @@ public sealed class SessionRegistry
         return entry.VideoAttached ? VideoAttachStatus.AlreadyAttached : null;
     }
 
-    private void Unregister(Guid sessionId, object entryIdentity)
+    private void Unregister(Guid sessionId, Entry entryIdentity)
     {
         lock (_gate)
         {
@@ -279,6 +279,7 @@ public sealed class SessionRegistry
         public byte[] ControlRemoteAddress { get; }
         public CancellationToken ControlCancellationToken { get; }
         public bool VideoAttached { get; set; }
+        public VideoAttachLease? VideoLease { get; set; }
         public TaskCompletionSource Revoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -291,25 +292,42 @@ public sealed class SessionRegistry
     {
         private readonly SessionRegistry _registry;
         private readonly Guid _sessionId;
-        private readonly object _entryIdentity;
+        private readonly Entry _entry;
         private int _released;
 
         internal SessionRegistration(SessionRegistry registry, Guid sessionId, object entryIdentity)
         {
             _registry = registry;
             _sessionId = sessionId;
-            _entryIdentity = entryIdentity;
+            _entry = (Entry)entryIdentity;
         }
 
         /// <summary>本句柄对应的会话 id。</summary>
         public Guid SessionId => _sessionId;
 
+        /// <summary>本句柄预约的视频子连接；未预约时已完成，预约后返回同一个完成任务。</summary>
+        internal Task VideoCompletion
+        {
+            get
+            {
+                lock (_registry._gate)
+                {
+                    return _entry.VideoLease?.Completed ?? Task.CompletedTask;
+                }
+            }
+        }
+
         /// <summary>注销；重复调用无副作用。</summary>
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _released, 1) == 0)
+            // 注销标记与摘表/清零必须一同线性化；并发重复 Dispose 不能在首个调用
+            // 尚未取得登记表锁时提前返回，让父连接误以为注销和子预约核对已结束。
+            lock (_registry._gate)
             {
-                _registry.Unregister(_sessionId, _entryIdentity);
+                if (Interlocked.Exchange(ref _released, 1) == 0)
+                {
+                    _registry.Unregister(_sessionId, _entry);
+                }
             }
         }
     }

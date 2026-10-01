@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -47,9 +48,14 @@ public sealed class TransportHost : IAsyncDisposable
     private readonly List<TcpListener> _listeners = new();
     private readonly List<Task> _acceptLoops = new();
     private readonly CancellationTokenSource _stop = new();
+    private readonly object _lifetimeGate = new();
+    private readonly HashSet<Task<TransportHostStopReport>> _pendingStops = new();
 
     private int _started;
+    private bool _stopping;
     private bool _disposed;
+    private Task? _stopCancellationTask;
+    private Task? _disposeTask;
 
     /// <summary>构造 Host。</summary>
     /// <param name="localAddresses">要监听的本地 IPv4 地址（每张合格网卡一个）。</param>
@@ -79,6 +85,11 @@ public sealed class TransportHost : IAsyncDisposable
 
         _sessionHandler = sessionHandler;
         _options = options ?? new TransportHostOptions();
+        if (_options.ShutdownTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), _options.ShutdownTimeout,
+                "停机预算必须为正。");
+        }
 
         _limiter = new ConnectionAdmissionLimiter(
             _options.MaxConnections,
@@ -123,7 +134,8 @@ public sealed class TransportHost : IAsyncDisposable
     }
 
     /// <summary>是否正在运行。</summary>
-    public bool IsRunning => Volatile.Read(ref _started) == 1 && !_stop.IsCancellationRequested;
+    public bool IsRunning => Volatile.Read(ref _started) == 1 &&
+        !Volatile.Read(ref _stopping) && !_stop.IsCancellationRequested;
 
     /// <summary>登记表中的活动连接数。</summary>
     public int ActiveConnections => _registry.Count;
@@ -144,51 +156,59 @@ public sealed class TransportHost : IAsyncDisposable
     /// <remarks>按网卡降级（ADR-031）；一个都没听上<b>不抛异常</b>，由调用方决定如何呈现。</remarks>
     public TransportHostStartResult Start()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        if (Interlocked.Exchange(ref _started, 1) != 0)
+        lock (_lifetimeGate)
         {
-            throw new InvalidOperationException("TransportHost 只能启动一次。");
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_stopping)
+            {
+                throw new InvalidOperationException("TransportHost 已停止，不能启动。");
+            }
+
+            if (_started != 0)
+            {
+                throw new InvalidOperationException("TransportHost 只能启动一次。");
+            }
+
+            _started = 1;
+            List<IPAddress> bound = new();
+            List<TransportHostBindFailure> failures = new();
+
+            foreach (IPAddress address in _localAddresses)
+            {
+                if (address is null)
+                {
+                    continue;
+                }
+
+                if (address.AddressFamily != AddressFamily.InterNetwork)
+                {
+                    failures.Add(new TransportHostBindFailure(address, null, "不是 IPv4 地址。"));
+                    continue;
+                }
+
+                TcpListener listener = new(address, _options.Port)
+                {
+                    // 见类型说明：不开就会与更宽的 bind 静默共享端口。
+                    ExclusiveAddressUse = true,
+                };
+
+                try
+                {
+                    listener.Start(_options.ListenBacklog);
+                }
+                catch (SocketException ex)
+                {
+                    failures.Add(new TransportHostBindFailure(address, ex.SocketErrorCode, ex.Message));
+                    continue;
+                }
+
+                _listeners.Add(listener);
+                bound.Add(address);
+                _acceptLoops.Add(Task.Run(() => AcceptLoopAsync(listener, address)));
+            }
+
+            return new TransportHostStartResult(bound, failures);
         }
-
-        List<IPAddress> bound = new();
-        List<TransportHostBindFailure> failures = new();
-
-        foreach (IPAddress address in _localAddresses)
-        {
-            if (address is null)
-            {
-                continue;
-            }
-
-            if (address.AddressFamily != AddressFamily.InterNetwork)
-            {
-                failures.Add(new TransportHostBindFailure(address, null, "不是 IPv4 地址。"));
-                continue;
-            }
-
-            TcpListener listener = new(address, _options.Port)
-            {
-                // 见类型说明：不开就会与更宽的 bind 静默共享端口。
-                ExclusiveAddressUse = true,
-            };
-
-            try
-            {
-                listener.Start(_options.ListenBacklog);
-            }
-            catch (SocketException ex)
-            {
-                failures.Add(new TransportHostBindFailure(address, ex.SocketErrorCode, ex.Message));
-                continue;
-            }
-
-            _listeners.Add(listener);
-            bound.Add(address);
-            _acceptLoops.Add(Task.Run(() => AcceptLoopAsync(listener, address)));
-        }
-
-        return new TransportHostStartResult(bound, failures);
     }
 
     /// <summary>
@@ -199,9 +219,10 @@ public sealed class TransportHost : IAsyncDisposable
     /// <remarks>
     /// <b>预算超限必须可观测</b>（评审 B18）：<see cref="TransportHostStopReport.AllFinished"/> 为
     /// <see langword="false"/> 时，调用方必须能说出「是 accept 循环没停、还是几条连接没结束」，
-    /// 不得与干净成功不可区分。
+    /// 不得与干净成功不可区分。根取消或物理关闭回调仍运行时抛超时异常，
+    /// 不以伪造连接数表达第三种未完成阶段。
     /// </remarks>
-    public async Task<TransportHostStopReport> StopAsync(TimeSpan? timeout = null)
+    public Task<TransportHostStopReport> StopAsync(TimeSpan? timeout = null)
     {
         TimeSpan budget = timeout ?? _options.ShutdownTimeout;
         if (budget <= TimeSpan.Zero)
@@ -209,7 +230,37 @@ public sealed class TransportHost : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(timeout), budget, "停机预算必须为正。");
         }
 
-        _stop.Cancel();
+        lock (_lifetimeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _stopping = true;
+            PruneCompletedStops();
+            // 根取消的同步回调可能阻塞；不让它占住发布锁或调用方线程。
+            Task<TransportHostStopReport> stop = Task.Run(() => StopCoreAsync(budget));
+            _pendingStops.Add(stop);
+            _ = stop.ContinueWith(completed =>
+            {
+                lock (_lifetimeGate)
+                {
+                    if (_pendingStops.Remove(completed))
+                    {
+                        RecordCompletedStop(completed);
+                    }
+                }
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return stop;
+        }
+    }
+
+    private async Task<TransportHostStopReport> StopCoreAsync(TimeSpan budget)
+    {
+        Stopwatch clock = Stopwatch.StartNew();
+        List<Exception> errors = new();
+        Task cancellation;
+        lock (_lifetimeGate)
+        {
+            cancellation = _stopCancellationTask ??= Task.Run(() => _stop.Cancel());
+        }
 
         foreach (TcpListener listener in _listeners)
         {
@@ -220,27 +271,70 @@ public sealed class TransportHost : IAsyncDisposable
             catch (SocketException)
             {
             }
+            catch (Exception error)
+            {
+                errors.Add(error);
+            }
         }
 
-        // accept 还持有未登记连接的异步关闭；listener 停止并不意味着这些收尾已经完成。
-        // 四分之一只是分配给 accept 的等待预算，不能保证同步策略或资源释放及时退出。
-        // 超时记进报告，不能把尚未关闭的拒绝连接报告为停机完成。
-        bool acceptFinished = true;
+        // 立即发出连接停机；不能让同步根取消回调或未登记连接收尾挡住物理关闭。
         TimeSpan acceptBudget = TimeSpan.FromTicks(budget.Ticks / 4);
+        Task<ConnectionStopReport>? registryStop = null;
+        try
+        {
+            registryStop = _registry.StopAllAsync(budget - acceptBudget);
+        }
+        catch (Exception error)
+        {
+            errors.Add(error);
+        }
+
+        // accept 仍持有未登记连接的异步关闭，必须单独计入报告与完整 Dispose join。
+        bool acceptFinished = true;
         if (_acceptLoops.Count > 0)
         {
+            Task accept = Task.WhenAll(_acceptLoops);
             try
             {
-                await Task.WhenAll(_acceptLoops).WaitAsync(acceptBudget).ConfigureAwait(false);
+                await accept.WaitAsync(acceptBudget).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
                 acceptFinished = false;
             }
+            catch (Exception error)
+            {
+                if (accept.Exception is { } failure)
+                {
+                    errors.AddRange(failure.InnerExceptions);
+                }
+                else
+                {
+                    errors.Add(error);
+                }
+            }
         }
 
-        ConnectionStopReport connections =
-            await _registry.StopAllAsync(budget - acceptBudget).ConfigureAwait(false);
+        ConnectionStopReport? connections = null;
+        if (registryStop is not null)
+        {
+            try
+            {
+                // Registry 自身仅等待两段有限预算，永不无限 await 原连接或同步回调。
+                connections = await registryStop.ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                if (registryStop.Exception is { } failure)
+                {
+                    errors.AddRange(failure.InnerExceptions);
+                }
+                else
+                {
+                    errors.Add(error);
+                }
+            }
+        }
 
         foreach (TcpListener listener in _listeners)
         {
@@ -251,22 +345,198 @@ public sealed class TransportHost : IAsyncDisposable
             catch (SocketException)
             {
             }
+            catch (Exception error)
+            {
+                errors.Add(error);
+            }
         }
 
-        return new TransportHostStopReport(acceptFinished, connections.Unfinished);
+        // Registry/accept 结束不代表 Host 根取消回调已退出；剩余预算内观察原回调。
+        TimeSpan remaining = budget - clock.Elapsed;
+        if (!cancellation.IsCompleted && remaining > TimeSpan.Zero)
+        {
+            try
+            {
+                await cancellation.WaitAsync(remaining).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (Exception)
+            {
+                // 从原 Task.Exception 读取完整错误树。
+            }
+        }
+
+        if (!cancellation.IsCompleted)
+        {
+            errors.Add(new TimeoutException(
+                $"Host 停机预算已耗尽：根取消回调仍未退出，" +
+                $"accept 循环完成={acceptFinished}，当前登记连接={_registry.Count}；不报告为干净成功。"));
+        }
+        else if (cancellation.Exception is { } cancellationFailure)
+        {
+            errors.AddRange(cancellationFailure.InnerExceptions);
+        }
+
+        if (!acceptFinished && errors.Count != 0)
+        {
+            errors.Add(new TimeoutException(
+                $"Host 停机预算内 accept 循环仍未结束；当前登记连接={_registry.Count}。"));
+        }
+
+        if (errors.Count == 1 && errors[0] is TimeoutException timeout)
+        {
+            throw timeout;
+        }
+
+        if (errors.Count != 0)
+        {
+            throw new AggregateException("TransportHost 停机清理失败。", errors);
+        }
+
+        return new TransportHostStopReport(acceptFinished, connections!.Unfinished);
     }
 
-    /// <summary>释放 Host。</summary>
-    public async ValueTask DisposeAsync()
+    /// <summary>完整等待停机、accept 与连接收尾，再释放根取消源；并发调用共享同一任务。</summary>
+    public ValueTask DisposeAsync()
     {
-        if (_disposed)
+        lock (_lifetimeGate)
         {
-            return;
+            if (_disposeTask is null)
+            {
+                _disposed = true;
+                _stopping = true;
+                PruneCompletedStops();
+                Task<TransportHostStopReport>[] pendingStops = _pendingStops.ToArray();
+                _disposeTask = Task.Run(() => DisposeCoreAsync(pendingStops));
+            }
+
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private void PruneCompletedStops()
+    {
+        _pendingStops.RemoveWhere(stop =>
+        {
+            if (!stop.IsCompleted)
+            {
+                return false;
+            }
+
+            RecordCompletedStop(stop);
+            return true;
+        });
+    }
+
+    private void RecordCompletedStop(Task<TransportHostStopReport> stop)
+    {
+        // 已完成 Stop 的所有原错误仍在各自返回的 Task 上；Host 只留有界诊断，
+        // Dispose 不重复汇报历史已完成 Stop，仅完整汇报它启动时尚未结束的 Stop。
+        if (stop.Exception is { } failure)
+        {
+            foreach (Exception error in failure.InnerExceptions)
+            {
+                LifecycleErrors.Record(HostLifecycleErrorKind.Connection, error);
+            }
+        }
+    }
+
+    private async Task DisposeCoreAsync(Task<TransportHostStopReport>[] pendingStops)
+    {
+        List<Exception> errors = new();
+        try
+        {
+            await StopCoreAsync(_options.ShutdownTimeout).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            errors.Add(error);
         }
 
-        _disposed = true;
-        await StopAsync().ConfigureAwait(false);
-        _stop.Dispose();
+        // 预算报告可先返回；旧 Stop 必须完整 join，不能由 Count=0 或报告替代。
+        try
+        {
+            await Task.WhenAll(pendingStops).ConfigureAwait(false);
+        }
+        catch
+        {
+            foreach (Task<TransportHostStopReport> stop in pendingStops)
+            {
+                if (stop.Exception is { } failure)
+                {
+                    errors.AddRange(failure.InnerExceptions);
+                }
+            }
+        }
+
+        Task accept = Task.WhenAll(_acceptLoops);
+        try
+        {
+            await accept.ConfigureAwait(false);
+        }
+        catch
+        {
+            if (accept.Exception is { } failure)
+            {
+                errors.AddRange(failure.InnerExceptions);
+            }
+        }
+
+        Task? cancellation;
+        lock (_lifetimeGate)
+        {
+            cancellation = _stopCancellationTask;
+        }
+
+        if (cancellation is not null)
+        {
+            try
+            {
+                await cancellation.ConfigureAwait(false);
+            }
+            catch
+            {
+                if (cancellation.Exception is { } failure)
+                {
+                    errors.AddRange(failure.InnerExceptions);
+                }
+            }
+        }
+
+        // Registry 完整 join 原回调、force 与 linked CTS；故障不阻止独立回收 Host 根。
+        try
+        {
+            await _registry.JoinAndDisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            errors.Add(error);
+        }
+
+        if (cancellation is { IsCompleted: true } && accept.IsCompleted &&
+            pendingStops.All(stop => stop.IsCompleted))
+        {
+            try
+            {
+                _stop.Dispose();
+            }
+            catch (Exception error)
+            {
+                errors.Add(error);
+            }
+        }
+        else
+        {
+            errors.Add(new InvalidOperationException(
+                "Host 根取消源未释放：原取消、accept 或旧 Stop 尚未完整结束。"));
+        }
+
+        if (errors.Count != 0)
+        {
+            throw new AggregateException("TransportHost 停机清理失败。", errors);
+        }
     }
 
     private async Task AcceptLoopAsync(TcpListener listener, IPAddress localAddress)
@@ -346,8 +616,15 @@ public sealed class TransportHost : IAsyncDisposable
                 return;
             }
 
-            // ③ 登记表：停机时要能取消并 join。
-            registration = _registry.TryRegister(closer);
+            // ③ 登记提交与停机发布共用闸门；子网策略及准入逻辑都不能占住此锁。
+            lock (_lifetimeGate)
+            {
+                if (!_stopping && !_disposed)
+                {
+                    registration = _registry.TryRegister(closer);
+                }
+            }
+
             if (registration is null)
             {
                 return;

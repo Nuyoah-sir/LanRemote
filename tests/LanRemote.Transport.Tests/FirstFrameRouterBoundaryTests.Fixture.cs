@@ -58,15 +58,16 @@ public sealed partial class FirstFrameRouterBoundaryTests
     private sealed class BoundaryScenario : IAsyncDisposable
     {
         private readonly ConnectionCloseHandle _closer;
+        private readonly List<SessionRegistry.SessionRegistration> _registrations = new();
         private Task? _run;
 
         internal BoundaryScenario(byte[]? wire = null, bool badProof = false, int holdRead = 0,
             bool holdWrite = false, bool holdFlush = false, bool failWrite = false, bool failFlush = false,
             TransportTimeouts? timeouts = null, bool cancelAwareRead = false,
-            IVideoFrameProducerFactory? producerFactory = null)
+            IVideoFrameProducerFactory? producerFactory = null, bool holdDispose = false)
         {
             Stream = new ControlledSslStream(wire ?? HelloWire(badProof), holdRead,
-                holdWrite, holdFlush, failWrite, failFlush, cancelAwareRead);
+                holdWrite, holdFlush, failWrite, failFlush, cancelAwareRead, holdDispose);
             // 按 Host 内部真实顺序绑定同一 SSL/安全上下文；不是 public record 或伪造关闭权限。
             // MemoryStream 仅替代 socket 资源，SSL Dispose 仍由真实 CloseHandle 执行并 join。
             _closer = new ConnectionCloseHandle(new MemoryStream(), new HostLifecycleErrors());
@@ -105,17 +106,31 @@ public sealed partial class FirstFrameRouterBoundaryTests
         }
 
         internal SessionRegistry.SessionRegistration Register(TimeProvider? windowClock = null,
-            CancellationToken controlToken = default, Guid? connectionId = null, int expiresInMs = 15_000) =>
-            Registry.Register(SessionId, connectionId ?? Guid.NewGuid(),
+            CancellationToken controlToken = default, Guid? connectionId = null, int expiresInMs = 15_000)
+        {
+            SessionRegistry.SessionRegistration registration = Registry.Register(
+                SessionId, connectionId ?? Guid.NewGuid(),
                 Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"), "首帧路由边界测试",
                 SessionPermission.ViewOnly, RemoteAddress, 12345, Token,
                 new VideoAttachWindow(windowClock ?? Clock.Manual, expiresInMs), Pin, controlToken);
+            _registrations.Add(registration);
+            return registration;
+        }
 
         internal VideoAttachStatus ProbeAttach(bool freshNonce = false)
         {
             byte[] nonce = Nonce.ToArray();
             if (freshNonce) nonce[0] ^= 1;
-            return Registry.TryAttachVideo(SessionId, Security(), nonce, Proof(nonce), default, out _);
+            VideoAttachLease? lease = null;
+            try
+            {
+                return Registry.TryAttachVideo(SessionId, Security(), nonce, Proof(nonce), default, out lease);
+            }
+            finally
+            {
+                // 探针仅验证资格边界，不启动视频；成功预约也必须结束子句柄。
+                lease?.Complete();
+            }
         }
 
         public async ValueTask DisposeAsync()
@@ -145,7 +160,18 @@ public sealed partial class FirstFrameRouterBoundaryTests
                     finally
                     {
                         try { await Stream.JoinIOAsync(); }
-                        finally { HostStop.Dispose(); }
+                        finally
+                        {
+                            try
+                            {
+                                // 子路由和全部 I/O 完成后才等待父句柄；断言失败时也先放行闸门。
+                                foreach (SessionRegistry.SessionRegistration registration in _registrations)
+                                    registration.Dispose();
+                                foreach (SessionRegistry.SessionRegistration registration in _registrations)
+                                    await registration.VideoCompletion.WaitAsync(Guard);
+                            }
+                            finally { HostStop.Dispose(); }
+                        }
                     }
                 }
             }
@@ -156,9 +182,18 @@ public sealed partial class FirstFrameRouterBoundaryTests
     private sealed class ObservedClock : TimeProvider
     {
         private readonly Channel<TimerNotice> _created = Channel.CreateUnbounded<TimerNotice>();
+        private int _timestampReads;
         internal ManualDeadlineClock Manual { get; } = new();
+        internal int TimestampReads => Volatile.Read(ref _timestampReads);
+        internal Action<int>? AfterSample { get; set; }
         public override long TimestampFrequency => Manual.TimestampFrequency;
-        public override long GetTimestamp() => Manual.GetTimestamp();
+        public override long GetTimestamp()
+        {
+            long sample = Manual.GetTimestamp();
+            int read = Interlocked.Increment(ref _timestampReads);
+            AfterSample?.Invoke(read);
+            return sample;
+        }
         public override DateTimeOffset GetUtcNow() => Manual.GetUtcNow();
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
@@ -232,6 +267,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
         private readonly TaskCompletionSource _readRelease = Signal();
         private readonly TaskCompletionSource _writeRelease = Signal();
         private readonly TaskCompletionSource _flushRelease = Signal();
+        private readonly TaskCompletionSource _disposeRelease = Signal();
         private readonly ConcurrentQueue<Task> _operations = new();
         private int _offset;
         private int _readCalls;
@@ -241,7 +277,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
         private int _peerReadCompleted;
 
         internal ControlledSslStream(byte[] input, int holdRead, bool holdWrite, bool holdFlush,
-            bool failWrite, bool failFlush, bool cancelAwareRead) : base(new MemoryStream())
+            bool failWrite, bool failFlush, bool cancelAwareRead, bool holdDispose) : base(new MemoryStream())
         {
             _input = input;
             _holdRead = holdRead;
@@ -251,6 +287,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
             if (holdRead == 0) ReleaseRead();
             if (!holdWrite) ReleaseWrite();
             if (!holdFlush) ReleaseFlush();
+            if (!holdDispose) ReleaseDispose();
         }
 
         internal TaskCompletionSource ReadEntered { get; } = Signal();
@@ -259,6 +296,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource WriteEntered { get; } = Signal();
         internal TaskCompletionSource FlushEntered { get; } = Signal();
+        internal TaskCompletionSource DisposeEntered { get; } = Signal();
         internal TaskCompletionSource Closed { get; } = Signal();
         internal ConcurrentQueue<byte[]> Writes { get; } = new();
         internal Action<int>? BeforeReadCompletes { get; set; }
@@ -356,11 +394,13 @@ public sealed partial class FirstFrameRouterBoundaryTests
         internal void ReleaseRead() => _readRelease.TrySetResult();
         internal void ReleaseWrite() => _writeRelease.TrySetResult();
         internal void ReleaseFlush() => _flushRelease.TrySetResult();
+        internal void ReleaseDispose() => _disposeRelease.TrySetResult();
         internal void ReleaseAll()
         {
             ReleaseRead();
             ReleaseWrite();
             ReleaseFlush();
+            ReleaseDispose();
         }
 
         internal async Task JoinIOAsync()
@@ -375,9 +415,26 @@ public sealed partial class FirstFrameRouterBoundaryTests
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) Interlocked.Increment(ref _disposeCount);
+            if (disposing)
+            {
+                DisposeEntered.TrySetResult();
+                _disposeRelease.Task.GetAwaiter().GetResult();
+                Interlocked.Increment(ref _disposeCount);
+            }
             try { base.Dispose(disposing); }
             finally { if (disposing) Closed.TrySetResult(); }
+        }
+    }
+
+    private sealed class NeverCreateFactory : IVideoFrameProducerFactory
+    {
+        private int _calls;
+        internal int Calls => Volatile.Read(ref _calls);
+
+        public ValueTask<IVideoFrameProducer> CreateAsync(Guid sessionId, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            throw new InvalidOperationException("资格或 ACK 失败后不得创建视频生产者。");
         }
     }
 

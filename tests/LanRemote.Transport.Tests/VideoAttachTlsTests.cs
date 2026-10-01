@@ -93,12 +93,53 @@ public sealed partial class VideoAttachTlsTests
         control.Dispose();
 
         await AssertSourceCancelledAsync(scenario.Source, sourceTask);
-        Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
         Assert.Null(await video.Server.Finished.Task.WaitAsync(Guard));
+        Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
         await AssertClosedWithoutDataAsync(video.Client.Stream);
         await scenario.WaitForConnectionCountAsync(0);
         Assert.Empty(scenario.Context.SessionRegistry.Snapshot());
         Assert.Equal(1, Assert.Single(scenario.Source.Owners).DisposeCalls);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task Control_Disconnect_Revokes_Video_But_Waits_For_Ignoring_Source_To_Finish()
+    {
+        await using TlsScenario scenario = new(ignoreCancellation: true);
+        scenario.Start();
+        AuthenticatedControlSession control = await scenario.OpenControlAsync();
+        VideoPeer video = await scenario.AttachAsync(control);
+        Task<EncodedFrame?> sourceTask = await scenario.Source.Blocked.Task.WaitAsync(Guard);
+
+        try
+        {
+            control.Dispose();
+            await scenario.Source.CancellationObserved.Task.WaitAsync(Guard);
+            await WaitForConditionAsync(() => scenario.Context.SessionRegistry.ActiveSessionCount == 0);
+            Assert.Empty(scenario.Context.SessionRegistry.Snapshot());
+            Assert.True(scenario.Host.IsRunning);
+            Assert.False(video.Server.HandlerToken.IsCancellationRequested);
+            Assert.True(scenario.Source.LifetimeToken.IsCancellationRequested);
+            Assert.False(sourceTask.IsCompleted);
+            Assert.False(video.Server.Finished.Task.IsCompleted);
+            Assert.False(scenario.ControlServer.Finished.Task.IsCompleted);
+            await scenario.WaitForConnectionCountAsync(2);
+            await AssertClosedWithoutDataAsync(video.Client.Stream);
+            Assert.False(scenario.ControlServer.Finished.Task.IsCompleted);
+        }
+        finally
+        {
+            // 不响应取消的源必须先放行，await using 才能完整 join 两条连接。
+            scenario.Source.ReleaseAll();
+        }
+
+        Assert.Null(await sourceTask.WaitAsync(Guard));
+        Assert.True(sourceTask.IsCompletedSuccessfully);
+        Assert.Null(await video.Server.Finished.Task.WaitAsync(Guard));
+        Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
+        await scenario.WaitForConnectionCountAsync(0);
+        Assert.Empty(scenario.Context.SessionRegistry.Snapshot());
+        Assert.Equal(1, Assert.Single(scenario.Source.Owners).DisposeCalls);
+        Assert.Empty(scenario.Host.LifecycleErrors.Snapshot);
     }
 
     [Fact(Timeout = 60_000)]
@@ -141,8 +182,8 @@ public sealed partial class VideoAttachTlsTests
         await scenario.AssertStoppedAsync();
 
         await AssertSourceCancelledAsync(scenario.Source, sourceTask);
-        Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
         Assert.Null(await video.Server.Finished.Task.WaitAsync(Guard));
+        Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
         await AssertClosedWithoutDataAsync(control.Stream);
         await AssertClosedWithoutDataAsync(video.Client.Stream);
         Assert.Empty(scenario.Host.LifecycleErrors.Snapshot);
@@ -161,10 +202,10 @@ public sealed partial class VideoAttachTlsTests
         {
             TransportHostStopReport first = await scenario.Host.StopAsync(TimeSpan.FromMilliseconds(100)).WaitAsync(Guard);
             Assert.False(first.AllFinished);
-            Assert.True(first.UnfinishedConnections >= 1);
+            Assert.Equal(2, first.UnfinishedConnections);
             await scenario.Source.CancellationObserved.Task.WaitAsync(Guard);
-            Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
-            await scenario.WaitForConnectionCountAsync(1);
+            await scenario.WaitForConnectionCountAsync(2);
+            Assert.False(scenario.ControlServer.Finished.Task.IsCompleted);
             await AssertClosedWithoutDataAsync(control.Stream);
             await AssertClosedWithoutDataAsync(video.Client.Stream);
             Assert.True(scenario.Source.LifetimeToken.IsCancellationRequested);
@@ -173,11 +214,12 @@ public sealed partial class VideoAttachTlsTests
 
             TransportHostStopReport second = await scenario.Host.StopAsync(TimeSpan.FromMilliseconds(100)).WaitAsync(Guard);
             Assert.False(second.AllFinished);
-            Assert.Equal(1, second.UnfinishedConnections);
-            Assert.Equal(1, scenario.Host.ActiveConnections);
-            Assert.Equal(1, scenario.Host.AdmittedConnections);
+            Assert.Equal(2, second.UnfinishedConnections);
+            Assert.Equal(2, scenario.Host.ActiveConnections);
+            Assert.Equal(2, scenario.Host.AdmittedConnections);
             Assert.False(sourceTask.IsCompleted);
             Assert.False(video.Server.Finished.Task.IsCompleted);
+            Assert.False(scenario.ControlServer.Finished.Task.IsCompleted);
         }
         finally
         {
@@ -187,8 +229,9 @@ public sealed partial class VideoAttachTlsTests
 
         Assert.Null(await sourceTask.WaitAsync(Guard));
         Assert.True(sourceTask.IsCompletedSuccessfully);
-        await scenario.AssertStoppedAsync();
         Assert.Null(await video.Server.Finished.Task.WaitAsync(Guard));
+        Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
+        await scenario.AssertStoppedAsync();
         Assert.Empty(scenario.Host.LifecycleErrors.Snapshot);
     }
 
@@ -249,11 +292,15 @@ public sealed partial class VideoAttachTlsTests
             Assert.True(video.Server.HandlerToken.IsCancellationRequested);
             TransportHostStopReport report = await stop.WaitAsync(Guard);
             Assert.False(report.AllFinished);
-            Assert.True(report.UnfinishedConnections >= 1);
+            Assert.Equal(2, report.UnfinishedConnections);
+            Assert.Equal(2, scenario.Host.ActiveConnections);
+            Assert.Equal(2, scenario.Host.AdmittedConnections);
             Assert.False(video.Server.Finished.Task.IsCompleted);
+            Assert.False(scenario.ControlServer.Finished.Task.IsCompleted);
 
             scenario.Source.ReleaseAll();
             Assert.Same(expected, await video.Server.Finished.Task.WaitAsync(Guard));
+            Assert.Null(await scenario.ControlServer.Finished.Task.WaitAsync(Guard));
             await scenario.AssertStoppedAsync();
             HostLifecycleError diagnostic = Assert.Single(scenario.Host.LifecycleErrors.Snapshot);
             Assert.Equal(HostLifecycleErrorKind.Handler, diagnostic.Kind);

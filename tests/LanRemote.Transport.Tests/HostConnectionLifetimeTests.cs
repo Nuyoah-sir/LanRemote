@@ -716,6 +716,295 @@ public sealed class HostConnectionLifetimeTests
         Assert.Empty(host.LifecycleErrors.Snapshot);
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task HostDispose_DoesNotReplayTwoCompletedFaultedStops()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        TransportHost host = new(Array.Empty<IPAddress>(), new AllowLoopbackPolicy(), certificate,
+            (_, _) => Task.CompletedTask,
+            new TransportHostOptions { ShutdownTimeout = TimeSpan.FromSeconds(5) });
+        using DisposeGate gate = new();
+        CancellationTokenSource root = Assert.IsType<CancellationTokenSource>(typeof(TransportHost)
+            .GetField("_stop", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host));
+        using CancellationTokenRegistration callback = root.Token.Register(gate.Block);
+        Task? disposal = null;
+
+        try
+        {
+            // 两次真正的 Stop 均因根取消回调超预算而 fault；调用方分别持有并观察原 Task。
+            Task<TransportHostStopReport> first = host.StopAsync(TimeSpan.FromMilliseconds(80));
+            await gate.Entered.Task.WaitAsync(Guard);
+            TimeoutException firstError = await Assert.ThrowsAsync<TimeoutException>(() => first.WaitAsync(Guard));
+            Assert.Same(firstError, Assert.Single(first.Exception!.InnerExceptions));
+            Task<TransportHostStopReport> second = host.StopAsync(TimeSpan.FromMilliseconds(80));
+            TimeoutException secondError = await Assert.ThrowsAsync<TimeoutException>(() => second.WaitAsync(Guard));
+            Assert.Same(secondError, Assert.Single(second.Exception!.InnerExceptions));
+            Assert.NotSame(firstError, secondError);
+            Assert.StartsWith("Host 停机预算已耗尽", firstError.Message);
+            Assert.StartsWith("Host 停机预算已耗尽", secondError.Message);
+            AssertError(host.LifecycleErrors, HostLifecycleErrorKind.Connection, firstError);
+            Assert.DoesNotContain(host.LifecycleErrors.Snapshot,
+                entry => ReferenceEquals(entry.Error, secondError));
+            Assert.Single(host.LifecycleErrors.Snapshot);
+
+            gate.Release();
+            await gate.Exited.Task.WaitAsync(Guard);
+            disposal = host.DisposeAsync().AsTask();
+            await disposal.WaitAsync(Guard);
+            Assert.Same(disposal, host.DisposeAsync().AsTask());
+            AssertError(host.LifecycleErrors, HostLifecycleErrorKind.Connection, firstError);
+            Assert.DoesNotContain(host.LifecycleErrors.Snapshot,
+                entry => ReferenceEquals(entry.Error, secondError));
+        }
+        finally
+        {
+            gate.Release();
+            await (disposal ?? host.DisposeAsync().AsTask()).WaitAsync(Guard);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task HostDispose_JoinsAndReportsStopThatWasPendingAtDisposeCall()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        TransportHost host = new(Array.Empty<IPAddress>(), new AllowLoopbackPolicy(), certificate,
+            (_, _) => Task.CompletedTask,
+            new TransportHostOptions { ShutdownTimeout = TimeSpan.FromSeconds(5) });
+        using DisposeGate gate = new();
+        CancellationTokenSource root = Assert.IsType<CancellationTokenSource>(typeof(TransportHost)
+            .GetField("_stop", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host));
+        using CancellationTokenRegistration callback = root.Token.Register(gate.Block);
+        Task? disposal = null;
+
+        try
+        {
+            Task<TransportHostStopReport> stop = host.StopAsync(TimeSpan.FromSeconds(1));
+            await gate.Entered.Task.WaitAsync(Guard);
+            Assert.False(stop.IsCompleted);
+            disposal = host.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            TimeoutException stopError = await Assert.ThrowsAsync<TimeoutException>(() => stop.WaitAsync(Guard));
+            Assert.Same(stopError, Assert.Single(stop.Exception!.InnerExceptions));
+            Assert.False(disposal.IsCompleted);
+
+            gate.Release();
+            AggregateException failure = await Assert.ThrowsAsync<AggregateException>(() => disposal.WaitAsync(Guard));
+            Assert.Same(stopError, Assert.Single(failure.InnerExceptions));
+            Assert.True(gate.Exited.Task.IsCompleted);
+            Assert.Same(disposal, host.DisposeAsync().AsTask());
+        }
+        finally
+        {
+            gate.Release();
+            if (disposal is null)
+            {
+                disposal = host.DisposeAsync().AsTask();
+            }
+
+            try
+            {
+                await disposal.WaitAsync(Guard);
+            }
+            catch (AggregateException) when (disposal.IsFaulted)
+            {
+                // 上方已断言 Dispose 传播仍 pending 的 Stop 故障。
+            }
+        }
+    }
+
+    [Theory(Timeout = 60_000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HostDispose_ConcurrentCallsJoinStubbornHandlerAfterStopBudget(bool stopFirst)
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        int port = GetFreePort();
+        TaskCompletionSource handlerEntered = NewSignal();
+        TaskCompletionSource releaseHandler = NewSignal();
+        TransportHost host = new(
+            new[] { IPAddress.Loopback }, new AllowLoopbackPolicy(), certificate,
+            async (_, _) =>
+            {
+                handlerEntered.TrySetResult();
+                await releaseHandler.Task;
+            },
+            new TransportHostOptions
+            {
+                Port = port,
+                MaxConnections = 1,
+                MaxConnectionsPerAddress = 1,
+                ShutdownTimeout = TimeSpan.FromMilliseconds(100),
+            });
+        Task? disposal = null;
+
+        try
+        {
+            Assert.True(host.Start().IsListening);
+            using TlsConnection client = await ConnectAsync(port, certificate);
+            await handlerEntered.Task.WaitAsync(Guard);
+            Assert.Equal(1, host.ActiveConnections);
+            Assert.Equal(1, host.AdmittedConnections);
+
+            Task<TransportHostStopReport> stop = host.StopAsync(TimeSpan.FromMilliseconds(100));
+            if (stopFirst)
+            {
+                TransportHostStopReport initial = await stop.WaitAsync(Guard);
+                Assert.False(initial.AllFinished);
+                Assert.Equal(1, initial.UnfinishedConnections);
+            }
+
+            disposal = host.DisposeAsync().AsTask();
+            Assert.Same(disposal, host.DisposeAsync().AsTask());
+            TransportHostStopReport concurrent = await stop.WaitAsync(Guard);
+            Assert.False(concurrent.AllFinished);
+            Assert.Equal(1, concurrent.UnfinishedConnections);
+            Assert.False(disposal.IsCompleted);
+            Assert.Equal(1, host.ActiveConnections);
+            Assert.Equal(1, host.AdmittedConnections);
+            Assert.Equal(1, host.Limiter.InUseFor(IPAddress.Loopback));
+
+            releaseHandler.TrySetResult();
+            await disposal.WaitAsync(Guard);
+            Assert.Equal(0, host.ActiveConnections);
+            Assert.Equal(0, host.AdmittedConnections);
+        }
+        finally
+        {
+            releaseHandler.TrySetResult();
+            await (disposal ?? host.DisposeAsync().AsTask()).WaitAsync(Guard);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task HostDispose_JoinsUnregisteredPhysicalCloseEvenWithNoRegistryEntries()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        TransportHost host = new(Array.Empty<IPAddress>(), new AllowLoopbackPolicy(), certificate,
+            (_, _) => Task.CompletedTask,
+            new TransportHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(80) });
+        using DisposeGate gate = new();
+        ProbeDisposable socket = new(gate.Block);
+        ConnectionCloseHandle closer = new(socket, host.LifecycleErrors);
+        Task finishing = host.FinishConnectionAsync(closer, admission: null, registration: null);
+        Task acceptLifetime = host.AwaitUnregisteredHandlingAsync(finishing, registered: false);
+        FieldInfo acceptLoopsField = typeof(TransportHost).GetField(
+            "_acceptLoops", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.IsType<List<Task>>(acceptLoopsField.GetValue(host)).Add(acceptLifetime);
+        Task? disposal = null;
+
+        try
+        {
+            await gate.Entered.Task.WaitAsync(Guard);
+            Assert.Equal(0, host.ActiveConnections);
+            Assert.Equal(0, host.AdmittedConnections);
+            TransportHostStopReport report =
+                await host.StopAsync(TimeSpan.FromMilliseconds(80)).WaitAsync(Guard);
+            Assert.False(report.AcceptLoopsFinished);
+            Assert.False(report.AllFinished);
+            Assert.Equal(0, report.UnfinishedConnections);
+
+            // 完整释放不能把 Count=0 当作未登记 socket 已关闭；重复 Stop 仍须报告未完成。
+            TransportHostStopReport concurrent =
+                await host.StopAsync(TimeSpan.FromMilliseconds(200)).WaitAsync(Guard);
+            Assert.False(concurrent.AcceptLoopsFinished);
+            disposal = host.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            Assert.False(closer.CloseAsync().IsCompleted);
+
+            gate.Release();
+            await disposal.WaitAsync(Guard);
+            Assert.True(acceptLifetime.IsCompletedSuccessfully);
+            Assert.True(finishing.IsCompletedSuccessfully);
+            Assert.Equal(1, socket.DisposeCount);
+        }
+        finally
+        {
+            gate.Release();
+            await finishing.WaitAsync(Guard);
+            await acceptLifetime.WaitAsync(Guard);
+            await (disposal ?? host.DisposeAsync().AsTask()).WaitAsync(Guard);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task HostDispose_ClosesSocketWhileEarlierStopRootCancellationIsBlocked()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        int port = GetFreePort();
+        TaskCompletionSource handlerEntered = NewSignal();
+        TaskCompletionSource releaseHandler = NewSignal();
+        TransportHost host = CreateHost(certificate, async (_, _) =>
+        {
+            handlerEntered.TrySetResult();
+            await releaseHandler.Task;
+        }, port);
+        using DisposeGate rootGate = new();
+        CancellationTokenSource root = Assert.IsType<CancellationTokenSource>(typeof(TransportHost)
+            .GetField("_stop", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host));
+        using CancellationTokenRegistration callback = root.Token.Register(rootGate.Block);
+        Task<TransportHostStopReport>? stop = null;
+        Task? disposal = null;
+
+        try
+        {
+            Assert.True(host.Start().IsListening);
+            using TlsConnection client = await ConnectAsync(port, certificate);
+            await handlerEntered.Task.WaitAsync(Guard);
+            Task<int> clientRead = client.Stream.ReadAsync(new byte[1]).AsTask();
+            stop = Task.Run(() => host.StopAsync(TimeSpan.FromMilliseconds(100)));
+            await rootGate.Entered.Task.WaitAsync(Guard);
+            Assert.False(stop.IsCompleted);
+
+            // Stop 卡在根取消回调；Dispose 必须独立请求物理关闭，不能只等待旧 Stop 退场。
+            Task<Task> disposeCall = Task.Run<Task>(() => host.DisposeAsync().AsTask());
+            disposal = await disposeCall.WaitAsync(Guard);
+            Assert.Same(disposal, host.DisposeAsync().AsTask());
+            try
+            {
+                Assert.Equal(0, await clientRead.WaitAsync(Guard));
+            }
+            catch (IOException)
+            {
+                // 底层 socket 被强制关闭时 TLS 对端也可能报告连接重置。
+            }
+
+            Assert.False(rootGate.Exited.Task.IsCompleted);
+            Assert.False(stop.IsCompleted);
+            Assert.False(disposal.IsCompleted);
+            releaseHandler.TrySetResult();
+            Assert.True(SpinWait.SpinUntil(() => host.ActiveConnections == 0, Guard));
+            Assert.Equal(0, host.AdmittedConnections);
+            Assert.False(disposal.IsCompleted);
+
+            rootGate.Release();
+            await rootGate.Exited.Task.WaitAsync(Guard);
+            await stop.WaitAsync(Guard);
+            await disposal.WaitAsync(Guard);
+        }
+        finally
+        {
+            releaseHandler.TrySetResult();
+            rootGate.Release();
+            if (stop is not null)
+            {
+                await stop.WaitAsync(Guard);
+            }
+
+            await (disposal ?? host.DisposeAsync().AsTask()).WaitAsync(Guard);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task HostDispose_BeforeStartRejectsAnyLaterStart()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        TransportHost host = CreateHost(certificate, (_, _) => Task.CompletedTask);
+        Task disposal = host.DisposeAsync().AsTask();
+        await disposal.WaitAsync(Guard);
+        Assert.Throws<ObjectDisposedException>(() => host.Start());
+        await host.DisposeAsync().AsTask().WaitAsync(Guard);
+    }
+
     private static ConnectionSecurityContext CreateSecurity() =>
         new(IPAddress.Loopback, IPAddress.Loopback, 12345, SslProtocols.Tls12, new byte[32]);
 
@@ -796,13 +1085,21 @@ public sealed class HostConnectionLifetimeTests
     {
         private readonly ManualResetEventSlim _release = new();
         internal TaskCompletionSource Entered { get; } = NewSignal();
+        internal TaskCompletionSource Exited { get; } = NewSignal();
 
         internal void Block()
         {
             Entered.TrySetResult();
-            if (!_release.Wait(Guard))
+            try
             {
-                throw new TimeoutException("测试释放闸门未放行。");
+                if (!_release.Wait(Guard))
+                {
+                    throw new TimeoutException("测试释放闸门未放行。");
+                }
+            }
+            finally
+            {
+                Exited.TrySetResult();
             }
         }
 

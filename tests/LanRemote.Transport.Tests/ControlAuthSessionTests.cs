@@ -89,7 +89,7 @@ public sealed partial class ControlAuthSessionTests
 
     /// <summary>
     /// 正确密钥 + 审批通过 → 认证成立：success 帧可被客户端独立验证（serverProof）、
-    /// 会话登记可见且 token 与下发的完全一致、连接保持到客户端断开为止。
+    /// 会话登记可见且 token 与下发的完全一致；断连后先注销并等待已预约的视频子连接。
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task Correct_Key_With_Approval_Reaches_Authenticated_And_Holds_The_Connection()
@@ -99,6 +99,7 @@ public sealed partial class ControlAuthSessionTests
         byte[]? serverToken = null;
         ConnectionSecurityContext? syntheticVideo = null;
         VideoAttachLease? videoLease = null;
+        Task<ControlAuthResult>? controlRun = null;
         byte[] attachNonce = RandomNumberGenerator.GetBytes(16);
         byte[]? attachProof = null;
         AuthClientProbe probe = new()
@@ -114,79 +115,102 @@ public sealed partial class ControlAuthSessionTests
             probe: probe,
             midflight: async (connection, p) =>
             {
-                await p.TerminalSeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
-                Assert.True(p.Success is not null, $"没收到 auth_success（帧序列：{string.Join(",", p.Frames)}）。");
-                Assert.True(p.ServerProofValid == true, "客户端按 grant transcript 重算 serverProof 验证失败。");
-                Assert.True(p.SawApprovalPending);
-                Assert.Equal(
-                    new[] { "auth_challenge", "approval_pending", "auth_success" },
-                    p.Frames);
-
-                // 登记表：认证成立的另一半证据（DoD「auth success 才能有 session」的正例）。
-                Assert.True(await WaitUntilAsync(() => registry.ActiveSessionCount == 1));
-                ControlSessionSummary summary = Assert.Single(registry.Snapshot());
-                Assert.Equal(p.Challenge!.SessionId, summary.SessionId);
-                Assert.Equal(TestClientDeviceId, summary.ClientDeviceId);
-                Assert.Equal(TestClientName, summary.ClientName);
-                Assert.Equal(SessionPermission.Control, summary.GrantedPermission);
-                Assert.Equal(IPAddress.Loopback, summary.RemoteAddress);
-
-                // 仅用测试私有反射持有登记表原数组，保留逐字节一致性与注销清零证据；不新增生产 getter。
-                var entries = (System.Collections.IDictionary)typeof(SessionRegistry)
-                    .GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(registry)!;
-                object entry = entries[p.Challenge.SessionId]!;
-                serverToken = (byte[])entry.GetType().GetProperty("SessionToken")!.GetValue(entry)!;
-                Assert.Equal(32, serverToken.Length);
-                Assert.Contains(serverToken, value => value != 0);
-                Assert.True(CryptographicOperations.FixedTimeEquals(
-                    serverToken, p.Success!.SessionToken.Span));
-
-                // 控制链路是真实 TLS；这是同 IP/pin、不同 ConnectionId 的合成第二视频上下文，不是第二条 TLS 测试。
-                Assert.NotNull(connection.Stream.RemoteCertificate);
-                byte[] videoPin = SHA256.HashData(connection.Stream.RemoteCertificate.GetRawCertData());
-                Assert.Equal(p.Challenge.CertificateSha256.ToArray(), videoPin);
-                syntheticVideo = new ConnectionSecurityContext(
-                    IPAddress.Loopback, summary.RemoteAddress, 0, SslProtocols.None, videoPin);
-                Assert.NotEqual(summary.ConnectionId, syntheticVideo.ConnectionId);
-                // 独立拼装 UTF8 域（含尾 NUL）19 + UUID 网络序 16 + nonce 16 + pin 32，不调用生产 helper。
-                byte[] transcript = new byte[83];
-                byte[] domain = System.Text.Encoding.UTF8.GetBytes("LANREMOTE-VIDEO-V1\0");
-                Assert.Equal(19, domain.Length);
-                domain.CopyTo(transcript, 0);
-                Convert.FromHexString(p.Challenge.SessionId.ToString("N")).CopyTo(transcript, 19);
-                attachNonce.CopyTo(transcript, 35);
-                videoPin.CopyTo(transcript, 51);
-                using (HMACSHA256 hmac = new(p.Success.SessionToken.ToArray()))
+                try
                 {
-                    attachProof = hmac.ComputeHash(transcript);
+                    await p.TerminalSeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.True(p.Success is not null, $"没收到 auth_success（帧序列：{string.Join(",", p.Frames)}）。");
+                    Assert.True(p.ServerProofValid == true, "客户端按 grant transcript 重算 serverProof 验证失败。");
+                    Assert.True(p.SawApprovalPending);
+                    Assert.Equal(
+                        new[] { "auth_challenge", "approval_pending", "auth_success" },
+                        p.Frames);
+
+                    // 登记表：认证成立的另一半证据（DoD「auth success 才能有 session」的正例）。
+                    Assert.True(await WaitUntilAsync(() => registry.ActiveSessionCount == 1));
+                    ControlSessionSummary summary = Assert.Single(registry.Snapshot());
+                    Assert.Equal(p.Challenge!.SessionId, summary.SessionId);
+                    Assert.Equal(TestClientDeviceId, summary.ClientDeviceId);
+                    Assert.Equal(TestClientName, summary.ClientName);
+                    Assert.Equal(SessionPermission.Control, summary.GrantedPermission);
+                    Assert.Equal(IPAddress.Loopback, summary.RemoteAddress);
+
+                    // 仅用测试私有反射持有登记表原数组，保留逐字节一致性与注销清零证据；不新增生产 getter。
+                    var entries = (System.Collections.IDictionary)typeof(SessionRegistry)
+                        .GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(registry)!;
+                    object entry = entries[p.Challenge.SessionId]!;
+                    serverToken = (byte[])entry.GetType().GetProperty("SessionToken")!.GetValue(entry)!;
+                    Assert.Equal(32, serverToken.Length);
+                    Assert.Contains(serverToken, value => value != 0);
+                    Assert.True(CryptographicOperations.FixedTimeEquals(
+                        serverToken, p.Success!.SessionToken.Span));
+
+                    // 控制链路是真实 TLS；这是同 IP/pin、不同 ConnectionId 的合成第二视频上下文，不是第二条 TLS 测试。
+                    Assert.NotNull(connection.Stream.RemoteCertificate);
+                    byte[] videoPin = SHA256.HashData(connection.Stream.RemoteCertificate.GetRawCertData());
+                    Assert.Equal(p.Challenge.CertificateSha256.ToArray(), videoPin);
+                    syntheticVideo = new ConnectionSecurityContext(
+                        IPAddress.Loopback, summary.RemoteAddress, 0, SslProtocols.None, videoPin);
+                    Assert.NotEqual(summary.ConnectionId, syntheticVideo.ConnectionId);
+                    // 独立拼装 UTF8 域（含尾 NUL）19 + UUID 网络序 16 + nonce 16 + pin 32，不调用生产 helper。
+                    byte[] transcript = new byte[83];
+                    byte[] domain = System.Text.Encoding.UTF8.GetBytes("LANREMOTE-VIDEO-V1\0");
+                    Assert.Equal(19, domain.Length);
+                    domain.CopyTo(transcript, 0);
+                    Convert.FromHexString(p.Challenge.SessionId.ToString("N")).CopyTo(transcript, 19);
+                    attachNonce.CopyTo(transcript, 35);
+                    videoPin.CopyTo(transcript, 51);
+                    using (HMACSHA256 hmac = new(p.Success.SessionToken.ToArray()))
+                    {
+                        attachProof = hmac.ComputeHash(transcript);
+                    }
+                    Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
+                        p.Challenge.SessionId, syntheticVideo, attachNonce, attachProof, default, out videoLease));
+                    Assert.NotNull(videoLease);
+                    Assert.Equal(p.Challenge.SessionId, videoLease.SessionId);
+                    Assert.Equal(syntheticVideo.ConnectionId, videoLease.VideoConnectionId);
+                    Assert.False(videoLease.Revoked.IsCompleted);
+                    Assert.Equal(VideoAttachStatus.AlreadyAttached, registry.TryAttachVideo(
+                        p.Challenge.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? duplicate));
+                    Assert.Null(duplicate);
+                    Assert.False(videoLease.Revoked.IsCompleted);
+
+                    // 审批请求的内容（评审 #40/#41 的素材面）。
+                    LocalApprovalRequest request = Assert.IsType<LocalApprovalRequest>(gate.LastRequest);
+                    Assert.Equal(TestClientDeviceId, request.ClientDeviceId);
+                    Assert.Equal(TestClientName, request.ClientName);
+                    Assert.Equal(SessionPermission.Control, request.RequestedPermission);
+                    Assert.Equal(
+                        LocalApprovalRequest.ComputeShortCode(p.Challenge.SessionId, p.ClientNonce),
+                        request.ShortCode);
+                    Assert.Equal(LocalApprovalRequest.ShortCodeLength, request.ShortCode.Length);
+
+                    // 成功之后连接必须保持（挂住读 = 对端没有 EOF）；这笔读在 dispose 后自然收场。
+                    Task<int> watch = connection.Stream.ReadAsync(new byte[1]).AsTask();
+                    await Assert.ThrowsAsync<TimeoutException>(
+                        () => watch.WaitAsync(TimeSpan.FromMilliseconds(300)));
+                    p.PendingWatch = watch;
+
+                    connection.Dispose();
+                    Assert.NotNull(videoLease);
+                    await videoLease.Revoked.WaitAsync(FrameDeadline);
+                    Assert.True(videoLease.Revoked.IsCompletedSuccessfully);
+                    Assert.False(videoLease.Completed.IsCompleted);
+                    Assert.NotNull(controlRun);
+                    Assert.False(controlRun.IsCompleted);
+                    Assert.Equal(0, registry.ActiveSessionCount);
+                    Assert.All(Assert.IsType<byte[]>(serverToken), value => Assert.Equal((byte)0, value));
                 }
-                Assert.Equal(VideoAttachStatus.Attached, registry.TryAttachVideo(
-                    p.Challenge.SessionId, syntheticVideo, attachNonce, attachProof, default, out videoLease));
-                Assert.NotNull(videoLease);
-                Assert.Equal(p.Challenge.SessionId, videoLease.SessionId);
-                Assert.Equal(syntheticVideo.ConnectionId, videoLease.VideoConnectionId);
-                Assert.False(videoLease.Revoked.IsCompleted);
-                Assert.Equal(VideoAttachStatus.AlreadyAttached, registry.TryAttachVideo(
-                    p.Challenge.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? duplicate));
-                Assert.Null(duplicate);
-                Assert.False(videoLease.Revoked.IsCompleted);
-
-                // 审批请求的内容（评审 #40/#41 的素材面）。
-                LocalApprovalRequest request = Assert.IsType<LocalApprovalRequest>(gate.LastRequest);
-                Assert.Equal(TestClientDeviceId, request.ClientDeviceId);
-                Assert.Equal(TestClientName, request.ClientName);
-                Assert.Equal(SessionPermission.Control, request.RequestedPermission);
-                Assert.Equal(
-                    LocalApprovalRequest.ComputeShortCode(p.Challenge.SessionId, p.ClientNonce),
-                    request.ShortCode);
-                Assert.Equal(LocalApprovalRequest.ShortCodeLength, request.ShortCode.Length);
-
-                // 成功之后连接必须保持（挂住读 = 对端没有 EOF）；这笔读在 dispose 后自然收场。
-                Task<int> watch = connection.Stream.ReadAsync(new byte[1]).AsTask();
-                await Assert.ThrowsAsync<TimeoutException>(
-                    () => watch.WaitAsync(TimeSpan.FromMilliseconds(300)));
-                p.PendingWatch = watch;
-            });
+                finally
+                {
+                    connection.Dispose();
+                    videoLease?.Complete();
+                    if (controlRun is not null)
+                    {
+                        await controlRun.WaitAsync(FrameDeadline);
+                    }
+                }
+            },
+            captureControlRun: run => controlRun = run);
 
         AuthScenario scenario = await scenarioTask;
 
@@ -884,6 +908,7 @@ public sealed partial class ControlAuthSessionTests
     /// <param name="registry">会话登记表（默认新实例）。</param>
     /// <param name="secretStore">密钥来源（默认固定 GoodKey）。</param>
     /// <param name="probe">客户端探针（默认新建；篡改类用例注入预配置的探针）。</param>
+    /// <param name="captureControlRun">取得原控制任务，用于验证断连与视频收尾的先后顺序。</param>
     private async Task<AuthScenario> RunScenarioAsync(
         Func<TlsConnection, AuthClientProbe, CancellationToken, Task> clientScript,
         StubApprovalGate gate,
@@ -895,7 +920,8 @@ public sealed partial class ControlAuthSessionTests
         IAccessSecretStore? secretStore = null,
         AuthClientProbe? probe = null,
         TimeProvider? timeProvider = null,
-        CancellationToken authCancellation = default)
+        CancellationToken authCancellation = default,
+        Action<Task<ControlAuthResult>>? captureControlRun = null)
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
         int port = GetFreePort();
@@ -936,7 +962,9 @@ public sealed partial class ControlAuthSessionTests
                 {
                     using CancellationTokenSource linked =
                         CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, authCancellation);
-                    ControlAuthResult result = await session.RunAsync(linked.Token);
+                    Task<ControlAuthResult> run = session.RunAsync(linked.Token);
+                    captureControlRun?.Invoke(run);
+                    ControlAuthResult result = await run;
                     clock.Stop();
                     outcome.TrySetResult((result, clock.Elapsed, null));
                 }

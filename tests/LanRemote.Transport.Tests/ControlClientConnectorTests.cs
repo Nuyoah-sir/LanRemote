@@ -48,10 +48,12 @@ public sealed partial class ControlClientConnectorTests
         RecordingApprovalGate gate = new(granted);
         ControlAuthContext context = CreateContext(gate, requireApproval);
         ControlAuthResult? result = null;
+        Task<ControlAuthResult>? controlRun = null;
         await using TlsScenario scenario = new(async (connection, ct) =>
         {
             ControlAuthSession auth = await BeginRealAuthenticationAsync(connection, context, ct);
-            result = await auth.RunAsync(ct);
+            controlRun = auth.RunAsync(ct);
+            result = await controlRun;
         });
         scenario.Start();
         AuthenticatedControlSession session = await scenario.ConnectAsync().WaitAsync(Guard);
@@ -114,36 +116,57 @@ public sealed partial class ControlClientConnectorTests
         {
             attachProof = hmac.ComputeHash(transcript);
         }
-        Assert.Equal(VideoAttachStatus.Attached, context.SessionRegistry.TryAttachVideo(
-            session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? lease));
-        Assert.NotNull(lease);
-        Assert.Equal(session.SessionId, lease.SessionId);
-        Assert.Equal(syntheticVideo.ConnectionId, lease.VideoConnectionId);
-        Assert.False(lease.Revoked.IsCompleted);
-        Assert.Equal(VideoAttachStatus.AlreadyAttached, context.SessionRegistry.TryAttachVideo(
-            session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? duplicate));
-        Assert.Null(duplicate);
-        Assert.False(lease.Revoked.IsCompleted);
-        Assert.Equal(15_000, session.VideoAttachExpiresInMsHint);
-        Assert.Equal(0, context.FailedAuthLimiter.CountRecentFailures(IPAddress.Loopback));
+        VideoAttachLease? lease = null;
+        try
+        {
+            Assert.Equal(VideoAttachStatus.Attached, context.SessionRegistry.TryAttachVideo(
+                session.SessionId, syntheticVideo, attachNonce, attachProof, default, out lease));
+            Assert.NotNull(lease);
+            Assert.Equal(session.SessionId, lease.SessionId);
+            Assert.Equal(syntheticVideo.ConnectionId, lease.VideoConnectionId);
+            Assert.False(lease.Revoked.IsCompleted);
+            Assert.Equal(VideoAttachStatus.AlreadyAttached, context.SessionRegistry.TryAttachVideo(
+                session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? duplicate));
+            Assert.Null(duplicate);
+            Assert.False(lease.Revoked.IsCompleted);
+            Assert.Equal(15_000, session.VideoAttachExpiresInMsHint);
+            Assert.Equal(0, context.FailedAuthLimiter.CountRecentFailures(IPAddress.Loopback));
 
-        session.Dispose();
-        session.Dispose();
-        Assert.All(tokenView.ToArray(), value => Assert.Equal((byte)0, value));
-        Assert.Throws<ObjectDisposedException>(() => session.CreateVideoAttachProof(attachNonce, videoPin));
-        Assert.Throws<ObjectDisposedException>(() => session.Stream);
+            session.Dispose();
+            session.Dispose();
+            Assert.All(tokenView.ToArray(), value => Assert.Equal((byte)0, value));
+            Assert.Throws<ObjectDisposedException>(() => session.CreateVideoAttachProof(attachNonce, videoPin));
+            Assert.Throws<ObjectDisposedException>(() => session.Stream);
+            await lease.Revoked.WaitAsync(Guard);
+            Assert.True(lease.Revoked.IsCompletedSuccessfully);
+            Assert.False(lease.Completed.IsCompleted);
+            Assert.NotNull(controlRun);
+            Assert.False(controlRun.IsCompleted);
+            Assert.Null(result);
+            Assert.False(scenario.ServerFinished.Task.IsCompleted);
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+            // 使用断开前保存的有效 proof，不从已清零的 token 重算。
+            Assert.Equal(VideoAttachStatus.NotRegistered, context.SessionRegistry.TryAttachVideo(
+                session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? stale));
+            Assert.Null(stale);
+            Assert.All(serverToken, value => Assert.Equal((byte)0, value));
+        }
+        finally
+        {
+            session.Dispose();
+            lease?.Complete();
+            if (controlRun is not null)
+            {
+                await controlRun.WaitAsync(Guard);
+            }
+        }
+
         await scenario.AssertServerFinishedAsync();
         Assert.NotNull(result);
         Assert.True(result.Completed, result.Rejection);
         Assert.Equal(ControlSessionState.Authenticated, result.State);
         Assert.Equal(session.SessionId, result.SessionId);
         Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
-        await lease.Revoked.WaitAsync(Guard);
-        Assert.True(lease.Revoked.IsCompletedSuccessfully);
-        // 使用断开前保存的有效 proof，不从已清零的 token 重算。
-        Assert.Equal(VideoAttachStatus.NotRegistered, context.SessionRegistry.TryAttachVideo(
-            session.SessionId, syntheticVideo, attachNonce, attachProof, default, out VideoAttachLease? stale));
-        Assert.Null(stale);
         Assert.All(serverToken, value => Assert.Equal((byte)0, value));
     }
 

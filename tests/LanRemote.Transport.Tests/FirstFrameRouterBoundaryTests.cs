@@ -279,6 +279,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
 
         await scenario.Stream.WriteEntered.Task.WaitAsync(Guard);
         Assert.Equal(VideoAttachStatus.Attached, scenario.Router.AttachStatus);
+        Task childJoin = registration.VideoCompletion;
+        Assert.False(childJoin.IsCompleted);
         Assert.Equal(0, scenario.Source.Calls);
         Assert.False(scenario.Stream.WriteCompleted);
         Assert.False(scenario.Stream.FlushEntered.Task.IsCompleted);
@@ -297,8 +299,84 @@ public sealed partial class FirstFrameRouterBoundaryTests
         Assert.Equal(1, scenario.Source.Calls);
         Assert.True(scenario.Source.SawCompletedFlush);
         Assert.Equal(SessionId, scenario.Source.SessionId);
+        Assert.Same(childJoin, registration.VideoCompletion);
+        Assert.True(childJoin.IsCompletedSuccessfully);
         Assert.Equal(1, scenario.Stream.DisposeCount);
         Assert.True(scenario.Stream.PeerReadCompleted);
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData("stage")]
+    [InlineData("envelope")]
+    [InlineData("elapsed")]
+    [InlineData("cancel")]
+    public async Task PostProof_Budget_Or_Host_Cancellation_Joins_Close_Before_Completing_Reservation(
+        string boundary)
+    {
+        NeverCreateFactory factory = new();
+        await using BoundaryScenario scenario = new(producerFactory: factory, holdDispose: true);
+        WindowSampleClock windowClock = new(scenario.Clock.Manual);
+        using var registration = scenario.Register(windowClock: windowClock);
+        Task noChild = registration.VideoCompletion;
+        int finalProofSample = windowClock.TimestampReads + 2;
+        int afterAttachReads = -1;
+        windowClock.AfterSample = read =>
+        {
+            if (read != finalProofSample) return;
+            windowClock.AfterSample = null;
+            afterAttachReads = scenario.Clock.TimestampReads;
+            if (boundary == "stage")
+                scenario.Clock.Manual.Advance(VideoSessionOptions.RegistrationWait, false);
+        };
+        scenario.Clock.AfterSample = read =>
+        {
+            if (afterAttachReads < 0 || read != afterAttachReads + (boundary == "elapsed" ? 2 : 1)) return;
+            scenario.Clock.AfterSample = null;
+            if (boundary == "cancel") scenario.HostStop.Cancel();
+            else if (boundary == "envelope")
+                scenario.Clock.Manual.Advance(NewTimeouts().PreAuthEnvelopeTimeout, false);
+            else if (boundary == "elapsed")
+                scenario.Clock.Manual.Advance(VideoSessionOptions.RegistrationWait, false);
+        };
+
+        try
+        {
+            Task run = scenario.Start();
+            // 后检已消费资格，但只允许 CloseHandle 的原始 Dispose 进入，暂不让物理关闭完成。
+            await scenario.Stream.DisposeEntered.Task.WaitAsync(Guard);
+            Task close = scenario.Connection.CloseAsync();
+            Assert.False(close.IsCompleted);
+            Assert.False(scenario.Stream.Closed.Task.IsCompleted);
+            Assert.False(run.IsCompleted);
+            Assert.Equal(finalProofSample, windowClock.TimestampReads);
+            Assert.Equal(VideoAttachStatus.Attached, scenario.Router.AttachStatus);
+            Assert.Equal(1, scenario.Router.AttachAttempts);
+            AssertNoOutput(scenario);
+            Assert.Equal(0, factory.Calls);
+            Assert.NotSame(noChild, registration.VideoCompletion);
+            Assert.False(registration.VideoCompletion.IsCompleted);
+            Assert.Equal(0, scenario.Stream.DisposeCount);
+            Assert.Equal(2, scenario.Stream.ReadCalls);
+            Assert.Equal(VideoAttachStatus.AlreadyAttached, scenario.ProbeAttach(freshNonce: true));
+
+            scenario.Stream.ReleaseDispose();
+            if (boundary == "cancel")
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(Guard));
+            else
+                await run.WaitAsync(Guard);
+
+            Assert.True(close.IsCompletedSuccessfully);
+            Assert.True(scenario.Stream.Closed.Task.IsCompletedSuccessfully);
+            Assert.True(registration.VideoCompletion.IsCompletedSuccessfully);
+            Assert.Equal(1, scenario.Stream.DisposeCount);
+            Assert.Equal(VideoAttachStatus.AlreadyAttached, scenario.ProbeAttach(freshNonce: true));
+        }
+        finally
+        {
+            scenario.Stream.ReleaseDispose();
+            windowClock.AfterSample = null;
+            scenario.Clock.AfterSample = null;
+        }
     }
 
     [Theory(Timeout = 30_000)]
@@ -307,13 +385,19 @@ public sealed partial class FirstFrameRouterBoundaryTests
     public async Task Ack_IO_Failure_Does_Not_Restore_Consumed_Eligibility(bool failFlush)
     {
         // 只断言 ACK 失败的资格边界，不依赖 Router 的异常聚合格式。
-        await using BoundaryScenario scenario = new(failWrite: !failFlush, failFlush: failFlush);
+        NeverCreateFactory factory = new();
+        await using BoundaryScenario scenario = new(failWrite: !failFlush, failFlush: failFlush,
+            producerFactory: factory);
         using var registration = scenario.Register();
+        Task noChild = registration.VideoCompletion;
         await scenario.Start().WaitAsync(Guard);
 
         Assert.Equal(VideoAttachStatus.Attached, scenario.Router.AttachStatus);
+        Assert.NotSame(noChild, registration.VideoCompletion);
+        Assert.True(registration.VideoCompletion.IsCompletedSuccessfully);
         Assert.Equal(1, scenario.Router.AttachAttempts);
         Assert.Equal(0, scenario.Source.Calls);
+        Assert.Equal(0, factory.Calls);
         Assert.Equal(failFlush, scenario.Stream.WriteCompleted);
         Assert.False(scenario.Stream.FlushCompleted);
         Assert.Equal(VideoAttachStatus.AlreadyAttached, scenario.ProbeAttach());
@@ -336,12 +420,15 @@ public sealed partial class FirstFrameRouterBoundaryTests
         Task run = scenario.Start();
         await (holdFlush ? scenario.Stream.FlushEntered.Task : scenario.Stream.WriteEntered.Task).WaitAsync(Guard);
         Assert.Equal(VideoAttachStatus.Attached, scenario.Router.AttachStatus);
+        Task childJoin = registration.VideoCompletion;
+        Assert.False(childJoin.IsCompleted);
 
         if (cancelHost) await scenario.HostStop.CancelAsync();
         else registration.Dispose();
         await scenario.Stream.Closed.Task.WaitAsync(Guard);
         Assert.Equal(0, scenario.Source.Calls);
         Assert.False(run.IsCompleted);
+        Assert.False(childJoin.IsCompleted);
         Assert.Equal(cancelHost ? VideoAttachStatus.AlreadyAttached : VideoAttachStatus.NotRegistered,
             scenario.ProbeAttach(freshNonce: true));
 
@@ -355,6 +442,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
 
         Assert.Equal(0, scenario.Source.Calls);
         Assert.Equal(1, scenario.Router.AttachAttempts);
+        Assert.Same(childJoin, registration.VideoCompletion);
+        Assert.True(childJoin.IsCompletedSuccessfully);
         Assert.Equal(cancelHost ? VideoAttachStatus.AlreadyAttached : VideoAttachStatus.NotRegistered,
             scenario.ProbeAttach(freshNonce: true));
         Assert.True(scenario.Stream.PeerReadCompleted);
