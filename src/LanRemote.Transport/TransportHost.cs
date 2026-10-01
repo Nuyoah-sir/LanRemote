@@ -104,6 +104,24 @@ public sealed class TransportHost : IAsyncDisposable
             hostOptions);
     }
 
+    /// <summary>装配认证后的单会话视频生产者；工厂为借用对象，不接触流或会话凭据。</summary>
+    public static TransportHost CreateWithVideo(
+        IReadOnlyList<IPAddress> localAddresses,
+        ISubnetPolicy subnetPolicy,
+        X509Certificate2 serverCertificate,
+        ControlAuthContext authContext,
+        IVideoFrameProducerFactory videoFactory,
+        TransportHostOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(authContext);
+        ArgumentNullException.ThrowIfNull(videoFactory);
+        TransportHostOptions hostOptions = options ?? new TransportHostOptions();
+        return new TransportHost(localAddresses, subnetPolicy, serverCertificate,
+            (connection, token) => new FirstFrameRouter(
+                authContext, hostOptions.Timeouts, videoFactory).RunAsync(connection, token),
+            hostOptions);
+    }
+
     /// <summary>是否正在运行。</summary>
     public bool IsRunning => Volatile.Read(ref _started) == 1 && !_stop.IsCancellationRequested;
 

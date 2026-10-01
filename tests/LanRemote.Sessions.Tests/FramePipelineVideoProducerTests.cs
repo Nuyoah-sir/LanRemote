@@ -53,6 +53,53 @@ public sealed class FramePipelineVideoProducerTests
     }
 
     [Fact]
+    public async Task Stop_before_Start_records_only_the_original_rejection_as_expected()
+    {
+        var f = new Fixture();
+        try
+        {
+            IVideoFrameProducer producer = await f.Create();
+            IVideoFrameProducerStartRejection evidence = Assert.IsAssignableFrom<IVideoFrameProducerStartRejection>(producer);
+            Task completion = producer.Completion;
+            Assert.Same(completion, producer.StopAsync());
+            f.ReleaseCalls();
+            await Success(completion);
+
+            InvalidOperationException rejection = Assert.Throws<InvalidOperationException>(producer.Start);
+            Assert.True(evidence.IsStopBeforeStartRejection(rejection));
+            Assert.False(evidence.IsStopBeforeStartRejection(new InvalidOperationException(rejection.Message)));
+            Assert.Equal(0, f.Captures.Count);
+            Assert.Equal(1, f.Capture.Cleanup.AsyncCalls);
+            Assert.Equal(1, f.Encoder.Cleanup.AsyncCalls);
+            f.AssertOwnersReleased();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Fact]
+    public async Task Start_before_Stop_never_marks_a_later_duplicate_Start_rejection_as_expected()
+    {
+        var f = new Fixture();
+        try
+        {
+            IVideoFrameProducer producer = await f.Create();
+            IVideoFrameProducerStartRejection evidence = Assert.IsAssignableFrom<IVideoFrameProducerStartRejection>(producer);
+            producer.Start();
+            await Success(f.Captures.At(0));
+            Task completion = producer.StopAsync();
+            f.ReleaseCalls();
+            await Success(completion);
+
+            InvalidOperationException rejection = Assert.Throws<InvalidOperationException>(producer.Start);
+            Assert.False(evidence.IsStopBeforeStartRejection(rejection));
+            Assert.False(evidence.IsStopBeforeStartRejection(new InvalidOperationException(rejection.Message)));
+            Assert.Equal(1, f.Captures.Count);
+            f.AssertOwnersReleased();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Fact]
     public async Task Canceled_caller_read_does_not_stop_production_and_successful_frame_belongs_to_caller()
     {
         var f = new Fixture();

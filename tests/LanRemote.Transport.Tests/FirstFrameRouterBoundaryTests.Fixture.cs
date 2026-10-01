@@ -62,7 +62,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
 
         internal BoundaryScenario(byte[]? wire = null, bool badProof = false, int holdRead = 0,
             bool holdWrite = false, bool holdFlush = false, bool failWrite = false, bool failFlush = false,
-            TransportTimeouts? timeouts = null, bool cancelAwareRead = false)
+            TransportTimeouts? timeouts = null, bool cancelAwareRead = false,
+            IVideoFrameProducerFactory? producerFactory = null)
         {
             Stream = new ControlledSslStream(wire ?? HelloWire(badProof), holdRead,
                 holdWrite, holdFlush, failWrite, failFlush, cancelAwareRead);
@@ -83,7 +84,9 @@ public sealed partial class FirstFrameRouterBoundaryTests
                 SessionRegistry = Registry,
                 TimeProvider = Clock
             };
-            Router = new FirstFrameRouter(context, timeouts ?? NewTimeouts(), Source);
+            Router = producerFactory is null
+                ? new FirstFrameRouter(context, timeouts ?? NewTimeouts(), Source)
+                : new FirstFrameRouter(context, timeouts ?? NewTimeouts(), producerFactory);
         }
 
         internal ObservedClock Clock { get; } = new();

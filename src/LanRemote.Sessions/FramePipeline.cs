@@ -68,6 +68,9 @@ public sealed class FramePipeline : IAsyncDisposable
     /// <summary>稳定的完整收尾任务；任何非预期错误均以 AggregateException 保留完整错误树。</summary>
     public Task Completion => _completion;
 
+    internal bool StopWonBeforeStart =>
+        (Volatile.Read(ref _state) & (Started | StopRequested)) == StopRequested;
+
     /// <summary>仅能启动一次；已经请求停止的管线不能启动。</summary>
     public void Start()
     {

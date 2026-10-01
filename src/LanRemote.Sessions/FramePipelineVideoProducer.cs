@@ -4,13 +4,14 @@ using LanRemote.Core.Models;
 namespace LanRemote.Sessions;
 
 /// <summary>拥有专用依赖的内部适配器；成功构造时接管所有权，不改变原管线的启动及停止语义。</summary>
-internal sealed class FramePipelineVideoProducer : IVideoFrameProducer
+internal sealed class FramePipelineVideoProducer : IVideoFrameProducer, IVideoFrameProducerStartRejection
 {
     private readonly Guid _sessionId;
     private readonly FramePipeline _pipeline;
     private readonly IScreenCaptureBackend _capture;
     private readonly IFrameEncoder _encoder;
     private readonly Task _completion;
+    private InvalidOperationException? _stopBeforeStartRejection;
 
     internal FramePipelineVideoProducer(
         Guid sessionId, FramePipeline pipeline, IScreenCaptureBackend capture, IFrameEncoder encoder)
@@ -25,7 +26,19 @@ internal sealed class FramePipelineVideoProducer : IVideoFrameProducer
 
     public Task Completion => _completion;
 
-    public void Start() => _pipeline.Start();
+    public void Start()
+    {
+        try { _pipeline.Start(); }
+        catch (InvalidOperationException error)
+        {
+            if (_pipeline.StopWonBeforeStart)
+                Volatile.Write(ref _stopBeforeStartRejection, error);
+            throw;
+        }
+    }
+
+    public bool IsStopBeforeStartRejection(InvalidOperationException error) =>
+        Volatile.Read(ref _stopBeforeStartRejection) is { } rejection && ReferenceEquals(rejection, error);
 
     public ValueTask<EncodedFrame?> ReadNextAsync(CancellationToken cancellationToken = default) =>
         ReadCoreAsync(_pipeline.ReadNextAsync(cancellationToken));
