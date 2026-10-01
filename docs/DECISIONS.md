@@ -1534,4 +1534,16 @@ Stop先赢时只有`IVideoFrameProducerStartRejection.IsStopBeforeStartRejection
 
 **Evidence**：初轮Host边界57/57；锁内Start阻塞Stop及宽泛拒绝分类修复后80绿；同一Stop/Dispose原Task诊断重复的4红修正为按Task身份去重后83绿、Transport全量2252绿；再追加不同原Task同异常实例双根3例，最终Transport2255。证明探针自身IO/ODE/OCE/聚合抛错有四展开覆盖。首`outputs/m5-host-video/final-20261001-120711-095134700/summary.json`只完成Debug Rebuild（0警告错误），因测试文件并行变更触发源码SHA冻结失败并自动停，0次test，**保持failed**。新`outputs/m5-host-video/final-20261001-122116-867239300-retry/summary.json`独立终验：16份TRX逐实际结果/Counters两配置各3589 PASS（196/66/299/3/2255/393/157/220）、0失败/跳过；四完整Rebuild均0警告错误，六命令rc及六日志SHA一致，337项源清单前后/记账前当前逐SHA相同（含HANDOFF，文档编辑后例外）。仅runner与六直接子命令退出可证，全机枚举受拦，不能外推间接子进程排空。详HANDOFF§19.21。
 
-**Limits / next**：`CreateWithVideo`仅是已认证Video路由的局部装配，**不是Host产品生命周期完全闭环**。下一片Registry须同锁proof资格预约；`AttachAsync`成功后的截止/异常检查必须释放预约且一次性资格不得恢复；Control注销先零化token后能join Video原Task真实结束；Host预算Stop如实报告，Dispose完整无界排空。之后才App/WPF解码显示、实屏与十分钟DoD；这些均未完成，**M5未完成**。不重跑M4、不修改现网/防护、不绕过权限、不出新包。
+**Limits / next（仅ADR-065当时）**：`CreateWithVideo`仅是已认证Video路由的局部装配，**当时不是Host产品生命周期完全闭环**。下一片Registry须同锁proof资格预约；`AttachAsync`成功后的截止/异常检查必须释放预约且一次性资格不得恢复；Control注销先零化token后能join Video原Task真实结束；Host预算Stop如实报告，Dispose完整无界排空。这些Transport生命周期项已由后续`b3e1273`/ADR-066实施；此处历史描述不覆盖当前进度。之后才App/WPF解码显示、实屏与十分钟DoD，**M5仍未完成**。不重跑M4、不修改现网/防护、不绕过权限、不出新包。
+
+### ADR-066 — 一次性Video预约与Control子任务join、Host预算报告及完整释放
+
+**日期**：2026-10-01。**Context / Decision**：`b3e1273`承接`45dd8db`/HANDOFF§19.21/ADR-065，16 files/+2225/−423。`SessionRegistry.TryAttachVideo`必须在同锁内复核会话存在、Control取消、Video取消、期限、Control/Video不同连接、同源IPv4、服务器证书SHA与proof后预约唯一`VideoAttachLease`并消费一次性资格；取时可能重入，因此其后再次按条目身份检查。`AttachAsync`成功后立即将lease登记为父持有对象，后续阶段/信封/登记等待预算检查任何一个失败也不退还一次性资格；由路由的关闭和原任务join释放预约。注销在同锁移除条目、零化登记表持有sessionToken并发布`Revoked`（TCS异步continuation），不在锁内跑外部回调；父在锁外等对应lease原`Completed`。Video路由仅在自己的`RunAsync`主体与Host发起的原关闭任务及Control owned操作真正退出后设置`Completed`，不能用请求关闭、取消通知或计数降零冒充真实子退出。只承诺登记表自有token零化，不承诺TLS/DTO/WPF内存副本擦除。
+
+Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报告，根取消同步回调单独未退出时抛`TimeoutException`，绝不虚构未完成连接数。`DisposeAsync`并发调用共享稳定任务，启动自身Stop、join当时在途各Stop、accept、Host原取消，再等Registry原连接、force和linked取消源解绑后释放Registry与Host两根；错误不能中断其他独立清理，返回完整在途故障原树。不合作原操作没有硬中断或Dispose完成时限。每个**已完成**Stop fault保持在调用方拿到的原Task可await，`HostLifecycleErrors`内部只按固定类别各留首错（最多七类），Dispose不重复上报这些历史任务；**Dispose开始时在途**Stop的故障必须完整汇总，不能因内部诊断有界而丢掉调用方原错。Stop的预算报告不能当成Dispose完整join，原Exception树不Flatten或按IO/ODE/OCE泛吞。
+
+**Evidence**：六单点变异及每轮原bytes/SHA恢复，基线10目标参数全绿；六轮目标明确Assert红1/1/4/1/1/1，合计9红、0Guard/清理超时，每轮恢复绿，第5轮仅`stopFirst=False`红、`True`绿，因此“6/6被目标检出”不等于“六理论行全红”（实际5/6轮全部参数行红）。变异和恢复Debug Rebuild均rc0/零警告错误，证据`outputs/m5-host-video/parent-mutation-20261001-134448-012529700/summary.json`及`parent-mutation-final-20261001-134942-043130500/mutation-evaluation.json`。首轮基线xUnit1031警告停、第二轮脚本误递归outputs路径过长未运行；第三轮旧runner预计2278但实际Debug Transport2279全绿后按严格旧计数停，Release另目录2279全绿；旧失败证据不覆盖。变异35保护文件与终验337文件不同范围。
+
+完整终验`outputs/m5-host-video/final-parent-dispose-20261001-135550-001799400/summary.json`与原六日志/16 TRX：Debug/Release各3613 PASS（Core196/Security66/Protocol299/Integration3/Transport2279/Acceptance393/Capture157/Sessions220）、0失败跳过；solution/IsolatedAcceptance双配置四次完整Rebuild 0警告错误，六命令rc0且六日志SHA核对一致。337文件在各阶段前后及本次文档编辑前当前SHA一致，含HANDOFF，编辑后其变化为明示例外。runner和六直接子进程退出，**全机枚举受限，不证明间接进程排空**。详HANDOFF§19.22；本次文档记账未另运行dotnet，不覆盖此前16文件代码/测试变更。
+
+**Limits / next**：只完成Transport已认证父子生命周期及Host释放合同，不等于产品App Host/Client/WPF看屏可用。继续App真实Host启停+ViewOnly本地审批、Client高层认证/prompt key、WPF有界解码渲染/完整退出，再实屏与十分钟DoD；**M5未完成**。无M4重跑、现网/防护修改、权限绕过或新包。

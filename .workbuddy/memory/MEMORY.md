@@ -1,18 +1,18 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至065认证Host视频路由；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至066认证Video父子生命周期；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-10-01，优先于下方历史记录）
 
-`2e48cb4`/§19.21/ADR065（9files/+1415/−23）：public `Host.CreateWithVideo`沿认证VideoAttach路由，ACK flush核查后创建，每会话固定已接管producer；原工厂前缀和本Video路由原操作完整join，Start锁外不堵Stop。Stop抢先Start的拒绝仅凭原InvalidOperationException**实例**证明，探针自身IO/ODE/OCE/聚合错不盖掉Start原错。Stop/Dispose错误树仅同原Task身份去重，不同原Task同Exception实例仍双根；不按异常类型泛吞。初边界57绿→修竞速80绿→同Task重复报树4红修后83绿/Transport2252→补不同原Task双根3例至Transport2255。首final目录因并行测试文件SHA变化于首Debug Rebuild后自动停止（0 test，保持failed）；retry目录16 TRX双配置各3589 PASS/0失败跳过，四Rebuild 0警告错误，六命令rc0/log SHA，337源码/测试等前后及文档编辑前逐SHA一致（含HANDOFF，记账后例外）。runner+六直接子命令退出，全机枚举失败不能外推。证据`outputs/m5-host-video/final-20261001-120711-095134700/summary.json`、`final-20261001-122116-867239300-retry/summary.json`（同目录）。
-**下一关**：Registry proof资格同锁预约→AttachAsync成功后后检异常释放预约且不恢复一次性资格→Control注销零化后join Video真实结束→Host预算Stop与完整Dispose排空；其后才App/WPF显示、实屏、十分钟DoD。当前无完整Control父子Video/Host清理，**M5未完成**。M4不重跑、不改网/防护、不绕权限、不出新包。
-上一片`9cede86`/§19.20/ADR064为Core public producer/factory+Sessions专用主屏拥有型factory/适配器，旧Sessions218、final各3542绿/334SHA，七变异29目标红；再前`50d54af`/§19.19/ADR063双级有界FramePipeline，104新例/最终3428绿；详HANDOFF和对应证据。§19.20的“仅四文档”仅指上一片记账，不指`2e48cb4`实际代码片。
+`b3e1273`/§19.22/ADR066（16files/+2225/−423）：Registry同锁proof/同源/证书/期限复核并预约子lease，Attach成功后三后检失败不返还资格；Control注销零化登记表token/即发Revoked、锁外等子Completed；子RunAsync和Host原关闭任务全部退出才Complete。Host Stop按预算报告真实未完，根取消回调未完可独立Timeout不伪造连接数；并发Dispose完整join在途Stop/accept/Registry原取消/force/linked清理后释放两根，保留原异常树。历史已完成Stop fault留各自原Task，内部HostLifecycleErrors每类仅首错，Dispose只汇总其开始时在途Stop。六变异每轮≥1目标Assert红共9、0Guard/清理超时、原bytes恢复绿；第5轮False红/True绿，非六轮全部理论行红。final 16TRX双配置各3613 PASS(196/66/299/3/2279/393/157/220)、四Rebuild零警告错误、六rc0/log SHA、337项前后及编辑前逐SHA相同（含HANDOFF，记账后例外）；runner与六直接子命令退出，全机枚举未证。证据`outputs/m5-host-video/final-parent-dispose-20261001-135550-001799400/summary.json`及`parent-mutation-final-20261001-134942-043130500/mutation-evaluation.json`。
+**下一关**：App Host真实启停/本地ViewOnly审批、Client高层认证与prompt key、WPF有界解码渲染/完整退出、实屏/十分钟DoD。Transport父子生命周期已完成，App未接线，**M5未完成**；不重跑M4/改网防护/绕权限/出新包，不外推TLS/WPF内存擦除。
+前片`2e48cb4`/§19.21/ADR065沿认证路由ACK后创建producer，3589绿/337SHA，旧首final因并行SHA变化停（0 test，failed），retry绿；`45dd8db`仅文档记账。更早`9cede86`/§19.20/ADR064工厂（3542绿）及`50d54af`/§19.19/ADR063有界管线（3428绿）详HANDOFF。
 
 M4已收口（§18.25/c251d21），不翻绿/重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界§18.22–23。
 
-历史速查：99dfd76/§19.18/ADR062主屏GDI物理BGRA/JPEG最近邻与原worker单飞；WPF吞底层写错须JpegOutputStream锁存，32MiB仅输出上限。157新例、32目标红（8Guard不计），双配置3324绿/四Rebuild0警告错误/319SHA；仅合成JPEG/离屏GDI，非实屏/混合DPI。511ca6d/§19.17 public外壳预建/投影先发布再Start，父等raw+accepted投影、子仅raw，完整Aggregate不吞主动close错；f3dbccc/§19.16 Control一次原读monitor。冻结IP/pin/proof/ACK，敏感wire等原IO退出再清零；83字节nonce transcript未擦除但无token/proof，不承诺TLS内部清零或最窄Committed窗口。
+历史速查：99dfd76/§19.18/ADR062主屏物理BGRA/JPEG最近邻、原worker单飞，WPF吞底层写错须JpegOutputStream锁存，32MiB仅输出上限；157新例/32目标红(8Guard不计)、双配置3324绿/319SHA；非实屏/混合DPI。511ca6d/§19.17封闭public外壳先发布投影再Start，父等raw+投影、子仅raw，原Aggregate不吞close错；f3dbccc/§19.16 Control原读monitor。冻结IP/pin/proof/ACK；敏感wire等原IO退出再清零，83字节nonce transcript未擦除但无token/proof，不承诺TLS副本清零或最窄Committed窗口。
 
 审批按状态机接受时刻：elapsed>=budget拒，gate前计时含UI；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后终检，之前不改limiter；context loader至多一项实际store，迟到key先清零再释放准入，CTS不能硬中断同步DPAPI/gate/阻塞回调。客户端独占TLS到认证，presentedPin及grant proof验完才交会话，public无流/token/输入；hello后machine10s、challenge只收窄、独立approval60s。只消费首个终帧；DTO/TLS内部副本不保证擦除；clock变异须在被删检查之前客观固定到期，不把后置兜底误称单点覆盖。
 
@@ -57,7 +57,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | 完成，2026-09-21两机24步/574绿，证据配对与机械INVALID_RUN见HANDOFF§15。 |
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：2e48cb4认证Host视频路由，各3589 PASS；Registry/Control/Host完整生命周期、App/实屏/十分钟DoD未完，§19.21。 |
+| **M5** | 进行中：b3e1273认证Video父子生命周期/Host释放，各3613 PASS；App Host/Client/WPF、实屏/十分钟DoD未完，§19.22。 |
 | M6~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。
@@ -79,7 +79,7 @@ M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完
 
 ## M3 速查（细节在 HANDOFF.md）
 
-accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 4 KiB；M3 终态 = hello 后干净关闭（**M4 已定案改为显式交接** `ControlPreAuthHandoff` → `ControlAuthSession`，ADR-037；落地在阶段 3）。五段绝对 deadline 只验了「执行得准」（误差 0–36 ms）；**第二轮评审已回收**（两处缺陷级：外层信封缺失 / transcript 拆分；数值待本机实验后定案，M3.1 先补信封）。`TransportHost` 零 logger（同子网/准入/TLS 拒绝全静默 → ADR-024/M9）。
+accept→同子网→准入→TLS不可换；pre-auth≤4KiB；M3旧hello后关闭已由M4显式`ControlPreAuthHandoff`→`ControlAuthSession`替代(ADR037)。五段deadline只证执行精度(0–36ms)，M3.1补外层信封、transcript拆分评审已回收，数值仍待本机实验；Host同子网/准入/TLS拒绝零logger待M9。
 验收器：双击=WPF 窗口，`--headless client|host|info`（旧prepare/lab/Undo全拒绝）；退出码 0/1/2/3/4=预期内/真失败/前置不满足/工具错/无效运行；`Combine` 优先级 `InvalidRun>HarnessError>Fail>PreconditionUnmet>Pass`；四场景 `success`→`pin-mismatch`→`timeout`→`slow-dribble`（判据 `sent=3/4`）；两机配对用 4 元组（聚合计数不算证明）；控制端只给 `PENDING-HOST-EVIDENCE`；`gui.log` 只记进程级事实、每轮证据在 per-run 文件；别拿 `LanRemote.App` 验传输层（零调用）。**被控端「停止监听」收尾 → 结局字段必为 `INVALID_RUN`（设计：按停=机械作废，防「按停伪造通过」），判定看逐条证据；`--headless host --seconds N` 定时轮不走该路径（实测 PASS）。**
 
 ## 测试/验收写法硬约束（踩过的坑）
@@ -93,9 +93,9 @@ accept→同子网→准入→TLS，**顺序不可换**；pre-auth 单帧上限 
 - 按行数记账的 tailer：`usable` 必须=「确定写完的行数」→ 配独立 `CountCompleteLines` 对账防回归
 - 帧读取器「失败后恢复」场景：**消费掉的字节无法退回**——半前缀超时后再读必然错位；恢复性用例只能建在 **0 字节失败**上（B19 定案）
 - `dotnet test` 全量数总数用 `| grep -E "已通过!|失败!"`：`tail -N` 会截掉**首个**项目结果行（Protocol.Tests 曾被整行吞掉，574→601 的「差值」据此而来）
-- **黄金向量黄金律**：期望值必须来自被测实现之外的**独立第二实现**（`scripts/reference/gen-auth-golden-vectors.py`，纯标准库 Python）；NUL 字面量一律写 `\u0000`——C# 字符串 **`\0` 后跟数字会被解析成八进制转义**（uuid 串以数字开头时必踩，实测）；变异验证专抓「只断言常量关系、不触实现」的假测试（M3 变异实测抓到一条）
-- **测试字面量纪律**：长 base64 **一律 `Convert.ToBase64String` 现造**（`B64(int)` helper），手抄必错——「31 字节」手抄串实为 45 字符（excess padding，非法 base64），测试被别的拒绝路径救活 = 假测试（M4 阶段 2 变异验证第二次抓到同类，邻界值必须走编码器构造）
-- **夹具拆线竞速（M4 阶段 3 实测，最贵一课）**：harness 出结局后立即 `cancel+dispose` 会与客户端「读终帧」抢跑——快速失败路径（错钥/被限流/即时拒绝）偶发丢帧；修复 = 拆线前先 `await Task.WhenAny(clientTask, Task.Delay(3s))` 让客户端自然收场。**拆线快 ≠ 对**：「迟到决定」类测试的延时**不绑 stall 令牌**（绑了会被 harness 取消吞掉，测不到目标路径）
+- **黄金向量**：期望来自独立第二实现`scripts/reference/gen-auth-golden-vectors.py`；NUL写`\u0000`，C#的`\0`接数字会成八进制；变异须触实现，常量自证是假绿。
+- **测试字面量**：长base64用`Convert.ToBase64String`/`B64(int)`现造，手抄31字节误成45字符曾让邻界值被错误拒绝路径救活。
+- **夹具拆线竞速**：出结局立刻cancel+dispose会抢掉客户端快速失败终帧；先`await Task.WhenAny(clientTask, Task.Delay(3s))`。迟到决定延时不绑stall令牌，避免夹具取消吞掉目标。
 
 ## 网络 / lab
 
