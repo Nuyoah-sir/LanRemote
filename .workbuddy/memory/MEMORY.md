@@ -1,15 +1,14 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至064会话拥有型视频工厂；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至065认证Host视频路由；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-10-01，优先于下方历史记录）
 
-最新9cede86/§19.20/ADR064（6files/+2583）：Core public IVideoFrameProducer/Factory仅Guid/帧，不含Stream/会话token；Sessions factory每会话专用唯一主屏，原Task.Run创建取消不使用WaitAsync代理，失败完整回滚；适配器Completion覆盖管线和独立双依赖释放，共享引用一次，Read已交付帧归caller，EOF等清理，原多fault嵌套不Flatten。factory不验证认证；Host仍未落地。
-初factory200绿/2warning等价修；producer初build边写CS0246，次217/218仅tail夹具过早注错，修后218绿/0warn，旧日志保留。Sessions218=旧104+新114（Factory96/Producer18）；七变异3/1/2/2/12/6/3共29目标Assert红、0Guard，旧分类器首轮漏报但原TRX再次证实、各轮恢复绿；变异保护21≠final334 scope。final16TRX两配置各3542 PASS，四Rebuild0警告/错误，六命令rc0/hash核对；334源文件SHA前后及本轮编辑前当前一致（HANDOFF记账后例外）。仅runner+6direct退出，不称全机扫描。证据outputs/m5-frame-pipeline/factory-mutation-20261001-104604/report.json、outputs/m5-video-producer/final-20261001-105537-153331700/summary.json。
-下一片Transport每已认证Host会话ACK flush后创建并父子join、防迟到read初始化，然后App/WPF显示与十分钟DoD；M5未完成。不重跑M4/改网/防护/绕权限/出新包。
-上次记账历史：50d54af/§19.19/ADR063为双级有界FramePipeline(104新例)，八变异20目标红/0Guard；最终3428绿、四Rebuild0警告错误、328SHA；详情见原节及上次证据。本轮仅四文档，无dotnet/代码测试修改/提交/任务。
+`2e48cb4`/§19.21/ADR065（9files/+1415/−23）：public `Host.CreateWithVideo`沿认证VideoAttach路由，ACK flush核查后创建，每会话固定已接管producer；原工厂前缀和本Video路由原操作完整join，Start锁外不堵Stop。Stop抢先Start的拒绝仅凭原InvalidOperationException**实例**证明，探针自身IO/ODE/OCE/聚合错不盖掉Start原错。Stop/Dispose错误树仅同原Task身份去重，不同原Task同Exception实例仍双根；不按异常类型泛吞。初边界57绿→修竞速80绿→同Task重复报树4红修后83绿/Transport2252→补不同原Task双根3例至Transport2255。首final目录因并行测试文件SHA变化于首Debug Rebuild后自动停止（0 test，保持failed）；retry目录16 TRX双配置各3589 PASS/0失败跳过，四Rebuild 0警告错误，六命令rc0/log SHA，337源码/测试等前后及文档编辑前逐SHA一致（含HANDOFF，记账后例外）。runner+六直接子命令退出，全机枚举失败不能外推。证据`outputs/m5-host-video/final-20261001-120711-095134700/summary.json`、`final-20261001-122116-867239300-retry/summary.json`（同目录）。
+**下一关**：Registry proof资格同锁预约→AttachAsync成功后后检异常释放预约且不恢复一次性资格→Control注销零化后join Video真实结束→Host预算Stop与完整Dispose排空；其后才App/WPF显示、实屏、十分钟DoD。当前无完整Control父子Video/Host清理，**M5未完成**。M4不重跑、不改网/防护、不绕权限、不出新包。
+上一片`9cede86`/§19.20/ADR064为Core public producer/factory+Sessions专用主屏拥有型factory/适配器，旧Sessions218、final各3542绿/334SHA，七变异29目标红；再前`50d54af`/§19.19/ADR063双级有界FramePipeline，104新例/最终3428绿；详HANDOFF和对应证据。§19.20的“仅四文档”仅指上一片记账，不指`2e48cb4`实际代码片。
 
 M4已收口（§18.25/c251d21），不翻绿/重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界§18.22–23。
 
@@ -58,7 +57,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3** | 完成，2026-09-21两机24步/574绿，证据配对与机械INVALID_RUN见HANDOFF§15。 |
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：9cede86拥有型生产工厂，各3542 PASS；Host/App/实屏/十分钟DoD未完，§19.20。 |
+| **M5** | 进行中：2e48cb4认证Host视频路由，各3589 PASS；Registry/Control/Host完整生命周期、App/实屏/十分钟DoD未完，§19.21。 |
 | M6~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。

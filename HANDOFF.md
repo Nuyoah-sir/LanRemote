@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-10-01（9cede86 会话拥有型视频生产工厂，双配置各3542 PASS；Host/App/十分钟DoD未完，§19.20）**
+> 更新时间：**2026-10-01（2e48cb4 认证Host视频工厂装配，双配置各3589 PASS；Registry/Control/Host完整生命周期、App/十分钟DoD未完，§19.21）**
 >
 > **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`9cede86`完成Core public生产接口与Sessions会话拥有型factory/producer（ADR-064，6 files/+2583），双配置各3542 PASS、四Rebuild零警告错误，见§19.20；FramePipeline/GDI/JPEG/public客户端等历史保留。** 工厂不验证认证，Transport Host生命周期装配尚未落地；M4/Python打包均未重跑。
+> **最新代码：`2e48cb4`完成Transport public `Host.CreateWithVideo`认证视频工厂装配（ADR-065，9 files/+1415/−23），双配置各3589 PASS、四Rebuild零警告错误，见§19.21；§19.20工厂等历史保留。** 仅完成ACK后创建与本Video路由的停止/原操作join；Registry预约、Control注销join及Host预算/Dispose完整排空尚缺，不能称Host产品完全闭环。M4/Python打包均未重跑。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
-> 产品 App 尚不能看屏或键鼠控制；本轮未改产品 App、权威规格、系统网络或防火墙。
-> **下一关：Transport每已认证会话的Host生命周期public装配，再App/WPF显示与十分钟DoD（§19.20）。** ACK flush成功后创建producer、父子停止完整join、禁止迟到read初始化均是待实施合同；工厂本身不作认证门禁。尚未App接线/实屏/十分钟DoD，M5仍未完成。不重跑M4、不绕过桌面权限、不改网、不出新包。
+> 产品 App 尚不能看屏或键鼠控制；本片已改Transport源码/测试，未改产品 App、权威规格、系统网络或防火墙。本次记账只改四份文档。
+> **下一关：Registry同锁预约proof资格→AttachAsync成功后后检异常释放预约且不恢复资格→Control注销零化后join Video真实结束→Host预算Stop与完整Dispose清理（§19.21/ADR-065）；其后才接App/WPF显示及十分钟DoD。** 现有ACK后创建不等于无竞态的完整父子生命周期；未App接线/实屏/十分钟DoD，**M5未完成**。不重跑M4、不绕过桌面权限、不改网、不出新包。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -34,12 +34,12 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M5 — 视频最小闭环，进行中。** 采集、编码、第二TLS/VideoAttach及会话拥有型生产工厂已有分层组件，尚未在Host/App接成显示闭环、未实屏或验证10分钟DoD，见§19。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：Transport每已认证会话的Host生命周期public装配（ACK flush成功后创建producer、父子停止join、无迟到read初始化），然后App/WPF显示及十分钟DoD（§19.20）。** Core接口及Sessions工厂已实施，工厂不作认证门禁；Host方案尚未实现，不加friend绕层；不重跑M4，不改DHCP/IP/路由/DNS/热点/网络类别/防火墙，不执行旧Undo，不绕过桌面权限，不出新包。
+- **当前里程碑：M5 — 视频最小闭环，进行中。** 采集、编码、第二TLS/VideoAttach、会话拥有型生产工厂与Host public视频工厂路由已落地；Registry/Control/Host完整生命周期及App显示闭环未完成，未实屏或验证10分钟DoD，见§19.21。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
+- **下一步：Registry同锁proof资格预约、AttachAsync成功后后检异常释放预约但不恢复一次性资格，Control注销零化后join Video真实结束，Host预算Stop及完整Dispose排空（§19.21）；之后App/WPF显示及十分钟DoD。** public `CreateWithVideo`已实施，但不代表完整Host闭环；不加friend绕层、不重跑M4、不改DHCP/IP/路由/DNS/热点/网络类别/防火墙、不执行旧Undo、不绕过桌面权限、不出新包。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`9cede86`**（Core生产接口及Sessions会话拥有型factory/producer，ADR-064，6 files/+2583）；前片历史保留。
-- **Working tree at validation：9cede86源码/测试，最终验证至本轮文档编辑前未变；本轮仅四份文档记账。** `outputs/m5-video-producer/final-20261001-105537-153331700/summary.json`记录16份TRX两配置各3542 PASS/0失败/0跳过（Sessions218），四次solution/IsolatedAcceptance Rebuild零警告错误、六命令rc=0/日志SHA；334项源文件逐SHA前后及本轮编辑前当前一致（含HANDOFF，记账后该项为已知例外）。七轮factory变异29目标Assert红/0Guard，每轮恢复目标绿；变异21保护文件与final334不同scope。final只确认runner退出及六个直接子命令已等待退出，全机枚举未得有效结果，不能证明间接进程排空；详§19.20。本轮未运行dotnet/改代码测试/提交。
+- **Last code commit：`2e48cb4`**（Transport认证Host视频工厂装配与回归，ADR-065，9 files/+1415/−23）；前片`9cede86`/ADR-064历史保留。
+- **Working tree at validation：`2e48cb4`源码/测试对应`outputs/m5-host-video/final-20261001-122116-867239300-retry/summary.json`完整终验；终验后至本次文档编辑前337项逐文件SHA与清单一致，当前只改变记账文档。** 独立核对16份TRX实际结果及Counters，Debug/Release各3589 PASS/0失败/0跳过；四次完整Rebuild零警告/错误，六命令rc0/六日志SHA一致；337项冻结前后及记账前当前一致（含HANDOFF，记账后此项为明示例外）。原目录`final-20261001-120711-095134700`在首Debug Rebuild后发现并行测试源码SHA变化而自动停止，只有一次零警告build、**零tests，失败证据保留且不翻绿**。只证明runner退出与六直接子命令等待退出，全机枚举被拦不证明间接或全机排空。本次未运行dotnet/修改源码测试/提交；§19.20所称“本轮仅四文档”仅是上一片历史，不适用于`2e48cb4`代码片。详§19.21。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -2972,4 +2972,16 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 
 **最终全量/记账边界**：`outputs/m5-video-producer/final-20261001-105537-153331700/summary.json`、原日志及16份TRX；Debug/Release各**3542 PASS/0失败/0跳过**（Core196、Security66、Protocol299、Integration3、Transport2210、Acceptance393、Capture157、Sessions218），逐份实际UnitTestResult与计数核对，不以旧数相加代替实测。solution及IsolatedAcceptance在两配置四次完整Rebuild均零警告/错误；六命令rc0及各自日志SHA已核对。冻结scope334项逐文件SHA在六阶段前后及本轮编辑前当前一致；含HANDOFF，文档记账后该项变化属明确例外。final runner退出0且六直接dotnet子进程由runner等待；`system_process_enumeration_verified=false`，不能声称间接进程或全机排空。
 
-**下一片（尚未实施）**：Transport在每个已认证的Host会话ACK flush成功之后创建生产者，并与该会话父子生命周期绑定，停止完整join且不让迟到read初始化；认证门禁必须在Transport而非仅凭Guid或工厂，不能只传read委托/借friend绕层。其后才将帧接App/WPF解码显示并做实屏与十分钟DoD。Host/App未落地，M5未完成；本轮仅修改四份记账文档，没有重新运行dotnet、修改代码/测试、提交、建任务、重跑M4、改现网/防护、绕过桌面权限或出新包。
+**下一片（尚未实施）**：Transport在每个已认证的Host会话ACK flush成功之后创建生产者，并与该会话父子生命周期绑定，停止完整join且不让迟到read初始化；认证门禁必须在Transport而非仅凭Guid或工厂，不能只传read委托/借friend绕层。其后才将帧接App/WPF解码显示并做实屏与十分钟DoD。Host/App未落地，M5未完成；**此处“本轮仅修改四份文档”只描述§19.20上一片记账轮，不描述随后§19.21的代码片**。上一片没有重新运行dotnet、修改代码/测试、提交、建任务、重跑M4、改现网/防护、绕过桌面权限或出新包。
+
+### 19.21 认证Host视频工厂路由与原任务诊断（2026-10-01）
+
+**实现范围**：`2e48cb4`/ADR-065，9 files/+1415/−23。Transport公开`TransportHost.CreateWithVideo(...)`，把借用的`IVideoFrameProducerFactory`装入认证Host的`FirstFrameRouter`；旧shared `IVideoFrameSource`/internal路由及Control-only入口保持兼容，不以裸Guid/工厂代替注册表VideoAttach的同会话地址、证书、nonce/proof资格。完成第二TLS首帧与Attach后，ACK成功写入且flush、阶段/信封检查通过才调用工厂；工厂原同步前缀/异步创建始终在被路由持有并join的transfer内，迟到创建结果接管后即停止/释放，不由迟到read重新初始化。取得producer后先注册到停机可触达状态，再于锁外调用`Start`（避免可注入同步前缀占锁阻塞Stop）；停止抢先Start时，只有生产者明确证明**这一原`InvalidOperationException`实例**为stop-before-start拒绝才可视作正常，不按异常类型/消息泛吞。证明探针本身若抛IO/ODE/OCE或嵌套Aggregate，必须保留原Start错及独立探针错，不覆盖主错。
+
+**生命周期与错误边界**：单个已接管producer供固定来源读取，不对每帧重调用工厂；Control关闭/Host停止/peer关闭及video lease撤销均请求关闭、取消、Stop，等待transfer、peer、关闭与取消、Stop及Dispose的原操作退出，已交付帧归消费方；不合作原操作不能强制限定完成时长。保持每个原Task的所有fault根与嵌套，不Flatten、不因IO/ODE/OCE类型静默抹去来源或清理错误；Stop/Dispose若返回同一原Task，多次观测其错误树只能按**原Task身份**去重一次，不能以Exception引用跨不同原Task去重，故不同原Task复用同一异常实例仍保留两个故障位置。此处只是本Video路由的局部join，**尚非Control→Video注销后全局父子join或Host完整Dispose承诺**。
+
+**发现、修复与测试**：初轮Host边界57/57绿；回归发现可注入`Start`占锁阻止并行`Stop`、以及Stop先CAS抢占后的正常拒绝分类过宽，改锁外Start加原实例证明后80条边界绿。随后反复观察同一Stop/Dispose原Task导致错误树重复，曾有4红；按原Task身份去重后83条边界绿，Transport全量当时2252绿。再补不同原Task携同一异常实例仍保留双根3例，最终Transport2255绿；证明探针自身IO/ODE/OCE/聚合抛错四展开覆盖。旧失败不改写为绿；边界数量与最终完整TRX各自独立，不推算全量。
+
+**终验与可复核失败证据**：首轮`outputs/m5-host-video/final-20261001-120711-095134700/summary.json`状态failed/exit1，首Debug solution Rebuild rc0且0警告/错误，但`tests/LanRemote.Transport.Tests/FirstFrameRouterVideoFactoryTests.cs`在并行编辑时SHA从`cdb374da…`变为`de15dbc…`，冻结发现变化自动停止；`actual_tests=0`，不可翻绿或说它验证了最终代码。随后独立`outputs/m5-host-video/final-20261001-122116-867239300-retry/summary.json`状态passed/exit0；主线程重新解析16份原始TRX各UnitTestResult与Counters，Debug/Release各**3589 PASS/0失败/0跳过**：Core196、Security66、Protocol299、Integration3、Transport2255、Acceptance393、Capture157、Sessions220。四份Debug/Release solution及IsolatedAcceptance完整Rebuild原日志均0警告/0错误，六命令rc0、六日志SHA一致；337项实际源码/测试/工具/脚本及指定根文件冻结前后逐文件SHA一致，记账前再核对当前337/337一致（含HANDOFF；本节更新后该文件成为明示文档例外）。runner退出0且六个直接命令均等待退出；安全策略拦全机枚举，不承诺间接子进程/全机排空。本次文档整理**未**另跑dotnet；这些数值来自此前终验，不将§19.20的“仅文档轮”套到本片源码/测试变更。
+
+**边界与下一关（M5未完成）**：当前Registry在proof成功时直接消费一次性资格，路由后置截止异常尚缺明确释放预约合同；先在Registry同一锁内预约proof资格，再使`AttachAsync`成功后检查异常可释放预约且**不得恢复**已经消费的一次性资格。随后让Control注销/会话token零化后可join已预约Video的**真实结束**，再让Host预算`StopAsync`如实报告超时、`DisposeAsync`完整无界排空已登记原操作；不以现有局部路由join冒称Host产品完全闭环。完成上述生命周期后才做App/WPF解码显示、真实屏幕与十分钟DoD；产品App仍未接线、未实屏/十分钟验证，**M5未完成**。M4不重跑，现网/防护不改，不绕桌面权限、不加包或出新包。
