@@ -1495,3 +1495,21 @@ JPEG用确定性最近邻、BGR24、floor缩放到至少1×1，尊重源stride�
 **Evidence**：99dfd76，157新增展开（GDI92/JPEG57/owner8），合成JPEG真实解码、3例真实离屏GDI，不读取实时桌面。首145中144绿/1红促成WIC吞错修复；追加12项回归。独立审查后修原await观察点：从公开operation读取任意已登记awaiter Task再Assert.Same原worker，就绪不能绑定正确目标；两批八变异有效32目标红(5/3/3/4/1/9/6/1)，首轮8Guard排除不追认，六有效不重跑。复验后4处xUnit2031等价改predicate重载。最终四完整Rebuild零警告错误，Debug/Release各3324 PASS，主线程14TRX与319源码SHA独立核验，详HANDOFF§19.18。
 
 **Limits / next**：无真实DISPLAY DC/混合DPI/长期内存稳定或产品看屏结论；原同步native/WIC不返回则不承诺停止时限。删除API失败可残留资源但明确报告。Sessions两级有界生产管线、Host公开安全装配、WPF显示及十分钟DoD随后实现；M4/现网/防护/App不动。
+
+### ADR-063 — Sessions 双级有界帧生产、原操作完整join与两阶段EOF
+
+**日期**：2026-10-01。**Context / Decision**：50d54af（7 files/+3659）实现独立生产FramePipeline，不代表Host/App已接线。Sessions保持net10.0、仅引用Core；raw/encoded复用BoundedFrameQueue，各容量仅1或2（默认2）、DropOldest，无无界队列。固定5FPS/0.5缩放/quality60/Auto=false，每轮从实际capture启动计时，扣除本轮耗时后等待200ms剩余预算，超预算不补帧/追赶。capture/encoder须专用借用至Completion完成，管线不Dispose依赖，拥有型factory另片实施。
+
+Start为一次性CAS；Stop先赢则永不启动，Start先赢则收尾必须等待发布屏障，覆盖部分创建失败及两个真实循环引用。构造不采集；Task.Run不传取消token以确保已调度的同步前缀/清理真正执行。internal Start发布观察仅friend Sessions.Tests可用，不公开回调、不借friend装配产品。
+
+原Capture/Encode的ValueTask只AsTask一次，直接await原Task，不能以取消代理提前结束；raw借用活到Encode真实退出。迟到结果先获得ownership再检查停止；交付帧归caller、无后置取消检查。清理前清空本地owner并仅尝试一次Dispose，drop disposer错误也进入完整报告。StopAsync与DisposeAsync复用稳定Completion，完整join两个原循环（含同步前缀/异步尾部/本地清理）及raw.Stop、encoded.Stop、Cancel三个独立任务；全部退出才Dispose CTS，慢disposer/callback不能串行阻塞其他清理。原操作不合作仍不承诺停止时限，回调内部不得等待自身join。
+
+错误保留全部原fault根/原Aggregate嵌套对象，不Flatten、不只取await抛出的第一根；首错请求停止，有限清理错追加。只有非Faulted操作的OCE携带本管线token且已请求取消时可作正常取消；Faulted任务内OCE、时钟/清理OCE仍是错误，统一Aggregate报告。EOF分两阶段：单消费者队列读取可取消，caller取消不停止生产；仅转换内部队列停止ODE，先释放读槽，再直接且不可取消地await Completion。干净返回null，否则共享稳定错误；允许多个调用同时等最终EOF，协调者不join read以免互等。已交付帧不被收尾回收。
+
+**Evidence**：新增104展开（Flow36/Lifecycle60/Start8）。initial日志82测80绿/2红均Expected null：fixture Tail.Entered先于Invoke发布Worker，改先等InvocationExited再比较原await身份；不将其写成生产取消故障。initial xUnit2031改Assert.Single谓词重载，fixed CS4014改显式丢弃AssertLoopFailure返回Task，均等价且保留旧日志。证据`outputs/m5-frame-pipeline/initial-{build,test}.log`、`fixed-{build,test}.log`及对应TRX。
+
+`outputs/m5-frame-pipeline/20261001-093617-singlepoint8/report.json`八单点8/8有效，目标红1/2/2/2/8/2/1/2共20，主线程19TRX逐项核验、0Guard/其他错误/编译失败，每轮恢复目标绿。1/2是发布屏障/EOF的实际await身份；3/4在首轮原Capture/Encode await身份即红，不声称进入取消时序；5实际红于根数，6红于剩余延迟，7红于迟到capture调用数，8由明确Assert.False报告协调者提前退出，不是join注册数或Guard超时。变异保护55项与final冻结328项不同scope。
+
+最终`final-20261001-094907-708217/summary.json`（同上根目录）：四Rebuild零警告错误，六命令rc/hash核验一致；主线程16TRX逐条确认Debug/Release各3428 PASS（Core196/Security66/Protocol299/Integration3/Transport2210/Acceptance393/Capture157/Sessions104），0失败/跳过。328文件前后及记账前当前SHA一致，含HANDOFF，后续文档变更不冒充全清单仍相同。final枚举被拦，仅确认runner与6direct退出，不外推间接子进程或全机排空，不套用变异进程结论。完整实证见HANDOFF§19.19。
+
+**Limits / next**：无App接线/实屏/十分钟DoD，M5未完成。下一片Core生产factory/producer安全contract + Sessions拥有型factory；之后Transport每已认证会话生命周期public装配，ACK flush后创建、停止join、无迟到read初始化，再App/WPF显示。以上Host合同是计划而非已实现，不以read委托或friend绕过生命周期/分层。无M4重跑、现网/防护修改、权限绕过或新包；本轮仅文档记账，不运行dotnet、不改代码测试、不提交。

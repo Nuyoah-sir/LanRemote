@@ -1,15 +1,18 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> ADR `docs/DECISIONS.md`（至062 GDI/JPEG；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至063 FramePipeline；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 注入约10000字符超出截断；更新先验长度，超限先核实，不盲目整并。
 
 ## 当前续作点（2026-10-01，优先于下方历史记录）
 
-M4已收口（§18.25/c251d21）：2596357双配置1433/Python14；两机认证/联网/审批/短码/遮挡/关窗及b42a1553坏proof/0cd5d3b8停止通过。9月29日用户确认“上一轮询问的实屏情况都正常”，DoD/21步齐。原结局不翻绿、不重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；旧改网/Undo停用，SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界见§18.22–23。
+最新50d54af/§19.19/ADR063（7files/+3659）：Sessions FramePipeline双级raw/encoded容量1或2 DropOldest，5FPS/.5/60；capture/encoder专用借用至Completion，不由管线释放。单次Start发布屏障；internal观察仅friend Tests。直接await原Capture/Encode含同步前缀/尾部，完整join双循环+raw.Stop/encoded.Stop/Cancel三独立清理，再释放CTS；保留多fault原树不Flatten。EOF先可取消队列读/释放读槽，再不可取消等Completion，干净null否则稳定Aggregate；不自join/不回收已交付帧。
+104新例=Flow36/Lifecycle60/Start8。初82中2红为fixture提前读Worker（Expected null），改先等InvocationExited；initial xUnit2031/fixed CS4014均等价修，旧证据保留。八变异1/2/2/2/8/2/1/2共20目标红、0Guard，每轮恢复目标绿；3/4是首轮原await身份非取消时序，8明确Assert提前退出非注册数。主线程19变异TRX及final16TRX/六日志rc/hash核验：双配置各3428绿，四Rebuild零警告错误，328SHA前后/记账前当前一致。变异55保护与final328不同scope；final全机枚举被拦，仅runner+6direct退出，不沿用变异全机结论。证据outputs/m5-frame-pipeline/{20261001-093617-singlepoint8/report.json,final-20261001-094907-708217/summary.json}。
+下一片Core生产factory/producer安全contract+Sessions拥有型factory，再Transport每已认证会话生命周期public装配（ACK flush后创建、停止join、无迟到read初始化），再App/WPF显示。Host尚未落地；未App接线/实屏/十分钟DoD，M5未完成。不加friend绕层，不重跑M4/改网/绕权限/出新包。本轮仅四文档，无dotnet/代码测试修改/提交/任务。
 
-最新99dfd76/§19.18/ADR062：主屏GDI物理模式/本地坐标/top-down BGRA alpha255；清理完成再交付。WPF JPEG最近邻缩放/实际payload/ID不回绕，借用raw；单飞公开operation直接await原worker，取消不提前结束。WPF实测吞固定MemoryStream.Write超限NotSupportedException，Save正常返回length0；JpegOutputStream锁存原错并Save后先终检，吞错后正长度片段仍拒绝。157新例(GDI92/JPEG57/owner8)，8变异跨两目录有效32目标红，首轮1/2的8Guard不计；从公开operation读任意awaitedTask判就绪再Assert.Same原worker，不能把就绪绑正确答案。只重验1/2，后等价消4警告。四Rebuild0警告错误、双配置各3324 PASS(196/66/299/3/2210/393/157)，主线程14TRX/319源码前后当前SHA一致，outputs/m5-capture-jpeg/final-20261001-074525-215929。
-下一片Sessions两级raw/encoded容量1–2 DropOldest生产管线，5FPS/50%/quality60；然后Host安全public装配/WPF显示/十分钟DoD。Sessions仍空，App未接Transport；不能加friend绕层。只验合成JPEG/离屏GDI，无实桌面/混合DPI/权限绕过/新包/M4重跑/改网，32MiB是输出非总内存上限。
+M4已收口（§18.25/c251d21），不翻绿/重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界§18.22–23。
+
+前片99dfd76/§19.18/ADR062：GDI物理主屏/BGRA alpha255/清理后交付；JPEG最近邻、实际payload、ID不回绕、raw借用。单飞直接await原worker。WPF吞底层超限错，JpegOutputStream锁存并Save后先终检，正长度截断也拒绝。157新例、跨两目录32目标红（首轮8Guard不计），双配置3324绿/四Rebuild零警告错误/319SHA。只验合成JPEG/离屏GDI，32MiB是输出非总内存上限；详原节，不外推实屏/混合DPI。
 511ca6d public视频/异步释放及f3dbccc Control监控不重做，详§19.17/16：wrapper预建、成功投影无后置终检；调度先发布投影再Start，失败仅join自己attempt。父释放等raw+accepted projection，子仅raw；完整原树Aggregate，主动close错误不隐藏。冻结IP/pin/actual proof/ACK；212原wire等IO退出清零，success预算min(hint,15000)，负或>=拒。83字节nonce transcript未擦除(无token/proof)，不外推TLS擦除或最窄Committed窗口。
 
 用户已拍板审批按状态机接受时刻：elapsed>=budget拒，gate调用前计时含UI调度；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后最后检查，之前不改limiter。context共用loader最多一项实际store，迟到key先清零再释放准入；CTS不能硬中断同步DPAPI/gate/阻塞回调。
@@ -54,14 +57,14 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | --- | --- |
 | M0~M1.3 | 完成（`104f296` / `9e75fce`） |
 | M2+M2.1 | 完成，两机验收 **20/20**（`313c542`，408 tests） |
-| **M3** | **完成**——24 步全完（0 警告 / **574 tests PASS**）；第 24 步两机验收 **PASS**（2026-09-21 真机，判定=证据配对；被控端结局字段 INVALID_RUN 系收尾机制机械产物，非失败）。明细见 HANDOFF §15 |
-| **M3.1** | **完成（2026-09-21）**——加固：外层信封 8s（provisional）+ HelloTimeout 语义修正 + 停机报告（未完成计数）+ B15/16/18/19/20 测试补强 + 验收器同步；`2dee00c`；**601 tests PASS**（Debug+Release 0 警告）；变异验证全精确命中。明细 HANDOFF §18.4 A |
+| **M3** | 完成，2026-09-21两机24步/574绿，证据配对与机械INVALID_RUN见HANDOFF§15。 |
+| **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
-| **M5** | 进行中：`99dfd76` GDI/JPEG，各3324 PASS；有界生产/Host装配/显示/十分钟DoD未完，§19.18。 |
+| **M5** | 进行中：50d54af有界FramePipeline，各3428 PASS；Host/App/实屏/十分钟DoD未完，§19.19。 |
 | M6~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。
-远端 `origin` = https://github.com/Nuyoah-sir/LanRemote.git（**public**，用户手动建库）——2026-09-21 起全部推送成功（远端 `main` = 本地）。`gh` 未装也不需要（`gh auth login` 挂账解除）。**两个坑**：① 链路间歇性抖动（push 挂到超时 / schannel 失败）→ 重试即过；② **helper-selector 陷阱**（源码级定论）：`git-credential-helper-selector` 每次被调必弹 GUI（无静默委托、无桌面即挂起、`--help` 也弹并写配置），「`<no helper>`+Always」= 把 `credential.helper` 写成空串（清链）。**已全局修复（2026-09-21）**：`selected = manager` + 链「空值+`manager`」（repo 级同配双保险）；机器级 fill rc=0、trace 只见 GCM；**勿裸跑 selector**。此后每轮收尾 `git push origin main`。
+远端origin为public，地址/推送历史见HANDOFF§1；不将旧“远端=本地”外推当前。gh未装也无需。push曾遇超时/schannel；helper-selector每次弹GUI且可能清空helper，勿裸跑（含--help）。2026-09-21全局+repo已修selected=manager及“空值+manager”链，fill rc0/trace仅GCM。提交/推送服从当轮授权。
 
 ## 实测事实（别再猜）
 
