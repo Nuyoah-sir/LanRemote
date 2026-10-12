@@ -8,6 +8,7 @@ public sealed partial class AuthenticatedControlSession
     // 单个已接受 attempt 的投影追踪槽，不是重复调用的幂等缓存。
     private Task<AuthenticatedVideoSession>? _publicAttachTask;
     private Task? _publicDisposeTask;
+    private Task<ClientDisposalEvidence>? _disposalEvidenceTask;
 
     /// <summary>
     /// 使用控制会话冻结的目标和身份附着独立视频 TLS，同时启用唯一 Control 断连读取。
@@ -95,6 +96,37 @@ public sealed partial class AuthenticatedControlSession
         }
     }
 
+    /// <summary>等待同一原 DisposeAsync 报告任务，再只读取原操作及独占资源的释放结果。</summary>
+    public Task<ClientDisposalEvidence> GetDisposalEvidenceAsync()
+    {
+        Task original = DisposeAsync().AsTask();
+        lock (_gate)
+            return _disposalEvidenceTask ??= ObserveDisposalAsync(original, SnapshotDisposalEvidence);
+    }
+
+    private ClientDisposalEvidence SnapshotDisposalEvidence()
+    {
+        lock (_gate)
+        {
+            ClientDisposalEvidence? video = _videoLifetime?.SnapshotDisposalEvidence();
+            bool operationsFinished = _publicDisposeTask is { IsCompleted: true }
+                && _closeAndJoin is { IsCompleted: true }
+                && (_publicAttachTask is null || _publicAttachTask.IsCompleted)
+                && (_controlMonitor is null || _controlMonitor.Worker is { IsCompleted: true })
+                && (video?.OriginalOperationsFinished ?? true);
+            return new ClientDisposalEvidence(operationsFinished, operationsFinished
+                && _ownedConnection.AllOwnedRootsReleased && (video?.AllOwnedRootsReleased ?? true));
+        }
+    }
+
+    private static async Task<ClientDisposalEvidence> ObserveDisposalAsync(
+        Task original, Func<ClientDisposalEvidence> snapshot)
+    {
+        // 仅证据观察者不传播旧报告异常；旧 Task 和全部原始错误树保持原样供任意观察者重读。
+        await original.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        return snapshot();
+    }
+
     private static async Task ReportDisposalAsync(Task complete, Func<IReadOnlyList<Exception>> getErrors)
     {
         Exception? observed = null;
@@ -116,7 +148,15 @@ public sealed partial class AuthenticatedControlSession
     internal sealed partial class ClientVideoLifetime
     {
         private Task? _publicDisposeTask;
+        private Task<ClientDisposalEvidence>? _publicDisposalEvidenceTask;
         internal AuthenticatedVideoSession PublicSession { get; }
+
+        internal Task<ClientDisposalEvidence> GetPublicDisposalEvidenceTask()
+        {
+            Task original = GetPublicDisposeTask();
+            lock (Gate)
+                return _publicDisposalEvidenceTask ??= ObserveDisposalAsync(original, SnapshotDisposalEvidence);
+        }
 
         internal Task GetPublicDisposeTask()
         {
@@ -127,4 +167,17 @@ public sealed partial class AuthenticatedControlSession
             }
         }
     }
+}
+
+/// <summary>原释放任务退出后的只读证明；只证明本层所有原 worker 退出且独占根 Dispose 正常返回，不证明远端或内核状态。</summary>
+public sealed class ClientDisposalEvidence
+{
+    internal ClientDisposalEvidence(bool originalOperationsFinished, bool allOwnedRootsReleased)
+    {
+        OriginalOperationsFinished = originalOperationsFinished;
+        AllOwnedRootsReleased = allOwnedRootsReleased;
+    }
+
+    public bool OriginalOperationsFinished { get; }
+    public bool AllOwnedRootsReleased { get; }
 }

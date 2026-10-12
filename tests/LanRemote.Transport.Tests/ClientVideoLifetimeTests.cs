@@ -694,6 +694,32 @@ public sealed class ClientVideoLifetimeTests
         finally { await f.FinishAsync(); }
     }
 
+    [Fact(Timeout = TestTimeout)]
+    public async Task JoinSchedulerSynchronousReentry_UsesOneOriginalJoinAndDisposesStopSourceOnce()
+    {
+        Fixture f = new();
+        ReenterOnceJoinScheduler scheduler = new();
+        CountingDisposeSource source = new();
+        try
+        {
+            Child child = await f.Start(joinScheduler: scheduler, stopSource: source).WaitAsync(Guard);
+            scheduler.OnFirstQueue = child.StopAndJoinAsync;
+            Task join = f.Keep(child.StopAndJoinAsync());
+            Task reentered = f.Keep(Assert.IsAssignableFrom<Task>(scheduler.ReenteredJoin));
+            // QueueTask 的同步重入已完成；不依赖线程池时序或 Guard 获胜来证明原旧实现的双 join。
+            Assert.Same(join, reentered);
+            Assert.Same(join, child.StopAndJoinAsync());
+            Assert.Equal(1, scheduler.QueuedCount);
+            Assert.True(scheduler.RunQueued());
+            await join.WaitAsync(Guard);
+            Assert.Equal(1, source.DisposeCalls);
+            Assert.True((await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard)).AllOwnedRootsReleased);
+            f.Video.AssertClosedOnce();
+            f.AssertControlLive();
+        }
+        finally { await f.FinishAsync(); }
+    }
+
     [Theory(Timeout = TestTimeout)]
     [InlineData("connect")]
     [InlineData("initialize")]
@@ -1202,6 +1228,455 @@ public sealed class ClientVideoLifetimeTests
         async Task InitializeAsync() => await initializeReturn.WaitAsync();
     }
 
+    [Theory(Timeout = TestTimeout)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisposalEvidence_OriginalReadAndControlMonitorFault_StillProvesEveryReleasedRoot(bool readThrows)
+    {
+        Fixture f = new();
+        Pause videoRead = f.NewPause();
+        Pause controlRead = f.NewPause();
+        IOException readFailure = new("视频原读取的业务 IO 错误。");
+        IOException monitorFailure = new("Control 原监控读取的 IO 错误。");
+        f.Video.Ssl.GateReadAt = 0;
+        if (readThrows) f.Video.Ssl.ReadAtGate = () => f.Keep(FailReadAsync(videoRead, readFailure));
+        else f.Video.Ssl.ReadPause = videoRead;
+        f.Control.Ssl.GateReadAt = 0;
+        f.Control.Ssl.ReadAtGate = () => f.Keep(FailReadAsync(controlRead, monitorFailure));
+        try
+        {
+            Child child = await f.Start().WaitAsync(Guard);
+            Task monitor = StartControlMonitor(f);
+            Task<EncodedFrame?> read = f.Read(child);
+            await Task.WhenAll(videoRead.Reached.Task, controlRead.Reached.Task).WaitAsync(Guard);
+            Task<int> originalVideo = Assert.Single(f.Video.Ssl.OriginalReads);
+            Task<int> originalControl = Assert.Single(f.Control.Ssl.OriginalReads);
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task<ClientDisposalEvidence> parentEvidence = f.Keep(f.Parent.GetDisposalEvidenceAsync());
+            Task<ClientDisposalEvidence> childEvidence = f.Keep(child.PublicSession.GetDisposalEvidenceAsync());
+            Assert.Same(parentDispose, f.Parent.DisposeAsync().AsTask());
+            Assert.Same(childDispose, child.PublicSession.DisposeAsync().AsTask());
+            Assert.Same(parentEvidence, f.Parent.GetDisposalEvidenceAsync());
+            Assert.Same(childEvidence, child.PublicSession.GetDisposalEvidenceAsync());
+            await Task.WhenAll(f.Control.RequestedClose, f.Video.RequestedClose).WaitAsync(Guard);
+            Assert.False(originalVideo.IsCompleted);
+            Assert.False(originalControl.IsCompleted);
+            Assert.False(parentEvidence.IsCompleted);
+            Assert.False(childEvidence.IsCompleted);
+            videoRead.Open();
+            Exception videoError = await ErrorAsync(read);
+            if (readThrows) Assert.Same(readFailure, videoError);
+            else Assert.Equal(f.StopToken,
+                Assert.IsAssignableFrom<OperationCanceledException>(videoError).CancellationToken);
+            ClientDisposalEvidence childProof = await childEvidence.WaitAsync(Guard);
+            Assert.True(childProof.OriginalOperationsFinished);
+            Assert.True(childProof.AllOwnedRootsReleased);
+            Assert.False(parentEvidence.IsCompleted);
+            controlRead.Open();
+            Assert.Same(monitorFailure, await ErrorAsync(originalControl));
+            await monitor.WaitAsync(Guard);
+            Assert.Same(monitorFailure, f.Parent.ControlMonitorState!.Error);
+            ClientDisposalEvidence parentProof = await parentEvidence.WaitAsync(Guard);
+            Assert.True(parentProof.OriginalOperationsFinished);
+            Assert.True(parentProof.AllOwnedRootsReleased);
+            AggregateException parentReport = Assert.IsType<AggregateException>(await ErrorAsync(parentDispose));
+            AggregateException childReport = Assert.IsType<AggregateException>(await ErrorAsync(childDispose));
+            AssertTreeContains(parentReport.InnerExceptions, videoError);
+            AssertTreeContains(parentReport.InnerExceptions, monitorFailure);
+            AssertTreeContains(childReport.InnerExceptions, videoError);
+            Assert.Same(parentReport, await ErrorAsync(f.Parent.DisposeAsync().AsTask()));
+            Assert.Same(childReport, await ErrorAsync(child.PublicSession.DisposeAsync().AsTask()));
+            Assert.Same(parentProof, await f.Parent.GetDisposalEvidenceAsync());
+            Assert.Same(childProof, await child.PublicSession.GetDisposalEvidenceAsync());
+            Assert.True(typeof(ClientDisposalEvidence).IsSealed);
+            Assert.Empty(typeof(ClientDisposalEvidence).GetConstructors());
+            Assert.Null(typeof(ClientDisposalEvidence).GetProperty(nameof(ClientDisposalEvidence.AllOwnedRootsReleased))!.SetMethod);
+            f.Control.AssertClosedOnce();
+            f.Video.AssertClosedOnce();
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_NestedReadTree_RemainsIdenticalAcrossOldDisposeObservers()
+    {
+        Fixture f = new();
+        Pause readReturn = f.NewPause();
+        IOException first = new("原读取嵌套叶子。");
+        InvalidOperationException wrapper = new("原读取嵌套包装。", first);
+        IOException second = new("原读取独立叶子。");
+        AggregateException originalTree = new("原读取自有树。", wrapper, second);
+        f.Video.Ssl.GateReadAt = 0;
+        f.Video.Ssl.ReadAtGate = () => f.Keep(FailReadAsync(readReturn, originalTree));
+        try
+        {
+            Child child = await f.Start().WaitAsync(Guard);
+            Task<EncodedFrame?> read = f.Read(child);
+            await readReturn.Reached.Task.WaitAsync(Guard);
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task<ClientDisposalEvidence> proof = f.Parent.GetDisposalEvidenceAsync();
+            Assert.False(proof.IsCompleted);
+            readReturn.Open();
+            Assert.Same(originalTree, await ErrorAsync(read));
+            Assert.True((await proof.WaitAsync(Guard)).AllOwnedRootsReleased);
+            Assert.True((await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard)).AllOwnedRootsReleased);
+            AggregateException parent = Assert.IsType<AggregateException>(await ErrorAsync(parentDispose));
+            AggregateException video = Assert.IsType<AggregateException>(await ErrorAsync(childDispose));
+            AssertTreeContains(parent.InnerExceptions, originalTree);
+            AssertTreeContains(video.InnerExceptions, originalTree);
+            Assert.Same(wrapper, originalTree.InnerExceptions[0]);
+            Assert.Same(first, wrapper.InnerException);
+            Assert.Same(second, originalTree.InnerExceptions[1]);
+            Assert.Same(parent, await ErrorAsync(f.Parent.DisposeAsync().AsTask()));
+            Assert.Same(video, await ErrorAsync(child.PublicSession.DisposeAsync().AsTask()));
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_ConnectFailsBeforeVideoAcquisition_ProvesOnlyActuallyOwnedRoots()
+    {
+        Fixture f = new();
+        IOException connectFailure = new("未取得 Video 连接的业务故障。");
+        try
+        {
+            Assert.Same(connectFailure, await ErrorAsync(f.Start(connect: _ => throw connectFailure)));
+            Child child = Assert.IsType<Child>(f.RegisteredChild);
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.True(video.AllOwnedRootsReleased);
+            Assert.True(parent.AllOwnedRootsReleased);
+            Assert.False(f.Video.Connection.IsCloseRequested);
+            Assert.Equal(0, f.Video.Client.DisposeCalls);
+            Assert.Equal(0, f.Video.Ssl.DisposeCalls);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, connectFailure);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, connectFailure);
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Theory(Timeout = TestTimeout)]
+    [InlineData("control-tcp")]
+    [InlineData("control-ssl")]
+    [InlineData("video-tcp")]
+    [InlineData("video-ssl")]
+    public async Task DisposalEvidence_FailedTcpOrSslRoot_IsNotProvedBySuccessfulCloseTask(string root)
+    {
+        Fixture f = new();
+        IOException failure = new($"{root} 释放失败。");
+        Endpoint endpoint = root.StartsWith("control", StringComparison.Ordinal) ? f.Control : f.Video;
+        if (root.EndsWith("tcp", StringComparison.Ordinal)) endpoint.Client.DisposeFailure = failure;
+        else endpoint.Ssl.DisposeFailure = failure;
+        try
+        {
+            Child child = await f.Start().WaitAsync(Guard);
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.False(parent.AllOwnedRootsReleased);
+            Assert.Equal(root.StartsWith("control", StringComparison.Ordinal), video.AllOwnedRootsReleased);
+            Assert.Same(failure, Assert.Single(endpoint.Connection.CleanupErrors));
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, failure);
+            if (endpoint == f.Video)
+                AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, failure);
+            else await childDispose.WaitAsync(Guard);
+            Assert.True(endpoint.Connection.CloseAsync().IsCompletedSuccessfully);
+            f.Control.AssertClosedOnce();
+            f.Video.AssertClosedOnce();
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_UncommittedOwnerCleanupFailure_DoesNotBecomeBusinessOnly()
+    {
+        Fixture f = new();
+        IOException cleanup = new("未交付帧 owner 释放失败。");
+        RecordingVideoOwner owner = new(5) { DisposeFailure = cleanup };
+        try
+        {
+            Child child = null!;
+            child = await f.Start(rent: _ => owner, frameRead: _ => child.RequestStop()).WaitAsync(Guard);
+            Exception read = await ErrorAsync(f.Read(child));
+            Assert.IsType<ObjectDisposedException>(read);
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence childProof = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parentProof = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(childProof.OriginalOperationsFinished);
+            Assert.True(parentProof.OriginalOperationsFinished);
+            Assert.False(childProof.AllOwnedRootsReleased);
+            Assert.False(parentProof.AllOwnedRootsReleased);
+            Assert.Equal(1, owner.DisposeCalls);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, cleanup);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, cleanup);
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_ReaderDisposeFailure_StaysSeparateFromTlsCloseSuccess()
+    {
+        Fixture f = new();
+        IOException cleanup = new("reader 独占流释放失败。");
+        try
+        {
+            Child child = await f.Start().WaitAsync(Guard);
+            typeof(Child).GetField("_reader", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .SetValue(child, new VideoFrameReader(new FailingDisposeStream(cleanup)));
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.False(video.AllOwnedRootsReleased);
+            Assert.False(parent.AllOwnedRootsReleased);
+            Assert.True(f.Video.Connection.CloseAsync().IsCompletedSuccessfully);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, cleanup);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, cleanup);
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_ReaderInternalOwnerCleanupFailure_IsNotLost()
+    {
+        Fixture f = new();
+        Pause payloadRead = f.NewPause();
+        IOException readFailure = new("payload 原读取故障。");
+        IOException cleanup = new("reader 内部尚未交付 owner 释放失败。");
+        RecordingVideoOwner owner = new(5) { DisposeFailure = cleanup };
+        f.Video.Ssl.GateReadAt = VideoFrameHeader.Size;
+        f.Video.Ssl.ReadAtGate = () => f.Keep(FailReadAsync(payloadRead, readFailure));
+        try
+        {
+            Child child = await f.Start(rent: _ => owner).WaitAsync(Guard);
+            Task<EncodedFrame?> read = f.Read(child);
+            await payloadRead.Reached.Task.WaitAsync(Guard);
+            payloadRead.Open();
+            Assert.Same(readFailure, await ErrorAsync(read));
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.False(video.AllOwnedRootsReleased);
+            Assert.False(parent.AllOwnedRootsReleased);
+            Assert.Equal(1, owner.DisposeCalls);
+            VideoFrameReader reader = Field<VideoFrameReader>(child, "_reader");
+            Assert.Same(cleanup, Assert.Single(reader.CleanupErrors));
+            Assert.Null(Field<Exception?>(Field<object>(child, "_read"), "CleanupError"));
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, cleanup);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, cleanup);
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_TimerDisposeFailure_AfterFailedAttach_IsNotNotAcquired()
+    {
+        Fixture f = new();
+        IOException cleanup = new("已取得的 timer 释放失败。");
+        f.Clock.TimerDisposeFailure = cleanup;
+        try
+        {
+            AssertTreeContains([await ErrorAsync(f.Start())], cleanup);
+            Child child = Assert.IsType<Child>(f.RegisteredChild);
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.False(video.AllOwnedRootsReleased);
+            Assert.False(parent.AllOwnedRootsReleased);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, cleanup);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, cleanup);
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_CtsDisposeFailure_AfterAllWorkersExit_RemainsUnproved()
+    {
+        Fixture f = new();
+        IOException cleanup = new("child CTS Dispose 失败。");
+        ThrowingDisposeSource source = new(cleanup);
+        try
+        {
+            Child child = await f.Start(stopSource: source).WaitAsync(Guard);
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.False(video.AllOwnedRootsReleased);
+            Assert.False(parent.AllOwnedRootsReleased);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, cleanup);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, cleanup);
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_StopCancellationCallbackFailure_IsNotReleasedRoot()
+    {
+        Fixture f = new();
+        IOException cleanup = new("stopSource.Cancel 回调失败。");
+        try
+        {
+            Child child = await f.Start().WaitAsync(Guard);
+            f.Own(f.StopToken.Register(() => throw cleanup));
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.False(video.AllOwnedRootsReleased);
+            Assert.False(parent.AllOwnedRootsReleased);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(childDispose)).InnerExceptions, cleanup);
+            AssertTreeContains(Assert.IsType<AggregateException>(await ErrorAsync(parentDispose)).InnerExceptions, cleanup);
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    [Fact(Timeout = TestTimeout)]
+    public async Task DisposalEvidence_CallerRegistrationCallbackFault_IsNotIgnored()
+    {
+        Fixture f = new();
+        Pause readReturn = f.NewPause();
+        f.Video.Ssl.GateReadAt = 0;
+        f.Video.Ssl.ReadPause = readReturn;
+        using CancellationTokenSource caller = new();
+        RejectFirstJoinScheduler scheduler = new();
+        try
+        {
+            Child child = await f.Start(joinScheduler: scheduler).WaitAsync(Guard);
+            Task<EncodedFrame?> read = f.Read(child, caller.Token);
+            await readReturn.Reached.Task.WaitAsync(Guard);
+            caller.Cancel();
+            readReturn.Open();
+            _ = await ErrorAsync(read);
+            Task childDispose = f.Keep(child.PublicSession.DisposeAsync().AsTask());
+            Task parentDispose = f.Keep(f.Parent.DisposeAsync().AsTask());
+            ClientDisposalEvidence video = await child.PublicSession.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            ClientDisposalEvidence parent = await f.Parent.GetDisposalEvidenceAsync().WaitAsync(Guard);
+            Assert.True(video.OriginalOperationsFinished);
+            Assert.True(parent.OriginalOperationsFinished);
+            Assert.False(video.AllOwnedRootsReleased);
+            Assert.False(parent.AllOwnedRootsReleased);
+            Assert.Contains(child.LifetimeErrors, error => error is TaskSchedulerException);
+            Assert.IsType<AggregateException>(await ErrorAsync(childDispose));
+            Assert.IsType<AggregateException>(await ErrorAsync(parentDispose));
+        }
+        finally { await f.FinishAsync(); }
+    }
+
+    private sealed class FailingDisposeStream(Exception failure) : MemoryStream
+    {
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing) throw failure;
+        }
+    }
+
+    private sealed class ThrowingDisposeSource(Exception failure) : CancellationTokenSource
+    {
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing) throw failure;
+        }
+    }
+
+    private sealed class CountingDisposeSource : CancellationTokenSource
+    {
+        private int _disposeCalls;
+        internal int DisposeCalls => Volatile.Read(ref _disposeCalls);
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Interlocked.Increment(ref _disposeCalls);
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class ReenterOnceJoinScheduler : TaskScheduler
+    {
+        private readonly ConcurrentQueue<Task> _queued = new();
+        private int _entered;
+        internal Func<Task>? OnFirstQueue;
+        internal Task? ReenteredJoin { get; private set; }
+        internal int QueuedCount => _queued.Count;
+        protected override IEnumerable<Task> GetScheduledTasks() => _queued.ToArray();
+        protected override void QueueTask(Task task)
+        {
+            if (Interlocked.Exchange(ref _entered, 1) == 0)
+                ReenteredJoin = OnFirstQueue!();
+            _queued.Enqueue(task);
+        }
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+        internal bool RunQueued()
+        {
+            bool ran = false;
+            while (_queued.TryDequeue(out Task? task))
+            {
+                Assert.True(TryExecuteTask(task));
+                ran = true;
+            }
+            return ran;
+        }
+    }
+
+    private sealed class RejectFirstJoinScheduler : TaskScheduler
+    {
+        private int _rejected;
+        protected override IEnumerable<Task> GetScheduledTasks() => [];
+        protected override void QueueTask(Task task)
+        {
+            if (Interlocked.Exchange(ref _rejected, 1) == 0)
+                throw new TaskSchedulerException("caller registration 回调首次 join 调度失败。");
+            ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
+        }
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+    }
+
+    private static async Task<int> FailReadAsync(Pause pause, Exception error)
+    {
+        await pause.WaitAsync();
+        throw error;
+    }
+
+    private static Task StartControlMonitor(Fixture f)
+    {
+        // 测试仅登记生产原 monitor，不用假任务代替控制原读取。
+        Type type = typeof(AuthenticatedControlSession).GetNestedType("ControlDisconnectMonitor", BindingFlags.NonPublic)!;
+        lock (f.ParentGate)
+        {
+            object monitor = Activator.CreateInstance(type,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                null, [f.Parent], null)!;
+            typeof(AuthenticatedControlSession).GetField("_controlMonitor", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .SetValue(f.Parent, monitor);
+            type.GetMethod("StartUnderGate", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(monitor, null);
+            return (Task)type.GetProperty("Worker", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(monitor)!;
+        }
+    }
+
     private static async Task<Exception> ErrorAsync(Task original)
     {
         using CancellationTokenSource guard = new();
@@ -1321,6 +1796,7 @@ public sealed class ClientVideoLifetimeTests
         private int _timestampReads;
         private int _frequencyReads;
         internal long Timestamp;
+        internal Exception? TimerDisposeFailure;
         internal int TimestampReads => Volatile.Read(ref _timestampReads);
         internal int FrequencyReads => Volatile.Read(ref _frequencyReads);
 
@@ -1356,10 +1832,10 @@ public sealed class ClientVideoLifetimeTests
 
         public override DateTimeOffset GetUtcNow() => throw new InvalidOperationException("不得读取墙钟。");
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
-            new ManualTimer();
+            new ManualTimer(TimerDisposeFailure);
 
         // 只接受手动调度/释放，不推进时间，也不自动执行 timer 回调。
-        private sealed class ManualTimer : ITimer
+        private sealed class ManualTimer(Exception? disposeFailure) : ITimer
         {
             private int _disposed;
 
@@ -1370,6 +1846,7 @@ public sealed class ClientVideoLifetimeTests
             public ValueTask DisposeAsync()
             {
                 Dispose();
+                if (disposeFailure is not null) throw disposeFailure;
                 return ValueTask.CompletedTask;
             }
         }
@@ -1381,6 +1858,7 @@ public sealed class ClientVideoLifetimeTests
     {
         private readonly ConcurrentBag<Task> _tasks = [];
         private readonly ConcurrentBag<ManualJoinScheduler> _joinSchedulers = [];
+        private readonly ConcurrentBag<ReenterOnceJoinScheduler> _reenterJoinSchedulers = [];
         private readonly List<Pause> _pauses = [];
         private readonly List<CancellationTokenRegistration> _registrations = [];
         private int _connectCalls;
@@ -1428,9 +1906,11 @@ public sealed class ClientVideoLifetimeTests
             CancellationToken token = default,
             Func<int, IMemoryOwner<byte>>? rent = null,
             Action<EncodedFrame?>? frameRead = null,
-            TaskScheduler? joinScheduler = null)
+            TaskScheduler? joinScheduler = null,
+            CancellationTokenSource? stopSource = null)
         {
             if (joinScheduler is ManualJoinScheduler manual) _joinSchedulers.Add(manual);
+            if (joinScheduler is ReenterOnceJoinScheduler reenter) _reenterJoinSchedulers.Add(reenter);
             return Keep(Parent.StartVideoLifetimeAsync(
                 cancellation =>
                 {
@@ -1447,7 +1927,7 @@ public sealed class ClientVideoLifetimeTests
                     Task original = Keep(initialize is null ? Task.CompletedTask : initialize(connection, cancellation));
                     Initializing.TrySetResult();
                     return original;
-                }, token, rent, frameRead, joinScheduler));
+                }, token, rent, frameRead, joinScheduler, stopSource));
         }
 
         internal Task<EncodedFrame?> Read(Child child, CancellationToken token = default) => Keep(child.ReadFrameAsync(token));
@@ -1472,6 +1952,7 @@ public sealed class ClientVideoLifetimeTests
                 Task join = Parent.CloseAndJoinAsync();
                 Task childJoin = RegisteredChild?.StopAndJoinAsync() ?? Task.CompletedTask;
                 foreach (ManualJoinScheduler scheduler in _joinSchedulers) scheduler.RunQueued();
+                foreach (ReenterOnceJoinScheduler scheduler in _reenterJoinSchedulers) scheduler.RunQueued();
                 await ObserveAsync(Task.WhenAll(_tasks.Append(join).Append(childJoin)));
                 // worker 结束后才取第二份快照，覆盖在同步前缀放行后才发布的原工厂 Task。
                 await ObserveAsync(Task.WhenAll(_tasks));
@@ -1547,11 +2028,19 @@ public sealed class ClientVideoLifetimeTests
     private sealed class ProbeTcpClient : TcpClient
     {
         private int _disposeCalls;
+        internal Exception? DisposeFailure;
         internal int DisposeCalls => Volatile.Read(ref _disposeCalls);
         protected override void Dispose(bool disposing)
         {
-            if (disposing) Interlocked.Increment(ref _disposeCalls);
-            base.Dispose(disposing);
+            try
+            {
+                if (disposing)
+                {
+                    Interlocked.Increment(ref _disposeCalls);
+                    if (DisposeFailure is not null) throw DisposeFailure;
+                }
+            }
+            finally { base.Dispose(disposing); }
         }
         internal void ReleaseResources() => base.Dispose(true);
     }

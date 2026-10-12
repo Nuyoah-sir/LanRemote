@@ -48,6 +48,7 @@ public sealed class TransportHost : IAsyncDisposable
     private readonly List<TcpListener> _listeners = new();
     private readonly List<Task> _acceptLoops = new();
     private readonly CancellationTokenSource _stop = new();
+    private readonly object _acceptGate = new();
     private readonly object _lifetimeGate = new();
     private readonly HashSet<Task<TransportHostStopReport>> _pendingStops = new();
 
@@ -266,7 +267,8 @@ public sealed class TransportHost : IAsyncDisposable
         {
             try
             {
-                listener.Stop();
+                // 与首次调用 AcceptTcpClientAsync 共用短锁，不把同步取消回调或 await 放进锁内。
+                lock (_acceptGate) listener.Stop();
             }
             catch (SocketException)
             {
@@ -533,6 +535,19 @@ public sealed class TransportHost : IAsyncDisposable
                 "Host 根取消源未释放：原取消、accept 或旧 Stop 尚未完整结束。"));
         }
 
+        // 完整 join 后再纳入每连接清理故障；业务 Handler/Connection 仅用于诊断。
+        foreach (HostLifecycleError entry in LifecycleErrors.Snapshot)
+        {
+            if (entry.Kind is HostLifecycleErrorKind.SocketCleanup
+                or HostLifecycleErrorKind.StreamCleanup
+                or HostLifecycleErrorKind.CloseCleanup
+                or HostLifecycleErrorKind.AdmissionCleanup
+                or HostLifecycleErrorKind.RegistrationCleanup)
+            {
+                errors.Add(entry.Error);
+            }
+        }
+
         if (errors.Count != 0)
         {
             throw new AggregateException("TransportHost 停机清理失败。", errors);
@@ -546,7 +561,15 @@ public sealed class TransportHost : IAsyncDisposable
             TcpClient client;
             try
             {
-                client = await listener.AcceptTcpClientAsync(_stop.Token).ConfigureAwait(false);
+                ValueTask<TcpClient> pending;
+                lock (_acceptGate)
+                {
+                    if (_stopping || _stop.IsCancellationRequested) break;
+                    // Stop 与首次 accept 的短锁消除「已 Stop 但 token 还未取消」的竞速。
+                    // 之后只 await 原任务；pending accept 被 Stop 打断仍由 SocketException 路径处理。
+                    pending = listener.AcceptTcpClientAsync(_stop.Token);
+                }
+                client = await pending.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -556,9 +579,10 @@ public sealed class TransportHost : IAsyncDisposable
             {
                 break;
             }
-            catch (SocketException)
+            catch (SocketException error) when (_stopping &&
+                error.SocketErrorCode is SocketError.OperationAborted or SocketError.Interrupted or SocketError.NotSocket)
             {
-                // listener.Stop() 会打断 pending accept，这是停机的正常路径。
+                // Stop() 或根取消打断pending accept。只吞这三类关闭码；其它套接字故障继续上报。
                 break;
             }
 

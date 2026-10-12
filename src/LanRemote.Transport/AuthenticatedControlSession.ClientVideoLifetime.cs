@@ -26,7 +26,7 @@ public sealed partial class AuthenticatedControlSession
     /// <summary>
     /// 内部生命周期底座，不是公开视频认证入口。connect 返回前拥有其资源；返回后本层独占。
     /// initialize 借用连接，必须等待自身所有 I/O 完成；真实接线仍须校验第二 TLS pin、proof 和严格 ACK。
-    /// 登记即永久消费本地单次尝试；失败不恢复，但不关闭 Control。rent/frameRead 仅为实例级测试接缝。
+    /// 登记即永久消费本地单次尝试；失败不恢复，但不关闭 Control。rent/frameRead/stopSource 仅为实例级测试接缝。
     /// </summary>
     internal Task<ClientVideoLifetime> StartVideoLifetimeAsync(
         Func<CancellationToken, Task<TlsConnection>> connectOwned,
@@ -34,7 +34,8 @@ public sealed partial class AuthenticatedControlSession
         CancellationToken cancellationToken = default,
         Func<int, IMemoryOwner<byte>>? rent = null,
         Action<EncodedFrame?>? frameRead = null,
-        TaskScheduler? joinScheduler = null)
+        TaskScheduler? joinScheduler = null,
+        CancellationTokenSource? stopSource = null)
     {
         ArgumentNullException.ThrowIfNull(connectOwned);
         ArgumentNullException.ThrowIfNull(initializeBorrowed);
@@ -44,7 +45,7 @@ public sealed partial class AuthenticatedControlSession
             _ = GetRemainingAttachBudget(cancellationToken);
             // TimeProvider 可重入启动另一 attempt；取时后必须重新检查新增状态。
             CheckCanStartVideo(cancellationToken);
-            ClientVideoLifetime child = new(this, rent, frameRead, joinScheduler);
+            ClientVideoLifetime child = new(this, rent, frameRead, joinScheduler, stopSource);
             _videoLifetime = child;
             return child.StartUnderGate(connectOwned, initializeBorrowed, cancellationToken);
         }
@@ -115,7 +116,7 @@ public sealed partial class AuthenticatedControlSession
     internal sealed partial class ClientVideoLifetime
     {
         private readonly AuthenticatedControlSession _parent;
-        private readonly CancellationTokenSource _stopSource = new();
+        private readonly CancellationTokenSource _stopSource;
         private readonly Func<int, IMemoryOwner<byte>>? _rent;
         private readonly Action<EncodedFrame?>? _frameRead;
         private readonly TaskScheduler _joinScheduler;
@@ -131,12 +132,18 @@ public sealed partial class AuthenticatedControlSession
         private Task? _readerDispose;
         private Exception? _cancelError;
         private Exception? _readerDisposeError;
+        private Exception? _joinSchedulingError;
+        private bool _cancelSucceeded;
+        private bool _readerDisposeSucceeded;
+        private bool _stopSourceDisposeSucceeded;
         private object Gate => _parent._gate;
 
         internal ClientVideoLifetime(AuthenticatedControlSession parent,
-            Func<int, IMemoryOwner<byte>>? rent, Action<EncodedFrame?>? frameRead, TaskScheduler? joinScheduler)
+            Func<int, IMemoryOwner<byte>>? rent, Action<EncodedFrame?>? frameRead,
+            TaskScheduler? joinScheduler, CancellationTokenSource? stopSource)
         {
             _parent = parent;
+            _stopSource = stopSource ?? new CancellationTokenSource();
             _rent = rent;
             _frameRead = frameRead;
             _joinScheduler = joinScheduler ?? TaskScheduler.Default;
@@ -277,7 +284,11 @@ public sealed partial class AuthenticatedControlSession
 
         private async Task DrainCallerAsync(CancellationTokenRegistration registration, Operation operation)
         {
-            try { await registration.DisposeAsync().ConfigureAwait(false); }
+            try
+            {
+                await registration.DisposeAsync().ConfigureAwait(false);
+                lock (Gate) operation.RegistrationDisposed = true;
+            }
             catch (Exception error)
             {
                 lock (Gate) operation.RegistrationError ??= error;
@@ -339,18 +350,50 @@ public sealed partial class AuthenticatedControlSession
                 if (_connection is not null) _videoClose ??= _connection.CloseAsync();
                 if (_reader is not null) _readerDispose ??= Task.Run(() =>
                 {
-                    try { _reader.Dispose(); }
+                    try
+                    {
+                        _reader.Dispose();
+                        lock (Gate) _readerDisposeSucceeded = true;
+                    }
                     catch (Exception error) { lock (Gate) _readerDisposeError = error; }
                 });
                 _cancel ??= Task.Run(() =>
                 {
-                    try { _stopSource.Cancel(); }
+                    try
+                    {
+                        _stopSource.Cancel();
+                        lock (Gate) _cancelSucceeded = true;
+                    }
                     catch (Exception error) { lock (Gate) _cancelError = error; }
                 });
-                // 默认仍在线程池执行；实例级测试调度器能确定性证明 read await，不靠瞬时采样。
-                _join ??= Task.Factory.StartNew(JoinCoreAsync, CancellationToken.None,
-                    TaskCreationOptions.DenyChildAttach, _joinScheduler).Unwrap();
+                if (_join is not null) return;
+                // 先发布稳定的原 join，随后才进入用户 TaskScheduler.QueueTask；同步重入只看见同一任务。
+                Task scheduled = new(static () => { }, CancellationToken.None, TaskCreationOptions.DenyChildAttach);
+                _join = JoinScheduledCoreAsync(scheduled);
+                try { scheduled.Start(_joinScheduler); }
+                catch (TaskSchedulerException error)
+                {
+                    // 失败的 scheduled Task 会唤醒协调者；它仍须排空全部原操作后再报告该错误。
+                    _joinSchedulingError = error;
+                }
             }
+        }
+
+        private async Task JoinScheduledCoreAsync(Task scheduled)
+        {
+            Exception? schedulingError = null;
+            try { await scheduled.ConfigureAwait(false); }
+            catch (Exception error) { schedulingError = OriginalError(scheduled, error); }
+
+            // 始终执行这一次完整 join，且不让结构任务等待自己；调度失败也不能跳过原资源。
+            Task cleanup = JoinCoreAsync();
+            Exception? cleanupError = null;
+            try { await cleanup.ConfigureAwait(false); }
+            catch (Exception error) { cleanupError = OriginalError(cleanup, error); }
+            if (schedulingError is not null && cleanupError is not null)
+                throw new AggregateException("视频 join 调度及收尾失败。", schedulingError, cleanupError);
+            if (schedulingError is not null) ExceptionDispatchInfo.Capture(schedulingError).Throw();
+            if (cleanupError is not null) ExceptionDispatchInfo.Capture(cleanupError).Throw();
         }
 
         private async Task JoinCoreAsync()
@@ -377,6 +420,7 @@ public sealed partial class AuthenticatedControlSession
             await cancel.ConfigureAwait(false);
             await _deadline.QuiesceAsync().ConfigureAwait(false);
             _stopSource.Dispose();
+            lock (Gate) _stopSourceDisposeSucceeded = true;
         }
 
         private static async Task JoinWorkerAsync(Task worker)
@@ -413,6 +457,38 @@ public sealed partial class AuthenticatedControlSession
                 : container.InnerExceptions.Count == 1 ? container.InnerExceptions[0] : container;
         }
 
+        internal ClientDisposalEvidence SnapshotDisposalEvidence()
+        {
+            lock (Gate)
+            {
+                bool operationsFinished = _join is { IsCompleted: true }
+                    && _attach.Worker is { IsCompleted: true }
+                    && (_read is null || _read.Worker is { IsCompleted: true })
+                    && (_connection is null || _videoClose is { IsCompleted: true })
+                    && (_reader is null || _readerDispose is { IsCompleted: true })
+                    && _cancel is { IsCompleted: true }
+                    && _deadline.OriginalOperationsFinished;
+                bool allRootsReleased = operationsFinished
+                    && _join is { IsCompletedSuccessfully: true }
+                    && _stopSourceDisposeSucceeded
+                    && _cancel is { IsCompletedSuccessfully: true }
+                    && _cancelSucceeded && _cancelError is null
+                    && _readerDisposeError is null
+                    && _deadline.AllOwnedRootsReleased
+                    && _attach.RegistrationDisposed
+                    && _attach.RegistrationError is null && _attach.CallbackError is null
+                    && _attach.CleanupError is null
+                    && (_read is null || (_read.RegistrationDisposed
+                        && _read.RegistrationError is null && _read.CallbackError is null
+                        && _read.CleanupError is null))
+                    && (_connection is null || _connection.AllOwnedRootsReleased)
+                    && (_reader is null || (_readerDispose is { IsCompletedSuccessfully: true }
+                        && _readerDisposeSucceeded && _reader.StreamDisposeSucceeded
+                        && _reader.CleanupErrors.Count == 0));
+                return new ClientDisposalEvidence(operationsFinished, allRootsReleased);
+            }
+        }
+
         internal IReadOnlyList<Exception> LifetimeErrors
         {
             get
@@ -423,7 +499,7 @@ public sealed partial class AuthenticatedControlSession
                     Exception?[] operations = [_deadlineFailure, _deadline.CleanupError,
                         _attach.Error, _attach.RegistrationError, _attach.CallbackError,
                         _read?.Error, _read?.CleanupError, _read?.RegistrationError, _read?.CallbackError,
-                        _cancelError, _readerDisposeError];
+                        _cancelError, _readerDisposeError, _joinSchedulingError];
                     AddErrors(errors, operations.OfType<Exception>());
                     if (_reader is not null) AddErrors(errors, _reader.CleanupErrors);
                     if (_connection is not null) AddErrors(errors, _connection.CleanupErrors);
@@ -436,6 +512,7 @@ public sealed partial class AuthenticatedControlSession
         {
             internal Task? Worker;
             internal bool Committed;
+            internal bool RegistrationDisposed;
             internal Exception? Error;
             internal Exception? CleanupError;
             internal Exception? RegistrationError;

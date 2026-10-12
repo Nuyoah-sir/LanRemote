@@ -9,14 +9,15 @@ public sealed class FramePipeline : IAsyncDisposable
 {
     private const int Started = 1;
     private const int StopRequested = 2;
-    private static readonly TimeSpan CaptureInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly VideoQualitySettings DefaultSettings = new(5, 0.5, 60, false);
 
     private readonly IScreenCaptureBackend _capture;
     private readonly IFrameEncoder _encoder;
     private readonly DisplayId _displayId;
     private readonly TimeProvider _timeProvider;
     private readonly Action? _afterCaptureLoopCreated;
-    private readonly VideoQualitySettings _settings = new(5, 0.5, 60, false);
+    private readonly VideoQualitySettings _settings;
+    private readonly TimeSpan _captureInterval;
     private readonly BoundedFrameQueue<CapturedFrame> _rawQueue;
     private readonly BoundedFrameQueue<EncodedFrame> _encodedQueue;
     private readonly CancellationTokenSource _stopSource = new();
@@ -38,8 +39,9 @@ public sealed class FramePipeline : IAsyncDisposable
         DisplayId displayId,
         int rawCapacity = 2,
         int encodedCapacity = 2,
-        TimeProvider? timeProvider = null)
-        : this(capture, encoder, displayId, rawCapacity, encodedCapacity, timeProvider, null)
+        TimeProvider? timeProvider = null,
+        VideoQualitySettings? settings = null)
+        : this(capture, encoder, displayId, rawCapacity, encodedCapacity, timeProvider, null, settings)
     {
     }
 
@@ -50,10 +52,13 @@ public sealed class FramePipeline : IAsyncDisposable
         int rawCapacity,
         int encodedCapacity,
         TimeProvider? timeProvider,
-        Action? afterCaptureLoopCreated)
+        Action? afterCaptureLoopCreated,
+        VideoQualitySettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(capture);
         ArgumentNullException.ThrowIfNull(encoder);
+        _settings = settings ?? DefaultSettings;
+        _captureInterval = ValidateSettings(_settings);
         _rawQueue = new BoundedFrameQueue<CapturedFrame>(rawCapacity);
         _encodedQueue = new BoundedFrameQueue<EncodedFrame>(encodedCapacity);
         _capture = capture;
@@ -63,6 +68,20 @@ public sealed class FramePipeline : IAsyncDisposable
         _afterCaptureLoopCreated = afterCaptureLoopCreated;
         _stopToken = _stopSource.Token;
         _completion = Task.Run(CoordinateStopAsync);
+    }
+
+    public static TimeSpan ValidateSettings(VideoQualitySettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!VideoQualitySettings.AllowedFps.Contains(settings.TargetFps) ||
+            !VideoQualitySettings.AllowedScales.Contains(settings.Scale) ||
+            settings.JpegQuality is < VideoQualitySettings.MinJpegQuality or > VideoQualitySettings.MaxJpegQuality ||
+            settings.Auto)
+        {
+            throw new ArgumentOutOfRangeException(nameof(settings),
+                "M5 手动画质仅支持5/10/15/20/30 FPS、50/67/75/100%缩放、JPEG 40..85，且禁止自动调节。");
+        }
+        return TimeSpan.FromSeconds(1d / settings.TargetFps);
     }
 
     /// <summary>稳定的完整收尾任务；任何非预期错误均以 AggregateException 保留完整错误树。</summary>
@@ -216,7 +235,7 @@ public sealed class FramePipeline : IAsyncDisposable
                 }
 
                 // 每轮以本次实际启动时间为基准，超预算不补帧、不追赶旧截止点。
-                TimeSpan remaining = CaptureInterval - _timeProvider.GetElapsedTime(startedAt);
+                TimeSpan remaining = _captureInterval - _timeProvider.GetElapsedTime(startedAt);
                 if (remaining > TimeSpan.Zero)
                 {
                     Task? delay = null;

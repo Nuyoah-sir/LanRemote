@@ -53,6 +53,113 @@ public sealed class FramePipelineVideoProducerFactoryTests
     }
 
     [Theory]
+    [InlineData(10)]
+    [InlineData(15)]
+    [InlineData(20)]
+    [InlineData(30)]
+    public async Task Explicit_preview_settings_reach_authenticated_video_producer_without_changing_factory_defaults(int fps)
+    {
+        var f = new Fixture();
+        VideoQualitySettings requested = new(fps, 0.75, 60, false);
+        try
+        {
+            IVideoFrameProducer producer = await f.Create(f.Factory(settings: requested));
+            producer.Start();
+            FrameCall<CapturedFrame> capture = f.Capture.Captures[0];
+            await Success(capture.Entered.Task);
+            capture.Reply();
+            FrameCall<EncodedFrame> encode = f.Encoder.Encodes[0];
+            await Success(encode.Entered.Task);
+            Assert.Equal(requested, f.Encoder.LastSettings);
+            encode.Reply();
+            using (EncodedFrame? actual = await Success(f.Read(producer))) Assert.NotNull(actual);
+            Task stopping = producer.StopAsync();
+            f.ReleaseFrames();
+            await Success(stopping);
+            f.AssertDisposed(1, 0);
+            f.AssertOwnersReleased();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData(5, 0.50, 40)]
+    [InlineData(10, 0.67, 85)]
+    [InlineData(15, 0.75, 41)]
+    [InlineData(20, 1.00, 75)]
+    [InlineData(30, 0.50, 60)]
+    public async Task Manual_scale_and_quality_are_frozen_and_reach_encoder(
+        int fps, double scale, int quality)
+    {
+        var f = new Fixture();
+        VideoQualitySettings requested = new(fps, scale, quality, false);
+        try
+        {
+            IVideoFrameProducer producer = await f.Create(f.Factory(settings: requested));
+            producer.Start();
+            FrameCall<CapturedFrame> capture = f.Capture.Captures[0];
+            await Success(capture.Entered.Task);
+            capture.Reply();
+            FrameCall<EncodedFrame> encode = f.Encoder.Encodes[0];
+            await Success(encode.Entered.Task);
+            Assert.Equal(requested, f.Encoder.LastSettings);
+            encode.Reply();
+            using (EncodedFrame? actual = await Success(f.Read(producer))) Assert.NotNull(actual);
+            Task stopping = producer.StopAsync();
+            f.ReleaseFrames();
+            await Success(stopping);
+            f.AssertDisposed(1, 0);
+            f.AssertOwnersReleased();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData(4096, 4097)]
+    [InlineData(8192, 8192)]
+    [InlineData(8193, 1)]
+    public async Task Primary_screen_exceeding_pixel_budget_fails_before_encoder_and_releases_capture(
+        int width, int height)
+    {
+        var f = new Fixture();
+        f.Capture.Displays = () => [new DisplayInfo(new DisplayId(73), "过大主屏", 0, 0, width, height, true)];
+        try
+        {
+            Task<IVideoFrameProducer> creation = await f.Begin(f.Factory(settings: new VideoQualitySettings(20, 1.0, 85, false))).Published();
+            Assert.IsType<ArgumentOutOfRangeException>(await Error(creation));
+            f.AssertCalls(1, 1, 0);
+            Assert.Equal(1, f.Capture.Cleanup.AsyncCalls);
+            Assert.Equal(0, f.Encoder.Cleanup.TotalCalls);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            f.AssertBorrowed();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData(0, 0.75, 60, false)]
+    [InlineData(10, 0.55, 60, false)]
+    [InlineData(10, 0.75, 90, false)]
+    [InlineData(10, 0.75, 60, true)]
+    [InlineData(30, 0.75, 39, false)]
+    [InlineData(30, 0.75, 60, true)]
+    [InlineData(20, 0.75, 86, false)]
+    [InlineData(5, 0.67, 40, true)]
+    public async Task Invalid_preview_settings_reject_before_creating_capture_or_encoder(
+        int fps, double scale, int quality, bool auto)
+    {
+        var f = new Fixture();
+        try
+        {
+            VideoQualitySettings bad = new(fps, scale, quality, auto);
+            Assert.Throws<ArgumentOutOfRangeException>(() => f.Factory(settings: bad));
+            f.AssertCalls(0, 0, 0);
+            f.AssertDisposed(0, 0);
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task Constructor_rejects_null_delegates_without_invoking_either(bool capture)
@@ -994,8 +1101,10 @@ public sealed class FramePipelineVideoProducerFactoryTests
             Resources.Add(dependency);
             return dependency;
         }
-        internal IVideoFrameProducerFactory Factory(int raw = 2, int encoded = 2) =>
-            new FramePipelineVideoProducerFactory(Target.CreateCapture, Target.CreateEncoder, raw, encoded, Clock);
+        internal IVideoFrameProducerFactory Factory(int raw = 2, int encoded = 2,
+            VideoQualitySettings? settings = null) =>
+            new FramePipelineVideoProducerFactory(Target.CreateCapture, Target.CreateEncoder, raw, encoded, Clock,
+                settings);
         internal Gate Stage(string stage) => stage switch
         {
             "capture" => Target.CaptureGate,
@@ -1196,6 +1305,7 @@ public sealed class FramePipelineVideoProducerFactoryTests
         internal FrameCall<EncodedFrame>[] Encodes { get; }
         internal DisplayId LastDisplay;
         internal CapturedFrame? LastInput;
+        internal VideoQualitySettings? LastSettings;
         internal int CaptureCount => Volatile.Read(ref _captures);
         internal int EncodeCount => Volatile.Read(ref _encodes);
         internal Dependency(Fixture fixture)
@@ -1219,6 +1329,7 @@ public sealed class FramePipelineVideoProducerFactoryTests
         public ValueTask<EncodedFrame> EncodeAsync(CapturedFrame frame, VideoQualitySettings settings, CancellationToken cancellationToken)
         {
             LastInput = frame;
+            LastSettings = settings;
             _ = frame.Pixels.Length;
             int index = Interlocked.Increment(ref _encodes) - 1;
             if (index >= Encodes.Length) throw new XunitException("有限 fake 不允许第三次编码。");

@@ -1,6 +1,12 @@
+using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Threading;
+using LanRemote.App.Services;
 using LanRemote.App.ViewModels;
+using LanRemote.Core.Models;
+using LanRemote.Transport;
+using Microsoft.Extensions.Logging;
 
 namespace LanRemote.App;
 
@@ -19,36 +25,105 @@ public partial class MainWindow : Window
     private const int ClipboardClearDelaySeconds = 30;
 
     private DispatcherTimer? _clipboardClearTimer;
+    private readonly ClientConnectService _client;
+    private readonly ILogger<MainWindow> _logger;
+    private readonly CancellationTokenSource _loadStop = new();
+    private Task? _loadTask;
+    private Task? _stopLoadingTask;
+    private bool _drainingBeforeClose;
+    private bool _allowClose;
 
     /// <summary>由 DI 注入的 ViewModel。</summary>
     public MainViewModel ViewModel { get; }
 
     /// <summary>构造主窗口。</summary>
     /// <param name="viewModel">主窗口 ViewModel。</param>
-    public MainWindow(MainViewModel viewModel)
+    public MainWindow(MainViewModel viewModel, ClientConnectService client, ILogger<MainWindow> logger)
     {
         ViewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        _client = client ?? throw new ArgumentNullException(nameof(client));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         DataContext = ViewModel;
         InitializeComponent();
     }
 
-    /// <summary>
-    /// 内容渲染完成后异步加载配置与本机身份。
-    /// </summary>
-    /// <remarks>
-    /// 这是事件 handler，因此允许 <c>async void</c>（06_DEV_STANDARDS.md 第 2 节）。
-    /// 内部异常必须被吞掉并提示，不能让 UI 线程炸掉。
-    /// 错误信息只显示异常 Message，不含任何秘密；完整堆栈进日志。
-    /// </remarks>
-    private async void MainWindow_OnContentRendered(object? sender, EventArgs e)
+    /// <summary>向关闭协调者交付仍在途的首次身份/发现加载原任务。</summary>
+    public Task StopLoadingAsync() => _stopLoadingTask ??= StopLoadingCoreAsync();
+
+    private async Task StopLoadingCoreAsync()
+    {
+        // 首次取消与首次等待发布成同一任务；重试关闭不得二次访问已释放的 CTS。
+        Task cancel = _loadStop.CancelAsync();
+        Task load = _loadTask ?? Task.CompletedTask;
+        Task joined = Task.WhenAll(cancel, load);
+        try
+        {
+            await joined.ConfigureAwait(true);
+        }
+        finally
+        {
+            if (joined.IsCompleted) _loadStop.Dispose();
+        }
+    }
+
+    /// <summary>原始首次加载任务由主窗持有，关闭必须先取消、再等待它真正退出。</summary>
+    private void MainWindow_OnContentRendered(object? sender, EventArgs e)
+    {
+        if (_stopLoadingTask is null && !_loadStop.IsCancellationRequested)
+        {
+            _loadTask ??= LoadAndReportAsync();
+        }
+    }
+
+    private async Task LoadAndReportAsync()
     {
         try
         {
-            await ViewModel.LoadAsync().ConfigureAwait(true);
+            await ViewModel.LoadAsync(_loadStop.Token).ConfigureAwait(true);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (_loadStop.IsCancellationRequested)
         {
-            ViewModel.StatusText = $"初始化失败：{ex.Message}";
+            // 关窗取消后，加载不得继续启动发现或监听。
+        }
+        catch (Exception error)
+        {
+            // 不回显可能含秘密的异常 Message；保留原错误在 _loadTask，退出协调不可将其洗绿。
+            ViewModel.StatusText = "初始化失败；原任务故障，退出前须核查本机日志。";
+            _logger.LogError("主窗身份与发现初始化意外失败，异常类型={ErrorType}。",
+                error.GetType().FullName);
+            throw;
+        }
+    }
+
+    private async void MainWindow_OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_allowClose)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (_drainingBeforeClose)
+        {
+            return;
+        }
+
+        _drainingBeforeClose = true;
+        try
+        {
+            App application = (App)Application.Current;
+            await application.StopBeforeExitAsync().ConfigureAwait(true);
+            _allowClose = true;
+            Close();
+            application.ShutdownAfterDrain();
+        }
+        catch (Exception)
+        {
+            ViewModel.StatusText = "未排空，不安全关闭；请查看本机日志并重试。";
+        }
+        finally
+        {
+            _drainingBeforeClose = false;
         }
     }
 
@@ -58,6 +133,60 @@ public partial class MainWindow : Window
         {
             _clipboardClearTimer.Stop();
             _clipboardClearTimer = null;
+        }
+    }
+
+    private async void StartViewOnlySharing_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await ViewModel.EnableViewOnlySharingAsync(useClearerPreview: ViewModel.UseClearerPreview,
+                useSmootherPreview: ViewModel.UseSmootherPreview,
+                useFastPreview: ViewModel.UseFastPreview,
+                useThirtyFpsPreview: ViewModel.UseThirtyFpsPreview,
+                useManualVideoQuality: ViewModel.UseManualVideoQuality,
+                manualScale: ViewModel.ManualPreviewScale,
+                manualJpegQuality: ViewModel.ManualJpegQuality).ConfigureAwait(true);
+        }
+        catch (Exception)
+        {
+            ViewModel.StatusText = "仅查看共享未能开启，请查看本机日志。";
+        }
+    }
+
+    private async void StopSharing_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await ViewModel.StopViewOnlySharingAsync().ConfigureAwait(true);
+        }
+        catch (Exception)
+        {
+            ViewModel.StatusText = "共享停止未排空；请查看本机日志。";
+        }
+    }
+
+    private async void ConnectViewOnly_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: DiscoveredDevice device })
+        {
+            return;
+        }
+        // 用户点击时冻结未认证 discovery 的 GUID/IP/端口/完整指纹；后续不能重查缓存。
+        if (!ConnectionTarget.TryCreate(device, out ConnectionTarget? target) || target is null)
+        {
+            ViewModel.StatusText = "发现信息无效；请刷新设备列表后重试。";
+            return;
+        }
+        try
+        {
+            await _client.ConnectAsync(target, this).ConfigureAwait(true);
+            ViewModel.StatusText = _client.LastStatus;
+        }
+        catch (Exception)
+        {
+            // 客户端内部保留原异常任务；界面不展示异常 Message 或远端访问密钥。
+            ViewModel.StatusText = _client.LastStatus;
         }
     }
 

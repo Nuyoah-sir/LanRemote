@@ -128,4 +128,7 @@ public static class FrameLimits
 
     /// <summary>单帧 payload 上限，32 MiB。</summary>
     public const int MaxPayloadBytes = 32 * 1024 * 1024;
+
+    /// <summary>M5 单幅主屏像素预算；采集与客户端解码共用，避免高分辨率手动缩放造成拒帧或无界内存压力。</summary>
+    public const int MaxDecodedPixels = 16_777_216;
 }

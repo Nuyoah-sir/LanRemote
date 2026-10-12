@@ -131,6 +131,7 @@ public static class CrockfordBase32
 
         if (written != byteCount)
         {
+            CryptographicOperations.ZeroMemory(result);
             return false;
         }
 
@@ -140,6 +141,8 @@ public static class CrockfordBase32
             int leftoverMask = (1 << accumulatedBits) - 1;
             if ((accumulator & leftoverMask) != 0)
             {
+                // 调用方拿到 Empty 不代表已分配的原始密钥字节已擦除。
+                CryptographicOperations.ZeroMemory(result);
                 return false;
             }
         }

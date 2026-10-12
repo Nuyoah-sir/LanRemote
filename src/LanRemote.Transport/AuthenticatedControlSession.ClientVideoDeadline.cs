@@ -19,6 +19,12 @@ public sealed partial class AuthenticatedControlSession
             private TaskCompletionSource _wake = NewSignal();
             private bool _quiescing;
             private Task? _worker;
+            private bool _timerAcquired;
+            private bool _timerDisposeSucceeded;
+
+            internal bool OriginalOperationsFinished => _worker is { IsCompleted: true };
+            internal bool AllOwnedRootsReleased => _worker is { IsCompletedSuccessfully: true }
+                && (!_timerAcquired || _timerDisposeSucceeded) && CleanupError is null;
 
             // 两个有界诊断来源：首次执行期失败在 owner，原 timer 释放失败单独保留。
             // 写入和读取均受父 gate 保护；不递归剥掉用户的异常包装。
@@ -105,6 +111,7 @@ public sealed partial class AuthenticatedControlSession
                         static state => ((AttachDeadline)state!).OnTimer(), this,
                         Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan)
                         ?? throw new InvalidOperationException("时钟没有返回附着计时器。");
+                    _timerAcquired = true;
 
                     int immediateWakeups = 0;
                     while (SampleRemaining() is { } remaining)
@@ -151,6 +158,7 @@ public sealed partial class AuthenticatedControlSession
                             // 调用本身也在此 worker/父锁外；ValueTask 只转换一次并等待原 Task。
                             originalDispose = timer.DisposeAsync().AsTask();
                             await originalDispose.ConfigureAwait(false);
+                            _timerDisposeSucceeded = true;
                         }
                         catch (Exception error)
                         {

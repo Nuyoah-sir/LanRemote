@@ -375,7 +375,8 @@ public sealed class ConnectionRegistryTests
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.False(first.IsCompleted);
+            // 80ms 是 Stop 的等待预算，不是本测试 await 回到线程池的调度上限。
+            // 即使预算已先耗尽，也必须如实报告原强制释放仍未完成。
             ConnectionStopReport firstReport = await first.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, firstReport.Unfinished);
             Assert.False(firstReport.AllFinished);

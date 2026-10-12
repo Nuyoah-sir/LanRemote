@@ -5,10 +5,15 @@ namespace LanRemote.Capture;
 
 // 每个后端独立持有接缝；仅 BitBlt/CreateDIBSection 有扩展错误合同，失败处立即保存错误码。
 // 其余 API 以返回值报告失败，不把线程残留的 LastError 猜作本次错误。
-internal interface IGdiNative
+// 元数据枚举只借用这两个只读方法，不取得 DC、像素或系统设置能力。
+internal interface IGdiDisplayNative
 {
     bool EnumDisplayDevices(uint index, out GdiDisplayDevice device);
     GdiDevMode GetDisplayMode(string deviceName);
+}
+
+internal interface IGdiNative : IGdiDisplayNative
+{
     nint CreateSourceDc(string deviceName);
     nint CreateMemoryDc(nint source);
     nint CreateDibSection(nint dc, ref GdiBitmapInfo info, out nint bits);

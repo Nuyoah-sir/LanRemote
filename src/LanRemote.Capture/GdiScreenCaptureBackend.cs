@@ -210,9 +210,11 @@ public sealed class GdiScreenCaptureBackend : IScreenCaptureBackend
             }
 
             GdiDevMode mode = _native.GetDisplayMode(device.DeviceName);
-            if (mode.PelsWidth is < 1 or > 8192 || mode.PelsHeight is < 1 or > 8192)
+            if (mode.PelsWidth is < 1 or > 8192 || mode.PelsHeight is < 1 or > 8192 ||
+                (long)mode.PelsWidth * mode.PelsHeight > FrameLimits.MaxDecodedPixels)
             {
-                throw new ArgumentOutOfRangeException(nameof(mode), "物理显示尺寸必须位于 1..8192。");
+                throw new ArgumentOutOfRangeException(nameof(mode),
+                    "主屏尺寸超过M5宽高或像素预算；未分配GDI像素，不静默缩小实屏。");
             }
 
             var info = new DisplayInfo(new DisplayId(checked((int)index)),

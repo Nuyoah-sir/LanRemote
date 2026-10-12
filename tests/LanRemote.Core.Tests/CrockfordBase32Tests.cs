@@ -175,6 +175,25 @@ public sealed class CrockfordBase32Tests
         Assert.Equal(key, decoded);
     }
 
+    [Fact]
+    public void TryDecode_NonCanonicalSixteenByteKey_ReturnsEmpty()
+    {
+        byte[] key = Enumerable.Repeat((byte)0xA5, 16).ToArray();
+        string encoded = CrockfordBase32.Encode(key);
+        Assert.Equal(26, encoded.Length);
+        Assert.True(CrockfordBase32.TryDecodeExact(encoded, 16, out byte[] canonical));
+        Assert.Equal(key, canonical);
+
+        int lastDigit = CrockfordBase32.Alphabet.IndexOf(encoded[^1]);
+        Assert.Equal(0, lastDigit & 0b11);
+        string nonCanonical = encoded[..^1] + CrockfordBase32.Alphabet[lastDigit + 1];
+
+        Assert.False(CrockfordBase32.TryDecode(nonCanonical, out byte[] decoded));
+        Assert.Same(Array.Empty<byte>(), decoded);
+        Assert.False(CrockfordBase32.TryDecodeExact(nonCanonical, 16, out byte[] exact));
+        Assert.Same(Array.Empty<byte>(), exact);
+    }
+
     [Theory]
     [InlineData(5)]
     [InlineData(15)]

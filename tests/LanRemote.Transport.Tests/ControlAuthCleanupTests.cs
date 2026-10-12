@@ -1163,10 +1163,21 @@ public sealed partial class ControlAuthSessionTests
         Assert.True(Assert.IsType<VideoAttachLease>(videoLease).Revoked.IsCompleted);
     }
 
-    // 只读保存的真实包装任务；不以底层 TCS 的完成或自行 await 它来冒充 join 的观察证据。
-    private static Task<int> ReadPendingApprovalTask(ControlAuthSession session) =>
-        Assert.IsAssignableFrom<Task<int>>(typeof(ControlAuthSession)
-            .GetField("_pendingRead", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(session));
+    // 兼容旧 Task 字段和新的读 owner；仍只观察生产保存的 Activity，不以替身底层 TCS 冒充包装任务。
+    private static Task<int> ReadPendingApprovalTask(ControlAuthSession session)
+    {
+        object? pending = ReadPendingApprovalOwner(session);
+        Assert.NotNull(pending);
+        return pending is Task<int> activity
+            ? activity
+            : Assert.IsAssignableFrom<Task<int>>(pending.GetType()
+                .GetProperty("Activity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetValue(pending));
+    }
+
+    private static object? ReadPendingApprovalOwner(ControlAuthSession session) =>
+        typeof(ControlAuthSession)
+            .GetField("_pendingRead", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(session);
 
     private static Task<LocalApprovalDecision> ReadApprovalDecisionTask(ControlAuthSession session) =>
         Assert.IsAssignableFrom<Task<LocalApprovalDecision>>(typeof(ControlAuthSession)
@@ -1287,6 +1298,11 @@ public sealed partial class ControlAuthSessionTests
         public int PendingReadCalls { get; private set; }
         public bool ResponseFullyRead => _response is not null && _responseOffset == _response.Length;
         public Task<int> PendingRead => _pendingRead.Task;
+        public Memory<byte> SingleReadBuffer { get; private set; }
+        public CancellationToken SingleReadToken { get; private set; }
+        public byte? SingleReadSentinel { get; init; }
+        public Action<Memory<byte>, CancellationToken>? OnSingleRead { get; set; }
+        public Func<Memory<byte>, CancellationToken, ValueTask<int>>? SingleReadSource { get; set; }
         public int ReadResultOnDispose { get; init; }
         public Exception? ReadExceptionOnDispose { get; init; }
         public Action? OnSuccessWrite { get; set; }
@@ -1374,9 +1390,40 @@ public sealed partial class ControlAuthSessionTests
             Assert.Equal(1, buffer.Length);
             PendingReadCalls++;
             Assert.Equal(1, PendingReadCalls);
+            SingleReadBuffer = buffer;
+            SingleReadToken = cancellationToken;
+            if (SingleReadSentinel is { } sentinel)
+            {
+                buffer.Span.Fill(sentinel);
+            }
             SingleReadStarted.TrySetResult();
-            // 故意不注册取消，供边界竞态用例确保首次 Stop 后仍需消费 gate 故障并复核 caller。
-            return new ValueTask<int>(_pendingRead.Task);
+            OnSingleRead?.Invoke(buffer, cancellationToken);
+            // 故意不注册取消；可选 source 只替换返回的 ValueTask，不另开读者。
+            return SingleReadSource?.Invoke(buffer, cancellationToken) ?? new ValueTask<int>(_pendingRead.Task);
+        }
+
+        public void CompleteSingleRead(int result, byte? value = null)
+        {
+            if (!_pendingRead.Task.IsCompleted)
+            {
+                if (value is { } data)
+                {
+                    SingleReadBuffer.Span[0] = data;
+                }
+                _pendingRead.TrySetResult(result);
+            }
+        }
+
+        public void FailSingleRead(Exception failure)
+        {
+            if (failure is OperationCanceledException cancelled)
+            {
+                _pendingRead.TrySetCanceled(cancelled.CancellationToken);
+            }
+            else
+            {
+                _pendingRead.TrySetException(failure);
+            }
         }
 
         protected override void Dispose(bool disposing)

@@ -26,6 +26,16 @@ public sealed class LanDiscoveryServiceLifecycleTests
             NullLogger<LanDiscoveryService>.Instance);
     }
 
+    private static LanDiscoveryService CreateService(Func<CancellationToken, Task> additionalLoop) =>
+        new(
+            new FakeBindingProvider(),
+            new DiscoveryRuntimeState(),
+            NullLogger<LanDiscoveryService>.Instance,
+            additionalLoop);
+
+    private static TaskCompletionSource<bool> NewSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     [Fact]
     public async Task StartAsync_WithNoEligibleBindings_DoesNotThrow()
     {
@@ -56,6 +66,8 @@ public sealed class LanDiscoveryServiceLifecycleTests
 
         await service.StopAsync();
         await service.StopAsync();
+        await service.JoinAndDisposeAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync());
     }
 
     [Fact]
@@ -66,6 +78,178 @@ public sealed class LanDiscoveryServiceLifecycleTests
         await service.StartAsync();
         await service.StopAsync();
         await service.StopAsync();
+    }
+
+    [Fact]
+    public async Task StopAsync_TimeoutKeepsOriginalLoopAliveUntilStrictJoin()
+    {
+        TaskCompletionSource<bool> entered = NewSignal();
+        TaskCompletionSource<bool> release = NewSignal();
+        CancellationToken loopToken = default;
+        LanDiscoveryService service = CreateService(async token =>
+        {
+            loopToken = token;
+            entered.TrySetResult(true);
+            await release.Task;
+        });
+
+        await service.StartAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Task watcher = Task.Run(async () =>
+        {
+            await foreach (var _ in service.WatchAsync(CancellationToken.None))
+            {
+            }
+        });
+
+        Task boundedStop = service.StopAsync();
+        Task join = service.JoinAndDisposeAsync();
+        try
+        {
+            Assert.Same(join, service.JoinAndDisposeAsync());
+            Assert.False(join.IsCompleted);
+            await boundedStop.WaitAsync(TimeSpan.FromSeconds(15));
+            await watcher.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(loopToken.IsCancellationRequested);
+            Assert.True(loopToken.WaitHandle.WaitOne(0));
+            Assert.False(join.IsCompleted);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync());
+        }
+        finally
+        {
+            release.TrySetResult(true);
+            await join.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Throws<ObjectDisposedException>(() => { _ = loopToken.WaitHandle; });
+    }
+
+    [Fact]
+    public async Task JoinAndDisposeAsync_WaitsForInFlightInitialProbe()
+    {
+        TaskCompletionSource<bool> probeEntered = NewSignal();
+        TaskCompletionSource<bool> releaseProbe = NewSignal();
+        CancellationToken probeToken = default;
+        LanDiscoveryService service = new(
+            new FakeBindingProvider(),
+            new DiscoveryRuntimeState(),
+            NullLogger<LanDiscoveryService>.Instance,
+            _ => Task.CompletedTask,
+            async token =>
+            {
+                probeToken = token;
+                probeEntered.TrySetResult(true);
+                await releaseProbe.Task;
+            });
+
+        Task start = service.StartAsync();
+        await probeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Task join = service.JoinAndDisposeAsync();
+        try
+        {
+            Assert.False(join.IsCompleted);
+            Assert.True(probeToken.IsCancellationRequested);
+            Assert.True(probeToken.WaitHandle.WaitOne(0));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync());
+        }
+        finally
+        {
+            releaseProbe.TrySetResult(true);
+            await start.WaitAsync(TimeSpan.FromSeconds(5));
+            await join.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Throws<ObjectDisposedException>(() => { _ = probeToken.WaitHandle; });
+    }
+
+    [Fact]
+    public async Task StopAsync_CallerCancellationDoesNotAbandonCancellationCallbackOrLoop()
+    {
+        TaskCompletionSource<bool> entered = NewSignal();
+        TaskCompletionSource<bool> callbackEntered = NewSignal();
+        TaskCompletionSource<bool> releaseCallback = NewSignal();
+        TaskCompletionSource<bool> releaseLoop = NewSignal();
+        CancellationToken loopToken = default;
+        LanDiscoveryService service = CreateService(async token =>
+        {
+            loopToken = token;
+            using CancellationTokenRegistration registration = token.Register(() =>
+            {
+                callbackEntered.TrySetResult(true);
+                releaseCallback.Task.GetAwaiter().GetResult();
+            });
+            entered.TrySetResult(true);
+            await releaseLoop.Task;
+        });
+
+        await service.StartAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        using CancellationTokenSource callerCancellation = new();
+        Task boundedStop = Task.Run(() => service.StopAsync(callerCancellation.Token));
+        try
+        {
+            await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Task join = service.JoinAndDisposeAsync();
+            callerCancellation.Cancel();
+            await boundedStop.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(loopToken.WaitHandle.WaitOne(0));
+            Assert.False(join.IsCompleted);
+
+            releaseLoop.TrySetResult(true);
+            Assert.False(join.IsCompleted);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync());
+        }
+        finally
+        {
+            releaseCallback.TrySetResult(true);
+            releaseLoop.TrySetResult(true);
+            await service.JoinAndDisposeAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Throws<ObjectDisposedException>(() => { _ = loopToken.WaitHandle; });
+    }
+
+    [Fact]
+    public async Task JoinAndDisposeAsync_CollectsCallbackAndLoopFailuresBeforeDisposal()
+    {
+        TaskCompletionSource<bool> entered = NewSignal();
+        TaskCompletionSource<bool> release = NewSignal();
+        CancellationToken loopToken = default;
+        LanDiscoveryService service = CreateService(async token =>
+        {
+            loopToken = token;
+            using CancellationTokenRegistration registration = token.Register(
+                () => throw new InvalidOperationException("取消回调失败"));
+            entered.TrySetResult(true);
+            await release.Task;
+            throw new ApplicationException("后台循环失败");
+        });
+
+        await service.StartAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        using CancellationTokenSource callerCancellation = new();
+        Task boundedStop = service.StopAsync(callerCancellation.Token);
+        Task join = service.JoinAndDisposeAsync();
+        try
+        {
+            callerCancellation.Cancel();
+            await boundedStop.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(join.IsCompleted);
+            Assert.True(loopToken.WaitHandle.WaitOne(0));
+        }
+        finally
+        {
+            release.TrySetResult(true);
+        }
+
+        AggregateException failure = await Assert.ThrowsAsync<AggregateException>(
+            () => join.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains(failure.InnerExceptions,
+            ex => ex is InvalidOperationException { Message: "取消回调失败" });
+        Assert.Contains(failure.InnerExceptions,
+            ex => ex is ApplicationException { Message: "后台循环失败" });
+        Assert.Throws<ObjectDisposedException>(() => { _ = loopToken.WaitHandle; });
     }
 
     [Fact]

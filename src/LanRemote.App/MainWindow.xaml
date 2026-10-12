@@ -13,6 +13,7 @@
         MinWidth="720"
         Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
         ContentRendered="MainWindow_OnContentRendered"
+        Closing="MainWindow_OnClosing"
         Closed="MainWindow_OnClosed">
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -109,23 +110,68 @@
             </Grid.ColumnDefinitions>
 
             <GroupBox Grid.Column="0" Header="主机设置" Padding="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
                     <CheckBox Content="允许被发现"
                               IsChecked="{Binding AllowDiscovery, Mode=TwoWay}"
                               Margin="0,0,0,8" />
                     <CheckBox Content="允许查看屏幕"
                               IsChecked="{Binding AllowViewing, Mode=TwoWay}"
+                              IsEnabled="{Binding HostSettingsReady}"
                               Margin="0,0,0,8" />
-                    <CheckBox Content="允许键鼠控制"
-                              IsChecked="{Binding AllowControl, Mode=TwoWay}"
+                    <CheckBox Content="允许键鼠控制（M5 暂不可用）"
+                              IsChecked="{Binding AllowControl, Mode=OneWay}"
+                              IsEnabled="False"
                               Margin="0,0,0,8" />
-                    <CheckBox Content="陌生控制端首次连接需本机确认"
+                    <CheckBox Content="本机审批（必需；关闭时仅可勾选修复）"
                               IsChecked="{Binding RequireLocalApproval, Mode=TwoWay}"
+                              IsEnabled="{Binding NeedsLocalApprovalRepair}"
                               Margin="0,0,0,8" />
+                    <CheckBox Content="本次增强预览：10 FPS / 75%（实验）"
+                              IsChecked="{Binding UseClearerPreview, Mode=TwoWay}"
+                              ToolTip="默认仍为 5 FPS / 50%；仅下一次开启共享时生效，已在共享需先紧急停止再开启。可能增加 CPU 与局域网带宽占用。"
+                              Margin="0,0,0,8" />
+                    <CheckBox Content="本次流畅预览：15 FPS / 75%（实验）"
+                              IsChecked="{Binding UseSmootherPreview, Mode=TwoWay}"
+                              ToolTip="与10 FPS档互斥；已在共享须先紧急停止，完整排空后再显式开启。目标帧率不保证实际达到；CPU与带宽可能更高。"
+                              Margin="0,0,0,8" />
+                    <CheckBox Content="本次快速预览：20 FPS / 75%（实验）"
+                              IsChecked="{Binding UseFastPreview, Mode=TwoWay}"
+                              ToolTip="与10/15 FPS档互斥；仅停止共享并完整排空后再显式开启生效。目标帧率不保证实际达到；CPU与带宽可能更高。"
+                              Margin="0,0,0,8" />
+                    <CheckBox Content="本次高帧率预览：30 FPS / 75%（实验）"
+                              IsChecked="{Binding UseThirtyFpsPreview, Mode=TwoWay}"
+                              ToolTip="与10/15/20 FPS档互斥；停止共享并完整排空后再显式开启才生效。目标帧率不保证实机达到；CPU、内存与带宽可能增加。"
+                              Margin="0,0,0,8" />
+                    <CheckBox Content="本次手动缩放 / JPEG 质量（实验）"
+                              IsChecked="{Binding UseManualVideoQuality, Mode=TwoWay}"
+                              ToolTip="须勾选才覆盖原5FPS/50%或实验档75%与JPEG60；仅下一次显式开启有效，不写入配置。100%与高JPEG质量可能增加内存和带宽。"
+                              Margin="0,0,0,8" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <ComboBox Width="80" ItemsSource="{Binding ManualPreviewScales}"
+                                  SelectedItem="{Binding ManualPreviewScale, Mode=TwoWay}"
+                                  ToolTip="缩放比例：0.5 / 0.67 / 0.75 / 1.0；须另勾手动画质才生效。" />
+                        <TextBlock Text="缩放" VerticalAlignment="Center" Margin="4,0,8,0" />
+                        <ComboBox Width="66" ItemsSource="{Binding ManualJpegQualities}"
+                                  SelectedItem="{Binding ManualJpegQuality, Mode=TwoWay}"
+                                  ToolTip="JPEG质量整数40..85；须另勾手动画质才生效。" />
+                        <TextBlock Text="JPEG" VerticalAlignment="Center" Margin="4,0,0,0" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="开启仅查看共享"
+                                IsEnabled="{Binding HostSettingsReady}"
+                                Click="StartViewOnlySharing_OnClick"
+                                Padding="8,4" />
+                        <Button Content="紧急停止共享"
+                                Click="StopSharing_OnClick"
+                                Margin="8,0,0,0"
+                                Padding="8,4" />
+                    </StackPanel>
                     <CheckBox Content="登录 Windows 后自动启动"
                               IsChecked="{Binding AutoStartOnLogin, Mode=TwoWay}"
                               Margin="0,0,0,8" />
                 </StackPanel>
+                </ScrollViewer>
             </GroupBox>
 
             <GroupBox Grid.Column="2" Header="局域网设备" Padding="12">
@@ -176,11 +222,11 @@
                                     </StackPanel>
 
                                     <Button Grid.Column="2"
-                                            Content="连接"
-                                            IsEnabled="False"
+                                            Content="仅查看连接"
+                                            Click="ConnectViewOnly_OnClick"
                                             Padding="12,2"
                                             VerticalAlignment="Center"
-                                            ToolTip="连接功能将在 M3/M4 实现" />
+                                            ToolTip="仅查看远端屏幕；请在被控端人工批准，不提供键鼠控制" />
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -197,7 +243,8 @@
                 BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
                 BorderThickness="1">
             <StackPanel>
-                <TextBlock Text="{Binding StatusText}" />
+                <TextBlock Text="{Binding HostStatusText}" TextWrapping="Wrap" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding StatusText}" Margin="0,4,0,0" />
                 <TextBlock Opacity="0.65" Margin="0,4,0,0">
                     <Run Text="数据目录：" />
                     <Run Text="{Binding ConfigRootPath, Mode=OneWay}" />

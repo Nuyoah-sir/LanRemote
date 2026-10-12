@@ -104,6 +104,8 @@ public sealed class GdiScreenCaptureBackendTests
     [InlineData(3u, 0u)]
     [InlineData(8193u, 2u)]
     [InlineData(3u, 8193u)]
+    [InlineData(4096u, 4097u)]
+    [InlineData(8192u, 8192u)]
     [InlineData(uint.MaxValue, 2u)]
     [InlineData(3u, uint.MaxValue)]
     public async Task Capture_RejectsInvalidPhysicalDimensions(uint width, uint height)

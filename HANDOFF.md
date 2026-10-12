@@ -1,18 +1,18 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-10-01（b3e1273 认证Video父子生命周期与Host完整Dispose，双配置各3613 PASS；App/实屏/十分钟DoD未完，§19.22）**
+> 更新时间：**2026-10-12（M5按用户稳定反馈收口，不重复人工验收。M6新增独立Hello2/Challenge2严格合同与版本证据：93专项红绿、八变异/恢复；四Rebuild零警告错误、16TRX双配置各5112 PASS、376源码冻结。100项正式审计自测、7项交接护栏与正式独立审计真实wait0，见§19.41/ADR085。真实认证仍V1，实际V2握手/拒旧/升级UI/live多屏未接。Last code commit仍b3e1273；未提交工作树、原失败与M5ZIP保留，M7不启动）**
 >
-> **最新进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是当前阻断。**
+> **M4历史两机进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。** 成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是M4阻断，**不外推到当前M5产品实屏**。
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最新代码：`b3e1273`完成认证Video资格预约、Control注销后的子任务join及Host预算Stop/完整Dispose（ADR-066，16 files/+2225/−423），双配置各3613 PASS、四Rebuild零警告错误，见§19.22；`2e48cb4`/§19.21/ADR-065是前片装配历史。** 完成的是Transport父子生命周期，非App产品看屏闭环；M4/Python打包均未重跑。
+> **最近已提交代码（历史基线）：`b3e1273`完成Transport认证Video资格预约、Control注销子任务join及Host完整Dispose（ADR-066），当时双配置各3613 PASS，见§19.22。** 当前产品App/Transport/Discovery及M6源码/测试仍为**未提交工作树**。M5此前十分钟、慢网、双方上网逐项用户确认保留；2026-10-12用户又明确稳定并要求告一段落，现按用户确认收口，不再把其作为M6阻断，不虚构原始数字/截图时间序列或独立性能审计。§19.29原ZIP不覆盖、不重打；M4不重做、键鼠M7不启动。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
-> 产品 App 尚不能看屏或键鼠控制；本片代码提交改了Transport源码/测试，未改产品 App、权威规格、系统网络或防火墙。本次记账只改四份文档，不将此前build/test冒称本次重跑。
-> **下一关：App Host真实启停与审批ViewOnly、Client高层认证和prompt key、WPF有界JPEG解码渲染及完整退出，再做实屏/十分钟DoD。** `b3e1273`仅完成Transport父子生命周期，未App接线/实屏/十分钟验证，**M5未完成**。不重跑M4、不绕过桌面权限、不改网、不出新包。
+> 当前**未提交的产品工作树**已接入App Host显式ViewOnly启停与WPF本机审批、Client远端密钥输入及Control/Video双TLS、JPEG有界WPF显示和退出排空；同机loopback夹具的冻结WPF画面已验证，**不能等同两台真实LAN产品GUI实屏**，仍无键鼠控制。新增修正要求已有配置的`allowDiscovery`必须存在且为唯一布尔值，真正首装无文件才允许只公告身份。本轮实际存在App/Transport/Discovery等`src`及`tests`未提交改动；不将前片已提交`b3e1273`或文档提交误作当前App代码提交；M5候选已于§19.29出包，但不包含§19.30的M6本机目录。
+> **M5已按用户确认收口；M6仍进行中。** 历史各片见§19.30–40；最新§19.41完成独立Hello2/Challenge2合同，版本分类只在完整载荷校验后形成，非AcceptedV2不产生V2对象。93专项进入各5112完整冻结并完成独立审计；真实链仍V1，未接live。下一片为两Host入口及Client的V2-only握手接缝与安全失败分类；proof前顺序已定，不再询问。纯合同不证明实际拒旧/升级UI、远端目录/切屏或每Session质量。保持真实审批、原活动观察时刻、唯一读者、额外数据拒绝与有界队列；M7不启动、不改网/防火墙/防护、不绕权限、不覆盖旧ZIP。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
 >
@@ -34,12 +34,24 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M5 — 视频最小闭环，进行中。** 采集、编码、第二TLS/VideoAttach、会话拥有型生产工厂、Host认证装配与Transport父子生命周期已落地；App Host/Client与WPF显示未接成产品闭环，未实屏或验证10分钟DoD，见§19.22。M4已于2026-09-29完整完成（§18.25），产品App尚不能看屏或控制键鼠。
-- **下一步：App Host真实启停及本地审批ViewOnly、Client真实高层认证与prompt key、WPF有界解码渲染及完整退出，然后实屏与十分钟DoD。** `CreateWithVideo`和父子清理仅是Transport能力，不等于产品App交付；不加friend绕层、不重跑M4、不改DHCP/IP/路由/DNS/热点/网络类别/防火墙、不执行旧Undo、不绕过桌面权限、不出新包。
-- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4**。M5从本次收口之后顺序开始。
+- **当前里程碑：M5按2026-10-12用户稳定反馈收口；M6进行中。** 最新§19.41完成独立Hello2/Challenge2严格合同和未认证版本声明分类，93专项、八变异/恢复、各5112完整冻结与正式独立审计通过。§19.30–40各片及原失败保留；真实Control仍V1，live V2握手/拒旧、升级UI、目录传输/切屏/每会话画质未实现，未出M6产品包。M5产品及M6源码/测试仍未提交；不额外要求M5复测、不重做M4，M7未启动。
+- **下一步：按B推进两Host入口与Client的V2-only握手接缝及安全失败分类。** 先核唯一读者/原认证deadline/旧版证据消费和父资格，不全局换常量或把只改首帧当完成。顺序固定：TLS/pinning→Hello2→Challenge2→Host Offer→Client Accept→clientProof V2→真实审批→serverProof V2→新版父资格。§19.40–41只完成纯核/载荷，不证明真实收发。禁止V2失败fallback V1，FirstFrameRouter与独立ControlPreAuthSession须同策略。完整LegacyV1只是未认证声明，不能覆盖目标device/实际TLS证书pin检查、proof/密码/审批错误；EOF/timeout不等于旧端。Offer/Accept消耗原绝对预算、不重置deadline；保留Host holding/Client monitor额外数据拒绝、同流唯一读者、原IO退出和父gate，目录只Host→Client。新版父认证成功后才给Video资格；不全局更改TLS/LRVF、不重做M4/加人工门槛，不改网/防护、不执行旧Undo、不覆盖旧ZIP。
+- 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4 → M5（用户确认）**。M6进行中，不能将纯核冻结称M6整体完成。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`b3e1273`**（Transport认证Video父子生命周期及Host完整Dispose，ADR-066，16 files/+2225/−423）；`2e48cb4`/ADR-065与`45dd8db`为此前代码及其文档记账历史。
-- **Working tree at validation：`b3e1273`源码/测试对应`outputs/m5-host-video/final-parent-dispose-20261001-135550-001799400/summary.json`完整终验；337项源码/测试/工具/脚本及指定根文件在六阶段前后逐SHA一致，本次文档编辑前当前亦337/337一致。** 清单包含HANDOFF；本次记账修改HANDOFF是**明确例外**，不再声称编辑后337/337与冻结清单相同。独立读16份TRX实际结果及Counters：Debug/Release各3613 PASS/0失败/0跳过；四次完整Rebuild零警告/错误，六命令rc0且六原日志SHA一致。runner及六个直接dotnet子命令退出，全机枚举未验证，不能推断间接或全机排空。六单点变异见§19.22；早期警告/脚本路径/旧预计2278的失败证据不覆盖。**本次仅证据复核与四份文档记账，未另运行dotnet、修改代码/测试、提交或建任务；`b3e1273`自身确实改了16个源码/测试文件。**
+- **Last code commit：`b3e1273`**（已提交的Transport认证Video父子生命周期及Host完整Dispose，ADR-066，16 files/+2225/−423）；其双配置各3613 PASS来自2026-10-01历史冻结（§19.22），**不是本轮App产品实现的代码提交**。其后文档提交不改变Last code commit。
+- **Working tree at validation（最新）：2026-10-12未提交Hello2/Challenge2独立合同，`outputs/m6-wire-v2-20261012/final-v1/summary.json` passed/exit0。** 四Rebuild零警告错误，16TRX双配置各5112PASS/0FAIL/0SKIP（Transport3553，原5019+新93精确身份）。376源码冻结SHA `bfd00f3a1a4965f9ae2ddbaa785f363fa090a37430c38b3d7bf972391ed14dd5`，final摘要SHA `954d0454f82a4519a81383a8e27af79ce43626bb8f29d35eae506348d6a780fd`；外层launcher27484→runner8928真实wait0已回收。100项审计自测、7项交接护栏及正式审计外层均wait0；独立核43TRX/20574唯一execution及4598历史文件，报告SHA `90c61a45b181f13c60438bd242b4d152d96ff9536288589753234c0e01c8f0a8`。审计后字节绑定和before实际通过，保护1121本片原项；随后仅四文档及唯一TXT交接变化，最终after以`handoff-v1/post-handoff-check.json`实际结果为准。未改live，详§19.41。
+- **Working tree at validation（V2绑定历史）：2026-10-12未提交V2认证绑定纯核，`outputs/m6-auth-v2-20261012/final-v1/summary.json` passed/exit0。** 四Rebuild零警告错误、16TRX双配置各5019PASS/0FAIL/0SKIP（Transport3460，旧4944+新增75），371项源码冻结SHA `2bb62b17e480af86fe8185c8815c8b68d915dfd6b8956a695333139295e69dd3`，summary SHA `498678a0322bd577302432e08abe477297d6a78a2688f26f74f10b347782e2c0`。原完整冻结外层真实0；新68项正式护栏自测及正式独立审计外层真实0，后者独立核45TRX/20175唯一execution，报告SHA `f1c7158d15aac4da28b24f1a251dbd411ab5c21b102f39d2c1386be84b3bdd62`。审计字节绑定及handoff before已独立通过；随后仅四文档及唯一TXT交接变更，最终after以`handoff-v2/post-handoff-check.json`实际结果为准。真实认证仍V1，纯核不等于live，详§19.40。
+- **Working tree at validation（Offer/Accept历史）：2026-10-10未提交新版专用Offer/Accept纯codec；`outputs/m6-catalog-agreement-20261010/final-v1/summary.json` passed/exit0，完整冻结及正式独立审计外层真实exit0已回收。** 四Rebuild零警告错误，六dotnet命令rc0/wait，16TRX Debug/Release各4944PASS/0FAIL/0SKIP（Transport3385、新108）。367源前后/12边界与28文档保持，源清单SHA `567806036322f92f83ae906958a6e29a3ae81279fbfe967d8b478af6bae690aa`，摘要SHA `9b95ef8c41d9910dd406bf7c18e94a444ea3de67ddf7417f168e718b1ca33b39`。正式审计独立43TRX/19958唯一execution，报告SHA `015875406168e134466c2de334ec97a0eca41badd78f8a18d58d1e947ce0b334`；旧4836稳定身份+新108精确对应，八变异真实断言/恢复、全部历史及根脚本/旧ZIP绑定。B政策已定但live拒旧/V2认证未实施；本HANDOFF/ADR083/本日日志为审计后文档例外，见§19.39。
+- **Working tree at validation（外部首字节历史）：2026-10-10未提交外部首字节原锚定入口；`outputs/m6-observed-entry-20261010/final-v2/summary.json` passed/exit0，外层实际exit0已回收，正式独立审计main/外层实际exit0。** 六dotnet命令rc0/直接wait、四Rebuild零警告错误、16TRX Debug/Release各4836 PASS/0 FAIL/0 SKIP（Transport3277，新入口48）；365项前后/12边界相同，清单SHA `aebc6475c4e608a265a8e76124843ec2ad32f48f2d16dfef980820bb158ce3f6`，摘要SHA `f5971eb33a13c6193ed5034cf1bbe7fb9794f86c384237dd1c881e213b2faabc`。审计报告SHA `f544a2bd6e5db12dba1d3c9e53292315f7e17c9f8236f8b2a757c1a5c6e59302`，独立核54TRX/24707唯一execution；源码/文档完整重枚举。原final-v1验证器错名exit2、原变异分类器exit2均原样保留，不洗成通过。未接live/新版双机，HANDOFF/ADR082/本日日志为审计后文档例外，见§19.38。
+- **Working tree at validation（Host移交历史）：2026-10-09未提交私有Host读槽一次移交；`outputs/m6-host-read-handoff-20261009/final-v1/summary.json`落盘passed/exit0，2026-10-10正式独立审计实际exit0。** 四Rebuild零警告错误、六直接dotnet命令rc0/wait记录、16原TRX Debug/Release各4788 PASS/0 FAIL/0 SKIP（新移交46、旧owner54、Transport3229）；364项前后/12边界相同，清单SHA `fc3f584e4851237aef2e836bc593e9199a6c324ce979fd40b74453962651cadc`，摘要SHA `bcef134b56ef204bdf8c005e43d781ec7f9fd6d68b68ee2493139d119eb76a61`。正式审计报告SHA `9d0f754170577361fce15f76a1d3f706bbf775c8263f3e28964486dcc0afa82d`；原外层final后台句柄不可回收，不捏造本轮观察到其进程rc。clean18红→46绿、八变异恢复、400回归均从原证据核实。未接live/新版双机，文档更新为冻结后例外，见§19.37。
+- **Working tree at validation（Host单槽历史）：2026-10-09未提交Host审批→holding单读槽所有权；`outputs/m6-host-read-owner-20261009/final-v1/summary.json`及独立审计passed。** 四Rebuild零警告错误、六直接命令rc0/逐个wait、16TRX Debug/Release各4742 PASS/0 FAIL/0 SKIP（Host专项54，Transport3183）。363项前后及12边界一致，清单SHA `665d2fdc6316f5dc8f0216d1b493cd56c671d34ed9bd128cc89930cf6bf14eec`，摘要SHA `3e74190f1d5945c81ac1cf6318783a9ccba1c00bd83bf1081f109b53e6729864`。原失败、同测试红绿、helper红绿及四变异恢复均独立核对；未接live帧/双机，后续文档为冻结后例外，见§19.36。
+- **Working tree at validation（组合历史）：2026-10-09未提交独立单帧预算组合；`outputs/m6-frame-attempt-20261009/final-v1/summary.json`及独立审计passed。** 四Rebuild零警告错误、六直接命令rc0/逐个wait、16TRX Debug/Release各4688 PASS/0 FAIL/0 SKIP（组合66，Transport3129）。362项前后及12边界一致，清单SHA `d43e390e75616bd7608a2a73ceba6f26613b3824339b6bc497941cf8472f7660`，摘要SHA `12dd3fc21cd0ff411fb27960858f7a5fc7a73b64458f457dc58f8b2d480246d2`。未接live帧/双机，后续文档记账为例外，见§19.35。
+- **Working tree at validation（预算历史）：2026-10-09未提交独立锚定预算；`outputs/m6-frame-budget-20261009/final-v1/summary.json`及独立审计passed。** 四Rebuild零警告错误、六直接命令rc0/逐个wait、16TRX Debug/Release各4622 PASS/0 FAIL/0 SKIP（预算101，Transport3063）。360项前后及12边界一致，清单SHA `105496df558731d53beda71fd7cfd00ffc5d051b15cb760423cbc0422923d449`，摘要SHA `c7c755481528cb19e32ac49835e8b0e63dd6461a9a3aef75f6c947e73e27f1ff`。未接live/双机，后续文档及下一组合片不在该冻结内，见§19.34。
+- **Working tree at validation（单帧接续历史）：2026-10-09未提交单帧接续；`outputs/m6-frame-continuation-20261009/final-v1/summary.json`与独立审计passed。** 四Rebuild零警告错误、六命令rc0、16TRX Debug/Release各4521 PASS/0 FAIL/0 SKIP（单帧110、Transport2962）。358项前后及12边界一致，清单SHA `53f1814023469d3d3e6fcddeeed0b2c9b0fd6d9e86d5b6758f8aa4d473ef69b3`，摘要SHA `30defbb5fd6597005fc1c884e34a79ac6a90677432418b6fb360ae5112f51355`。未接live/双机，后续文档例外见§19.33。
+- **Working tree at validation（首字节历史）：2026-10-09未提交首字节所有权；`outputs/m6-read-ahead-20261009/final-v1/summary.json`与独立审计passed。** 四Rebuild零警告错误、六命令rc0、16TRX Debug/Release各4411 PASS/0 FAIL/0 SKIP（首字节39，Transport2852，其余分项不变）。356项前后及12边界一致，清单SHA `7bb79707ebccfaae914e5d0611f336d07802ebe292533e26e43d9a7122136e09`，摘要SHA `6e64943e5452707fe4785007362a80d6cebcb62e5aa2ad9d37748cc14b583d10`。未接live、不含新版双机；后续HANDOFF/ADR/memory是文档例外，详§19.32。
+- **Working tree at validation（元数据历史）：2026-10-09未提交目录过滤补测及host_status纯合同；`outputs/m6-metadata-20261009/final-v1/summary.json` passed/exit0，独立`independent-audit.json` passed。** 四完整Rebuild零警告错误、六命令rc0、16TRX双配置各**4372 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport2813/Acceptance503/Capture243/Sessions244；元数据516、目录84）。354项前后及12边界SHA一致`61e91e77b0b6857142c90004d7b62bd3eb51da344df8c89fd80b166a1dd49458`，摘要SHA`c7376e1ebf3af24edcc397d2d236e974c5ed89fe9eaff286a9f1918b79918498`。只读实机仍一个OrayIddDriver设备；不等同物理多屏/双机GUI。冻结后HANDOFF/ADR/memory为文档例外；下一首字节切片如改源码须另行验证，不能沿用本冻结声称新代码已测，详§19.31。
+- **Working tree at validation（M6目录历史）：2026-10-09未提交工作树新增M6本机只读目录；`outputs/m6-displays-20261009/final-v1/summary.json` status=passed/exit0。** 四Rebuild零警告错误、六命令rc0、16TRX逐项/Counters双配置各**3852 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance503/Capture239/Sessions244）。352项前后及12边界SHA一致`02d3371bc2366c9f23f1772857c1fa077c6685cd8a07749f611453e28bc2a87d`，摘要SHA`21c88724c953e7701a3f090897dc42042ec17f9a08b82e04e1b9b5a0b2118f0f`，独立核对`independent-audit.json` passed。真实只读API仅观察到一个OrayIddDriver设备/index4/1920×1080，不是物理多屏/混合DPI或GUI审批验收。随后HANDOFF/ADR/memory更新属于文档例外，未再改源码；未出新包、不提交推送，详§19.30。
+- **Working tree at validation（M5候选历史）：2026-10-08未提交M5完整手动画质产品工作树加TransportHost窄Stop/accept修复，M5独立冻结`outputs/m5-host-video/final-m5-quality-20261008-v3/summary.json`（status=passed/exit0）。** 四完整Rebuild零警告错误、六命令rc0、16份TRX逐UnitTestResult/Counters双配置各**3772 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance503/Capture159/Sessions244）；350项实际源码含未跟踪App/Tests与HANDOFF在冻结前后及12边界SHA `dbff72f66cbbdabe6ea44c5d260df3ac3f8d079fa8b301b471d99c8ffd0329d5`一致，docs/memory与Git status前后原字节一致。摘要SHA `fc57ba7fb50d8ac65b8658c043e7e86d297da3ab98a3081b98c901554841455c`；此后HANDOFF与docs/memory编辑属于冻结后文档例外，不宣称当前350项仍全同SHA。仅六直接子进程wait，未审全机。v1 Release、v2 Debug各一Transport停机真红历史保留，不把失败轮写成绿；详§19.29。`Last code commit`仍`b3e1273`，新App/Core/Capture/Sessions/Transport源码及测试尚未提交，新哈希包未实机测试。
 - M3.1 记录（历史）：Last code commit = `2dee00c`（pre-auth 外层信封 + 停机报告 +
   B15/B16/B18/B19/B20 测试补强 + 验收器同步）；601 PASS 验证后未再动代码。
 - **注意：M3.1 起至 M4 阶段 3，每一轮都改动过 `src` / `tests`**——M3 两机验收的旧物料
@@ -65,14 +77,16 @@
   同一个 exe 带 `--headless` 仍可运行 info/host/client，旧改网动词一律拒绝。
   曾短暂采用「控制台 exe + `START.cmd`」的形态，被用户连纠三次后废弃——
   **别改回去**，理由与坑见第 15 节「M3 验收器的形态教训」。
-- **注意：不要拿 `LanRemote.App` 验收 M3**——它引用了 `LanRemote.Transport` 但一行都没调用，
-  打它的包只能重证 discovery。
+- **M3时代历史注意（仅限当时版本，不适用于当前M5未提交产品工作树）：不要拿当时的 `LanRemote.App` 验收 M3**——它虽引用 `LanRemote.Transport`，但当时一行都没调用，
+  打当时的包只能重证 discovery。现在App已接入Transport/视频，但仍须另做当前产品双机实屏验收。
 - **远端仓库已上线（2026-09-21）：`https://github.com/Nuyoah-sir/LanRemote.git`（public，
   用户手动建库）**——完成**首次全量推送**：`main` 与本地一致（52 提交 / 693 对象 / 726 KiB，
   远端 `refs/heads/main` 与本地 HEAD 逐字符相同）。推送走 git+HTTPS（GCM 缓存凭据，
   `gh` 未安装也不需要）；此后记账提交按「关于 git 记账方式」同步推送。
 
 ### 关于 git 记账方式
+
+**2026-10-12新增持续授权：用户明确“可提交可推送。然后继续开发，每完成一片都可以推送提交，这样有利于查找、恢复、回档”。** 先将当前已验证的M5产品和M6独立合同累计工作树建立检查点，随后每片验证完成新建提交并正常推送，无须重复询问。此前各节“不提交”保留为当时事实，此后以本授权为准。不强推、不amend/改写历史、不跳hooks/签名、不改Git配置，不将当前累计提交伪装成过去各片分别提交。
 
 HANDOFF 不写 HEAD hash（写完立刻过期的自引用）。固定使用：
 `Last code commit`（最后一次代码/测试提交）+ `Working tree at validation`。
@@ -2999,3 +3013,350 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 **最终完整终验与工作树**：`outputs/m5-host-video/final-parent-dispose-20261001-135550-001799400/summary.json`及原六日志/16 TRX。逐份实际`UnitTestResult`与Counters核对，Debug/Release各**3613 PASS/0失败/0跳过**：Core196/Security66/Protocol299/Integration3/Transport2279/Acceptance393/Capture157/Sessions220。solution及IsolatedAcceptance双配置四次完整Rebuild 0警告/0错误；六命令rc0、六原日志SHA一致。冻结337项在每段前后逐文件SHA一致，本次文档编辑前当前337/337亦与冻结清单一致；清单含HANDOFF，编辑后HANDOFF是明确文档例外。runner退出且六直接dotnet子进程已等待退出；全机进程枚举受限，不推断间接进程已排空。本次记账未运行dotnet、未修改src/tests、未提交/新建任务；历史失败证据原样保留。
 
 **余项与停点**：Transport父子清理不证明产品App已交付。下一片接App真实Host启停和本地ViewOnly审批、Client高层认证及prompt key，再做WPF有界JPEG解码渲染/完整退出、真实屏幕与十分钟DoD；此前不把M5记完成。M4不重跑，现网IP/DHCP/DNS/路由/热点/网络类别及防火墙不改，不绕桌面权限、不引入新包。此处“本次只改四份文档”**只指§19.22的记账轮**，绝不覆盖此前`b3e1273`代码/测试提交。
+
+### 19.23 产品ViewOnly接线与真实回环终验（2026-10-02，未提交工作树，M5进行中）
+
+**结论先行**：本轮实际修改了产品App、Transport、Discovery、Core及`tests`，并新建了App的Services两个`.cs`及Acceptance七份测试；这些是**未提交的工作树内容，不存在本轮App代码提交号**。`b3e1273`是最近**已提交代码**的Transport历史基线（§19.22，双配置各3613 PASS），其后的文档提交不能充当App代码提交。当前工作树代码已接Host/Client/WPF，仅在本机限定的真实双TLS loopback中显示合成JPEG；不将M5、产品双机GUI实屏或发布包记为完成。本节是既有证据记账，不是编辑文档后重跑验证。
+
+**产品接线与安全边界（ADR-067）**：
+1. Host只有在本机显式勾选允许查看并点击“开启仅查看共享”、磁盘配置安全布尔字段/传输端口严格核实、身份/私钥/本机密钥可用、本机审批门开启且找到合格RFC1918网卡时才用`TransportHost.CreateWithVideo`监听；旧配置的查看开关不自动开启Host。停用查看/审批或关窗先同步阻止新监听、撤销待审批，再等待Host完整Stop/Dispose。`WpfLocalApprovalGate`展示已Shown的真实窗口和供人工核对的短码；批准按钮仅在人工勾选ViewOnly后可用，**并不由程序证明操作者确实核对短码**；Control请求直接拒绝；Block先取消授权再等原窗口`Closed`/Dispatcher收尾，不能用决定已提交替代窗口已关闭。
+2. Client冻结连接目标，远端key只从本次`PasswordBox`输入或调用方本次临时参数取得（非命令行密钥入口），**不读取本机访问密钥当远端key**；Control高层认证验证实际TLS pin、serverProof及ViewOnly权限，第二Video TLS严格附着和ACK后才用封闭会话读帧。`RemoteVideoPresenter`用容量1拥有型压缩帧队列、JPEG头与像素预算预检、后台解码、单槽WPF Dispatcher呈现；仅交付冻结`BitmapSource`，不发键鼠事件。窗口/主动断开后保留原网络读、解码、cancel、Control/Video释放任务并join，不拿`IsVisible=false`或计数归零冒充资源排空。
+3. 首装确实没有config时，仅在身份就绪后**自动公告本机身份**，零view/control能力、零Host监听；它不是自动共享。坏JSON、缺安全字段或旧配置均fail closed不公告；明确`AllowDiscovery=false`不被首装逻辑覆盖。历史`AllowViewing=true`也不授予本轮监听；只有显式开启成功后才更新view公告，Control始终关闭。证据是隔离目录+无socket discovery夹具，非两机发现或联网观察。
+4. Transport Control父会话`GetDisposalEvidenceAsync`为不透明只读证明：必须等**同一原Dispose报告任务**（允许原fault保留）及原Control读/子Video任务真正完成，再核实TCP/SSL双根、timer、reader、未交付owner、CTS/registration等独占根正常释放；不因Dispose fault本身就洗绿，也不消耗/改写原IO/OCE异常树。子会话证书仅internal。Presenter/Client分别固定到同Attempt的原清理Task和原worker，保留所有根与嵌套异常而非按主动关闭类型吞掉。App六类原停机Task逐项等待：只有**客户端**原Task fault、其余五项及全部复核成功，且同一客户端原Task对应的完整资源根释放证书和Host排空成立，才可报`DrainedWithDiagnostics`并退出；其余原fault/取消或根未证实均`Unproven`，未完成为`Pending`。退出虽可带诊断，绝不重写为`Clean`。
+
+**执行过的受控证据**：`ProductRealViewOnlyLoopbackTests`用独立远端密钥/证书、真实产品Client与Transport Host、Control+Video两条真实TLS、测试专用Loopback同子网策略和手动审批gate；审批前无View窗口/Producer，按真实RequestId明确批准ViewOnly后，一帧2×2真实JPEG经过网络、读取和WPF解码呈现在离屏`Show()`窗口，`BitmapSource.IsFrozen`、尺寸及像素有断言。第二次原读取仍在途时夹具模拟用户调用真实窗口`Close()`，原OCE或IO网络终止诊断保留，原Cleanup Task与证书同一，帧owner、连接/审批/registry和Producer原任务最终归还；错误窗留可见诊断与按钮供二次关闭。此端到端夹具的审批**不是**产品真实审批按钮；真实`WpfLocalApprovalGate`的Shown/勾选/拒绝/阻断/原`Closed` join另由`ProductHostApprovalRaceTests`验证。其他产品测试守护配置首装、Host启停、Client原清理历史及App退出分类；这些都不是两台物理机的用户桌面截图。
+
+**单点变异与误判保留**：首装不公告变异使3目标断言红/恢复33绿；坏配置错误公告变异使3红/恢复6绿；App旧六Task分类变异使4红/恢复10绿。仅称相应目标运行期断言，未将各次定向重复数相加当全量。较早首轮xUnit/构建警告、真实WPF `Closed`测试误注错、80ms时序假红及运行时TLS取消可能表现OCE或IO的竞速均保留原始记录；最终零警告不追认这些旧轮为通过，不把某个取消异常类型当唯一判据。
+
+**Last code commit：`b3e1273`（已提交Transport历史基线；本节产品App/Transport/Discovery等`src/tests`未提交）。Working tree at validation：`outputs/m5-host-video/final-m5-host-video-20261002-100918-163800800/summary.json`（status=passed，exit=0）对应2026-10-02当时未提交产品工作树。** 主线程核验16份原TRX的每个`UnitTestResult`及Counters：Debug/Release各**3712 PASS / 0 FAIL / 0 SKIP**，分项Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance469/Capture157/Sessions220；Debug/Release solution及IsolatedAcceptance四次完整Rebuild均零警告/错误；六直接命令rc0、六原日志SHA一致。冻结scope为src/tests/tools/scripts实际文件及指定根文件350项，冻结前后/六阶段边界逐SHA一致，合成SHA-256均`ad8462c3b5784cf995485e90fe5b8d96487379da435bdd1703c7c943eb8feeb9`，Git状态原bytes前后同SHA `afb6f939e5eb5efff2a076c4ade01d1ca7bb99460cc9ba745dc454583f7e62f2`；包括未跟踪Services及七份Acceptance测试。**此刻HANDOFF修改属于冻结清单内的文档例外，不能再声称修改后350/350与原快照相等；未做新的全量冻结、构建或dotnet测试。** runner及六个直接dotnet子任务已退出，但全机进程枚举未验证，不能推断间接子进程排空。§19.22历史3613/337不是此轮3712/350，旧警告或失败证据也不被新终验涂改。
+
+**剩余阻断/下一关**：还缺两台实际同LAN上产品GUI Host/Client查看用户**真实**主屏、实际WPF审批人工交互/断连与双方互联网前中后始终无影响的证据；还缺持续十分钟运行的内存增长、慢网积压丢旧与完整释放DoD，不外推真实混合DPI、所有桌面条件或互联网连续性。测试夹具loopback 2×2合成画面不能替代这些项；M5明确**进行中**。保持现网DHCP/IP/DNS/网关/路由/热点/ICS/网络类别/防火墙与系统防护不动，拒绝旧Undo、不绕桌面授权；不重跑M4、不出包、不提交本节未提交代码。
+
+### 19.24 已有配置发现字段严格校验与重新冻结（2026-10-02，未提交工作树，M5进行中）
+
+**发现与最小修复**：§19.23首次安装确实无`config.json`时，只公告身份且零view/control的合同不变；但**已有**配置若写了有效`allowViewing`和`requireLocalApprovalForUnknownController`、遗漏`allowDiscovery`，反序列化会取默认`true`并误公告；同名不同大小写重复字段可由后者覆盖。先仅增加隔离目录和无socket夹具的`ProductFirstInstallDiscoveryTests`/`ProductHostConfigTests`案例，在旧实现上42例中的**6个目标运行期Assert红、36绿**（`outputs/m5-host-video/20261002-discovery-field-red-{build,test}.log`和原TRX）。仅在`HostRuntimeService.LoadVerifiedConfigAsync`中用已有`ReadSingleSafetyBoolean`收窄`allowDiscovery`为**必须存在、唯一、布尔值**，再与`AppConfig.AllowDiscovery`核对；已有配置缺失、重复、字符串、null均拒公告/拒监听，明确`false`保持禁发现，真实缺文件才走身份公告独立入口。原目标重建零警告错误，42/42绿（`20261002-discovery-field-green-{build,test}.log`和TRX）。未改系统网卡/地址、防火墙、默认用户秘密或M4。
+
+**Last code commit：`b3e1273`（此前已提交的Transport基线；本节三个产品/测试文件仍在未提交工作树）。Working tree at validation：`outputs/m5-host-video/final-discovery-strict-20261002-103748-589902100/summary.json`（status=passed、exit=0、`summary.sha256`）对应上述修正后的未提交源码/测试。** 独立六阶段顺序执行Debug/Release solution与IsolatedAcceptance共四次完整Rebuild和两次solution `--no-build`测试，六原命令rc均0，四Build均**0警告/0错误**。16份原TRX逐`UnitTestResult`与Counters相符：**Debug 3721/3721、Release 3721/3721 PASS，0失败/0跳过**；各配置Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance478/Capture157/Sessions220。350项（含未跟踪Services两文件与Acceptance七文件、`HANDOFF.md`）在冻结前后及六阶段12边界逐文件SHA一致，合成SHA-256为`891220822d0bb6b731279b001d24c37578eb59f9a08c142c33cb3dfc3b575546`；Git状态原字节在冻结前后相同，摘要SHA `3641322e0d280b8f33fea1469694ef803ab3009ecdb5dda85b9f5018c93a3f92`。六原日志与证据有SHA记录；只证六直接dotnet子进程已逐个wait和runner返回，未枚举全机或证明间接子进程排空。旧§19.23的3712/350冻结仍是**修复前历史**，不覆盖、不反填为最新；本段编辑`HANDOFF.md`又成为冻结清单中的明示文档例外，编辑后不声称当前350项仍同SHA或另做全量测试。
+
+**当时的人工停点（2026-10-02，M5未完成）**：本机真实TLS loopback在手动测试gate下把合成2×2 JPEG呈现到离屏WPF窗口，不能替代两台实际同LAN产品GUI采集真实用户主屏、真实WPF人工审批与断连。还须两端人工确认连接前/中/后互联网始终无影响，以及持续十分钟内存、慢网积压/DropOldest和原清理DoD；不以测试绿数或0活动连接伪造这些事实。不改现网DHCP/IP/DNS/网关/路由/热点/ICS/网络类别/防火墙/系统防护，不执行旧Undo、不绕桌面授权、不重跑M4、不出新包，等待确实需要的第二台机器及人工观察条件后继续。
+
+### 19.25 M5 主机显式增强预览实验档（2026-10-08，未提交工作树）
+
+**用户反馈与阶段边界**：用户本轮确认已用10月2日提供的旧产品GUI实机包完成其测试，指出画面糊、帧率低、键鼠不能操控。旧包正是`FramePipeline`固定200ms间隔（目标5 FPS）、`VideoQualitySettings(5, 0.5, 60, false)`，编码按比例降到50%、Client WPF再拉伸，故“糊/低帧”符合代码事实。不能操控不是网络故障：M5强制ViewOnly且UI的控制开关灰显；控制权限隔离、本机审批与紧急停止不得削弱，键鼠是**M7**范围而非本片。用户“测试通过”未逐项提供两端互联网前/中/后、十分钟每分钟内存/慢网时延/原资源排空数据，不能外推M5 DoD全绿，也不能把旧包当新档已验。
+
+**最小实现及拒绝面**：沿用旧默认5FPS/50%/JPEG60且不改`config.json`，在产品主窗Host设置中新增一次性“本次增强预览：10 FPS / 75%（实验）”勾选；由本机显式“开启仅查看共享”在调用当时快照设置并经Host真实`CreateWithVideo`工厂注入每条会话的`FramePipeline`，管线只接上述默认或精确的10/0.75/60/false，不开放20/30FPS、100%或Auto（M6更完整的质量档与每会话独立调整后做）。其他不支持档位在主机获取身份、触碰网卡/监听之前直接拒绝；工厂也在调用借用的capture/encoder之前校验。捕获周期按目标FPS计算100ms/200ms，超预算保持既有“不追赶旧截止点”；raw与encoded仍各容量1–2并DropOldest、Client容量1+WPF单槽，视频认证、第二TLS、pin、serverProof和审批均未改。已在共享时切换勾选不会热改在途producer，UI提示必须先“紧急停止共享”完整排空后，再显式开启；Host已发布档位同启动尝试快照关联，重入不能静默换档。此档可能提高CPU和LAN码率，不宣称实际稳定10FPS或更清晰一定达标；也没有引入M7控制。
+
+**验证及交接**：先新增合同测试，旧产品入口缺`useClearerPreview`时Debug编译准确以`CS1739`红（`outputs/m5-host-video/20261008-preview-red-build.log`，此为预期接口红，不冒充运行期红）。落地后生产工厂转发、10FPS手动时钟、非法FPS/scale/quality/Auto拒绝、无分享权限时不开网/不建配置且UI勾选非持久，以及旧默认设置测试都实际通过。新增Host三个非法档用例均在取用户秘密/刷新网卡前拒绝；定向`Sessions`8/8与`ProductHostConfigTests`36/36绿，`outputs/m5-host-video/20261008-preview-gate-{sessions-test,app-test}.log`。当前源码的最终串行Debug/Release完整solution Build各零warning/error，两配置各8程序集**3733 PASS/0失败/0跳过**，原日志`outputs/m5-host-video/20261008-preview-reviewed-{debug,release}-{build,test}.log`，由逐项目最终行累加，不硬编码旧3721。较早工厂定向遇夹具原fake未放行Stop而看门狗30秒红，修夹具先放行后目标6/6绿（旧日志保留）；不是生产方案红。**Last code commit：`b3e1273`（旧Transport代码提交）。Working tree at validation：上述3733/配置对应当前尚未提交App与Sessions画质新增；本轮未做四Rebuild/16TRX/SHA冻结，不曾发布新版ZIP、未做新版两台真实GUI预览对照。**
+
+**当时的DoD与复测包（仅2026-10-08上午10FPS切片历史，非14点后的15FPS代码）**：先前`artifacts/m5-preview-20261008`独立`Release/win-x64/self-contained`发布WPF WinExe；经PE核对x64 GUI子系统，打包`outputs/m5-host-video/LanRemote-M5-增强预览-20261008-win-x64.zip`（435件、63,949,166字节，ZIP SHA256=`80df3c08fdd9ce1eb25a9b0473f0bb0d8076818e14e98c62904866b8cbc32fd5`），外置同名`.sha256.txt`、内含`START-HERE.txt`与各文件SHA清单，ZIP CRC及逐文件哈希已核。**此包绝不包含稍后新增的15FPS**，不能用旧哈希称已测新版。10月2日包原样保留；用户后来报告十分钟内存、慢网积压和双方上网逐项Pass，但尚未明确对应测试包哈希或原始采样，详§19.26。双端同哈希、现网不改且真实人工授权的约束不变，M7控制仍未启动。
+
+### 19.26 用户实机DoD逐项确认后推进M5 15FPS档（2026-10-08，未提交工作树）
+
+**用户验收事实及证据级别**：用户明确：“十分钟内存、慢网积压和双方始终能上网的逐项数据测试通过。可以继续下一步。”本节将这些条目**记作用户确认通过**，不是我在两台机器直接采集/复核：尚无两端原始内存分钟采样、慢网显示帧龄/丢旧时间线、过程中的双方联网时间线及运行包SHA。因此不填虚假数值，不将用户认可的旧画面或10FPS包成绩自动外推后来15FPS切片。M5原始§07“然后”仍列10/15/20/30FPS及scale/quality，M6才是多显示器、画质预设/每Session独立和自适应；故此轮未跳M6或提前开放M7键鼠。
+
+**本轮最小生产改动**：保持旧默认5FPS/50%、先前10FPS/75%/JPEG60，新增与10FPS互斥的临时“本次流畅预览：15 FPS / 75%（实验）”Host勾选；两勾选自动互斥，本机未授权时不会启动Host，显式同时传两标志直接拒绝；不写`config.json`、不热改在途会话，B必须先紧急停止/完整排空再显式开启。`MainWindow`仅传点击时快照，`MainViewModel`据选择单值映射冻结`VideoQualitySettings`、UI显式报告实际已发布档；`HostRuntimeService`和`FramePipeline`/工厂将白名单扩为精确三个档，拒不在名单的fps/scale/quality/Auto，取身份/密钥/网卡前拒绝Host非法档。管线按目标fps计算采集间隔并保留双级1–2拥有型DropOldest，15 FPS的手动时钟经`.NET Task.Delay(TimeProvider)`定时器毫秒粒度按66ms登记（`TimeSpan.FromSeconds(1/15)`名义66.666ms不等于fake计时器的66ms），测试以实际调度语义约束且不假称真实稳定15FPS。认证双TLS、pin、HMAC/serverProof、ViewOnly隔离、审批、紧急停止、同子网与现网不变；未引入M6多屏或M7注入。
+
+**当时的实测验证与停点（15FPS阶段历史）**：中间15FPS用例曾因测试把名义66.666ms误当`Task.Delay`实际66ms而发生**1红/11绿**，并非生产发现问题；保留`outputs/m5-host-video/20261008-15fps-initial-sessions-test.log`，调整测试对齐实际计时器后Sessions目标12/12、App配置目标39/39绿。当时的未提交源码串行Debug/Release solution build各0警告错误与两次`--no-build`完整solution test，各8程序集**3740 PASS/0失败/0跳过**（Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance485/Capture157/Sessions232），原日志`outputs/m5-host-video/20261008-15fps-{debug,release}-{build,test}.log`；这是文本结果统计，**未运行四次Rebuild/16份TRX/全源码SHA冻结**，只证当时本机自动化。**Last code commit：`b3e1273`（旧Transport已提交历史）。Working tree at validation（当时）：上述3740/配置对应未提交App/Sessions 15FPS切片，不能拿来冒充后续20FPS代码。** 当时未发布/双机安装15FPS新包，不能用10FPS包验证。后续20FPS进展以§19.27为准；M5继续进行中，M6/M7未开始。
+
+### 19.27 继续M5主机固定20FPS/75%单轴片（2026-10-08，未提交工作树）
+
+**范围与安全边界**：保留默认5FPS/50%、实验10/15FPS/75%（均JPEG60、Auto=false），仅新增一次性的本机主机“本次快速预览：20 FPS / 75%（实验）”勾选。三个试验勾选任意置真会清其他两个，点击显式开启时再次检查多选并快照固定`VideoQualitySettings`；未授权时不创建主机/网络/配置，勾选不持久，已监听时仅显示实际已发布的5/10/15/20档并提示先紧急停止且完整排空后重新显式开启。不偷偷按`Balanced`20档作为默认、不热切现有producer。Host/FramePipeline/Factory精确增加`(20,0.75,60,false)`白名单，当前仍拒30FPS、非本片scale、非JPEG60及Auto，识别非法设置先于取身份/网卡；捕获名义间隔50ms，原始双级容量1–2拥有型DropOldest/有界客户端呈现不变。真正能否到达20FPS、CPU/内存/慢网影响均未双机实测，不能拿用户较早Pass直接外推本轮。Control/Video双TLS、pin、HMAC、DPAPI、RFC1918同子网、ViewOnly审批/紧急停止/键鼠灰显不变，未改系统网络、未动原始规格。
+
+**先红后绿与证据**：先仅扩Sessions两目标用例，旧白名单运行时明确**2失败/15通过**，红日志`outputs/m5-host-video/20261008-20fps-red-sessions-test.log`；未洗绿历史。实现后单元/产品定向`Sessions`17/17和`ProductHostConfigTests`45/45绿（含互斥、无权限无网络、Host拒30FPS与不允许质量/缩放组合）；日志`outputs/m5-host-video/20261008-20fps-target-{sessions-test,app-test}.log`。最终当前未提交工作树Debug/Release solution Build各**0 warning/0 error**，两配置各8项目**3751 PASS/0失败/0跳过**：Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance491/Capture157/Sessions237，日志`outputs/m5-host-video/20261008-20fps-{debug,release}-{build,test}.log`，逐项目结果由本机独立统计。**Last code commit：`b3e1273`（仅旧Transport历史提交）。Working tree at validation：上述3751/配置对应未提交App/Sessions生产+测试工作树**；没有四次完整Rebuild/16TRX/源码SHA冻结，不能假称当前20FPS新包已有真实双机/十分钟/慢网验收。旧10FPS包`80df...`与15FPS前片均不含本片20FPS，不覆盖旧ZIP。此处是20FPS阶段历史；30FPS和手动画质随后的未提交实现与验证详§19.28，M6多屏/每会话画质、M7键鼠未开始；不重跑M4、不改现网、不得降低审批安全。
+
+### 19.28 M5 手动帧率、缩放和 JPEG 质量接线（2026-10-08，未提交工作树）
+
+**自动继续的两片**：用户要求不依赖人工的地方继续，不将M5阶段性目标绿等同最终实机DoD。先仅对30FPS/75%/JPEG60新增Sessions两目标，旧白名单2失败/19通过，原日志`outputs/m5-host-video/20261008-30fps-red-sessions-test.log`；再最小扩Host/App与FramePipeline/Factory，四个临时实验FPS勾选互斥、已监听只能先紧急停止并完整排空再显式开启，原默认5/50/60不变。30FPS目标线程池`Task.Delay(TimeProvider)`实际毫秒节拍约33ms，并非稳定实机30帧承诺。定向Sessions21/21、ProductHostConfig50/50绿，原日志`20261008-30fps-target-{sessions-test,app-test}.log`；当时双配置各8项目**3760 PASS**/两Build零warning/error，`20261008-30fps-{debug,release}-{build,test}.log`。此为下一质量切片之前的历史，不冒充当前最终源码。
+
+接着仅补原始`02_PRODUCT_SPEC.md`手动范围：本机主机四个实验FPS勾选与默认5FPS维持，额外显式勾“本次手动缩放/JPEG质量”后可取scale 0.50/0.67/0.75/1.00、JPEG整值40..85；不勾则默认5/50/60或实验FPS固定75/60。手动范围仅启动快照，不写config、不提供M6的Auto/每会话单独选择、不热改在途Producer；单独选择下拉不授予共享。本机显式点击、磁盘权限配置复核、真实WPF本机审批、认证Control/Video独立TLS、pin/serverProof、DPAPI、RFC1918同子网和紧急停止均不放松。FramePipeline公开只读`ValidateSettings`让Host在取身份/网卡前复用同一合法性谓词；Factory构造前也拒，绝不Clamp非法/NaN/Infinity/Auto到Balanced。WPF JPEG编码器本来支持floor缩放和JPEG40..85，输出仍被**32MiB仅压缩负载上限**限住，超过拒帧不等于可无限解码；对新100%及高质量组合把Client原16,777,216解码像素预算提至`FrameLimits.MaxDecodedPixels`单一常量，GDI在建DC前及会话工厂主屏枚举后、建encoder前拒超过预算的高分辨率主屏，拒时原capture依赖回收、未采集大帧。16,777,216像素预算不代表物理RAM多份副本可清零或所有主屏实测；过大屏目前**明确拒绝而非静默缩小**，是兼容性限制。
+
+**证据与停点**：旧白名单手动5组测试目标**5红/0绿**，`outputs/m5-host-video/20261008-manual-quality-red-test.log`；实现后Sessions手动+拒非法+像素预算目标16/16、Capture真实JPEG各scale/质量与合成GDI边界18/18、App Host配置57/57绿，`20261008-manual-budget-{sessions-test,capture-test,app-test}.log`。首次App非法手动画质夹具曾错误要求`LoadAsync()`后没有DPAPI secrets（事实上首装Load已创建身份），5目标失败；将期望修为原身份文件字节不变后57绿，旧失败原日志保留。最终当前未提交工作树Debug/Release方案Build各**0 warning/0 error**，8项目各**3772 PASS/0 FAIL/0 SKIP**：Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance503/Capture159/Sessions244，原日志`outputs/m5-host-video/20261008-quality-{debug,release}-{build,test}.log`。**Last code commit：`b3e1273`（旧Transport历史）。Working tree at validation：3772/配置对应未提交App/Core/Capture/Sessions与测试；此轮只两次solution Build、无四完整Rebuild/16份TRX/源码SHA冻结，未制作或两机安装这版新包，不将用户此前10分钟内存/慢网积压/两端持续可上网确认外推至当前30FPS/100%/JPEG85。**
+
+**该阶段的停点（v3冻结/新包之前）**：M5手动范围源码阶段接线已自动化通过，产品新版双机真实主屏画质与帧率、最坏手动组合下十分钟内存/自然慢网和双方互联网连续性的逐项证据未有；随后独立冻结与新哈希物料详§19.29。不能为追求无人值守放松审批、网配及上网边界。旧10FPS ZIP不含15/20/30FPS及本轮手动画质，不覆盖旧包、不拿旧包替新包验。
+
+### 19.29 独立冻结中发现停机竞态并生成M5新哈希候选（2026-10-08，未提交工作树）
+
+**不能洗绿的两次失败**：复制原已冻结验收器到`outputs/m5-host-video/final-m5-quality-20261008-v1/`独立运行，四完整Rebuild全部0警告错误、350项源/文档/Git状态12边界不变；Debug八项目3772 PASS；Release真实`TransportHostTests.Stop_Cancels_Connections_Stuck_In_Handshake_And_Releases_Admission`在pending/首次accept与Stop竞速中报告`InvalidOperationException: Not listening`，Release 3771绿/1红，`summary.json status=failed exit1`。原测试单独重跑1绿只说明时序性，不算修复。第一次候选在Stop与首次Accept间短锁后、又用`listener.Server.IsBound`判已关闭socket，第二轮独立`final-m5-quality-20261008-v2/`的Debug中实际`ControlClientConnectorTests.Duplicate_Challenge_Unknown_And_Malformed_Replies_Fail_Closed(unknown,pending:true,...)`释放主机时报`SocketException: OperationAborted`，Debug 3771绿/1红，冻结源仍未漂移，v2失败保留。
+
+**最小止血**：`TransportHost.AcceptLoopAsync`与`StopCoreAsync`只用一把短锁阻止Listener停止抢在首次`AcceptTcpClientAsync`之前，原`ValueTask`在锁外等待；停机accept遇**停机已请求且**SocketError仅为OperationAborted/Interrupted/NotSocket时当预期关闭；其它SocketException及任意InvalidOperationException仍保留给聚合错误和Dispose诊断，不再靠`IsBound`可变状态当根证据。没有长时间持锁、没把TLS/auth/审批错误洗绿或修改系统网络。现有Host 13个目标与连端相关共23个定向绿，最新v3全解双配置见下。没有额外针对每一SocketError分支的人工调度单点变异，所以不冒称彻底覆盖所有Windows竞速组合。
+
+**最终独立冻结与边界**：`outputs/m5-host-video/final-m5-quality-20261008-v3/summary.json`真实status=passed/exit0、`summary.sha256=fc57ba7fb50d8ac65b8658c043e7e86d297da3ab98a3081b98c901554841455c`；350项源/测试/工具/脚本+根HANDOFF实际清单前后与6阶段12边界逐项SHA恒定`dbff72f66cbbdabe6ea44c5d260df3ac3f8d079fa8b301b471d99c8ffd0329d5`，HANDOFF/docs/.workbuddy memory与Git status原字节前后一致；六原dotnet子命令均rc0且wait，Debug/Release的solution与IsolatedAcceptance**共四次完整Rebuild**均零warning/error，16TRX逐项/Counters Debug和Release各八项目**3772 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance503/Capture159/Sessions244）。摘要SHA与TRX由另一独立命令核对；只证明runner直接dotnet子进程结束，不枚举全机或隐含子进程。**Last code commit：`b3e1273`（Transport旧历史）；Working tree at validation：当前M5手动画质/主屏预算/Host accept停机修复及产品App仍未提交**。本段编辑HANDOFF属于冻结清单文档例外，不称现时350项仍与冻结全同。v1/v2失败记录不重写。
+
+**新候选与真实停点**：用v3冻结同源350项字节核对后，单独`Release/win-x64/self-contained`发布到`artifacts/m5-manual-quality-20261008/`；PE x64 GUI子系统（可双击WinExe，不是旧M4工具/脚本），独立生成`outputs/m5-host-video/LanRemote-M5-完整手动画质-20261008-win-x64.zip`，435件/63,951,214字节，ZIP SHA256=`0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945`，外置同名`.sha256.txt`、内置`START-HERE.txt`和`SHA256-FILES.txt`逐文件清单；全部ZIP CRC/逐项SHA通过，排除个人config/secrets/log、脚本/PDB，不改或覆盖任何旧包。另附`M5-手动画质双机复测说明-20261008.txt`，明确两台**相同新哈希**机器上真实人工审批/上网全程、5FPS基线及30FPS+100%/JPEG85压力档十分钟逐点内存和自然慢网追新；高于16,777,216像素主屏拒绝，不要求用户改分辨率或防护。本包**未在两台机实际运行**，不把旧用户Pass外推新版，M5产品新版DoD尚待人工条件；在此期间可独立开发M6本地多屏只读枚举，但不能借此宣称M6屏切换/鼠标坐标DoD完成或开启M7控制。
+
+### 19.30 M6 本机显示设备只读目录最小切片（2026-10-09，未提交工作树）
+
+**接手复核而非记忆推断**：连读顶部/§1/§19.23–29、ADR045/067–073和原规格M5/M6任务及DoD；实际git状态/最近提交/diff含未跟踪App Services与产品测试核查后，接手前无M6枚举/远端metadata/切屏实现。`b3e1273`仍是最近代码提交（后有文档提交），未提交产品成果保护，未reset/checkout/clean/提交/推送。既有M5 v3原16TRX只读累加各3772 PASS，摘要SHA及完整手动画质ZIP SHA与§19.29相符，接手时350项原清单只有HANDOFF变化；未重跑旧冻结。顶部旧“不称已出包/用户明细尚未得到/M6未启动”已按最新范围纠正，不否定§19.26用户旧轮逐项Pass。
+
+**本片实现（ADR-074）**：新增`src/LanRemote.Capture/GdiDisplayCatalog.cs`，复用只读`EnumDisplayDevicesW`/当前模式API；`GdiNative.cs`仅拆出二方法`IGdiDisplayNative`供目录借用，原native调用不变；`DisplayInfo.cs`只修ID注释（原始枚举索引，非HMONITOR/持久身份）；新增`GdiDisplayCatalogTests.cs`。目录过滤未附着/镜像驱动，保留系统顺序、原始索引、友好名回退、主屏标记、物理负坐标及竖屏尺寸。两遍完整附着设备身份与核心模式（含panning）一致才交付只读列表；设备名非空/唯一、恰一主屏、模式几何字段齐全，正宽高与right/bottom须可用int表示。每遍含被过滤项在内最多256原始条目，index256只探测结束，超限拒绝不截断，无自动重试。元数据大屏可列出，不分配DC/像素、不改变DPI/权限/分辨率，不提高M5帧预算，不暗授次屏采集。
+
+**保留的生产边界**：原`GdiScreenCaptureBackend.GetDisplays/CaptureAsync`仍只主屏，Session factory仍`Single(IsPrimary)`；新目录不接App/Session/Control/Video消息。当前认证Control单读monitor仍把额外数据作为协议错，不能为了下一步直接并读或移除守卫；原LRVF头也没有显示器拓扑/切换关联。TLS/pin/HMAC/serverProof/DPAPI/RFC1918同子网/真实本机审批/ViewOnly/紧急停止/队列有界及config严格发现合同均未改。未动网络、防火墙、防护、旧Undo、原始规格或旧ZIP。
+
+**真实红测与修正**：`outputs/m6-displays-20261009/initial/`新增80项首跑build rc0、test rc1，**77绿/3红**；两项真实生产缺口是第二遍`PanningWidth/Height`变化未比较，一项为fake按名称First误命中同名镜像条目的无效mode。分别补完整比较和修正fake只选择附着非镜像设备；旧红TRX/log/summary保留，不作为变异kill或洗成绿。`corrected-capture/`原命令均rc0、build0警告错误、Capture全量**239/239 PASS**。
+
+**新独立冻结与交叉复核**：`outputs/m6-displays-20261009/final-v1/summary.json`真实**passed/exit0**；solution/IsolatedAcceptance的Debug/Release四完整Rebuild全部0警告/0错误、六直接命令rc0/wait；16TRX逐项UnitTestResult与Counters双配置各**3852 PASS/0 FAIL/0 SKIP**，分项Core197/Security66/Protocol303/Integration3/Transport2297/Acceptance503/Capture239/Sessions244（目录80项）。352项源/测试/工具/脚本/指定根文件含未跟踪项，前后及12边界逐SHA一致`02d3371bc2366c9f23f1772857c1fa077c6685cd8a07749f611453e28bc2a87d`，docs/memory与Git原状态冻结期间不变；摘要SHA`21c88724c953e7701a3f090897dc42042ec17f9a08b82e04e1b9b5a0b2118f0f`。另一独立命令`audit_evidence.py`实际核对全部原证据SHA、TRX/Counters/程序集覆盖、12边界和当前源码，结果`independent-audit.json` passed；相对接手旧350项仅GdiNative/DisplayInfo两文件变化，另增目录/测试两文件，其他旧产品文件原字节保持。只证六直接dotnet子进程wait，不证明全机或间接进程排空。**Last code commit：`b3e1273`；Working tree at validation：上述未提交M6本机目录叠加既有M5产品成果。** 随后HANDOFF/docs/memory是明示文档例外，不再声称现时352项全部同冻结SHA。
+
+**可证范围与剩余**：本机真实只读测试Debug/Release都输出`OrayIddDriver Device`、index4、主屏、(0,0)、1920×1080，仅观察到一个设备；合成用例覆盖三屏负坐标/竖屏、过滤、身份/模式变化、上限、异常保留与不可变快照，绝不把单一当前桌面或合成多屏写成真实物理多屏/混合DPI。两遍一致不保证原子拓扑/ABA/返回后不热插拔，枚举FALSE也不能区分全部native失败。第257项为附着设备有正反边界测试，第257项恰为过滤项尚无独立定向或guard顺序变异，保留此覆盖限制；不以静态代码检查冒充变异实测。**评审收件勘误（本轮续作）**：上一轮实际上已收到完整只读静态评审，指出第257项为过滤条目的覆盖缺口，未报告P0/P1；后续一次网关流错误不应否定已收到的正文。该评审不包含运行测试/GUI/物理多屏或双机验收，不计作独立实测通过。本机最小切片完成，不宣称M6远端metadata、切屏、鼠标坐标/每Session质量DoD完成，M7不启动。
+
+**交付与下一关**：本轮仅结果`outputs/m6-displays-20261009/M6-本机多屏只读切片验收-20261009.txt`及新冻结证据；未出包含M6目录的新GUI包、不交付控制台/脚本替代品。原M5 ZIP仍为§19.29 SHA`0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945`，不包含目录；新版双端同哈希、真实主屏/人工审批/断连、双方互联网全程无影响、基线及30FPS+100%/JPEG85十分钟逐点内存和自然慢网追新仍待人工条件。用户旧轮Pass保留不跨版外推。后续可独立做M6远端元数据协议设计/合成测试，不能谎称整个M6已因第二台机器阻断；不无理由重复已完成冻结或M4人工验收。
+
+### 19.31 M6 过滤超限回归与host_status纯元数据合同（2026-10-09，未提交工作树）
+
+**范围与工作树**：按磁盘顶部/§1/§19.30、ADR074、原规格04§6/11和07的M6任务及实际源码重新定位；原未提交M5/M6成果保留，最近代码提交仍b3e1273，无提交/推送。只改既有目录测试增加四例，新增Transport `DisplayCatalogFrame.cs`及`DisplayCatalogFrameTests.cs`，未修改原始规格、主屏采集或live Control。§19.30的3852/352项是历史，不冒作新冻结。
+
+**目录guard补强**：第257个原始条目为detached或attached+mirroring、发生于第一/第二遍，共四个新增实例；连原attached两例，正常源码6绿。把guard挪到过滤之后的真实变异build0/test1，4红2绿，四红是继续读取index257触fake范围哨兵，异常不符精确预期，原证据`outputs/m6-displays-20261009/guard-v2-*`保留。finally精确恢复生产源码SHA `a4bccbadde66aac52cdce18dd29644117d49eb5e367a3a00451de408d480dabb`，Capture全量243绿。正常生产guard本来正确，补测不是修复四个产品缺陷。
+
+**纯合同（ADR075）**：`host_status`根恰type/protocol/seq/timestampMs/displays，条目恰id/name/x/y/width/height/isPrimary；不冒充display_changed或选择指令。256KiB载荷/256项/ID0..255唯一/恰一主屏/128UTF16名称，拒重复含转义同名、未知、null、非法整数词法/UTF8/代理项与几何溢出；long几何允许负坐标和超采集预算元数据。构造有限索引复制、只读不可变值，Serialize返回独立byte[]。第257项起始token已读，但字段/DisplayInfo构造之前拒绝；不称完全未读取其字节。只做纯解析，不承担认证、deadline、seq排序或帧坐标关联，256KiB不等于堆分配总量上限。
+
+**目标与变异证据**：`outputs/m6-metadata-20261009/initial/`首次516绿；收紧Count变化必须拒绝及最坏writer极值测试后，三处定向变异分别最大长度1红、重复字段24红93绿、long求和改unchecked int几何5红，各build0/test1。`mutations/summary.json`记录原/变异/恢复SHA，全部恢复到 `aeec523ada052f8cc7ddedbfaf56b980d9e54d659f12030990c051d43fea45f7`；`restored/`build0/test0、516绿。原红日志/TRX保留，不编造正常元数据实现首次有bug。收到的目录/元数据静态评审未报告确认P0/P1，不计为独立运行测试。
+
+**新冻结实绩**：`outputs/m6-metadata-20261009/final-v1/summary.json` **passed/exit0**；2026-10-09 11:37–11:44本地时间执行，四次solution/IsolatedAcceptance Debug/Release完整Rebuild均0警告0错误、六直接dotnet命令rc0且wait。16TRX逐UnitTestResult/Counters动态统计，Debug/Release各**4372 PASS/0 FAIL/0 SKIP**：Core197/Security66/Protocol303/Integration3/Transport2813/Acceptance503/Capture243/Sessions244（元数据516、目录84）。354项源码/测试/工具/脚本/指定根文件前后及12边界逐SHA一致，清单SHA `61e91e77b0b6857142c90004d7b62bd3eb51da344df8c89fd80b166a1dd49458`，摘要SHA `c7376e1ebf3af24edcc397d2d236e974c5ed89fe9eaff286a9f1918b79918498`。冻结期间docs/memory/Git status不变；另一命令`audit_final.py`核对原证据库存、TRX、程序集覆盖、当前源码及全部变异恢复，`independent-audit.json` passed。相对上一目录冻结原352清单仅HANDOFF/目录测试变化，另新增codec/测试两项，其他旧源码原字节保持；只证明六直接子进程wait，不外推全机进程排空。
+
+**边界、勘误与下一片**：真实只读两配置仍仅OrayIddDriver Device/index4/主屏/(0,0)/1920x1080，不是物理多屏/混合DPI/GUI实测。上一轮完整静态评审实际已收到，后续网关流错误不否定正文；旧结果TXT及render脚本的错误收件句保留为历史，本轮结果明确纠正。Host审批_pendingRead是只保留计数的async包装Task<int>，局部首字节不可取；Client monitor也仍固定单字节，双方live拒额外数据，不新增并读。下一无人片先验证首字节所有权原语，再设计方向/协商/帧deadline/dispatcher和原I/O join；不能直接宣称remote metadata已传输。M6切屏/帧坐标关联/每Session质量未实现，M7不启动。旧M5 ZIP SHA仍 `0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945`、63,951,214字节且不含M6，未打新GUI包，新版双机DoD待真人条件，旧轮用户Pass不质疑不跨版外推。冻结后HANDOFF/ADR/memory是文档例外；下一切片改源码后须另验，不继承本轮4372冻结到新字节。
+
+### 19.32 M6 首字节所有权前置原语（2026-10-09，未提交工作树，独立验证完成）
+
+**续作范围（ADR076）**：§19.31新冻结及独立核对完成后，继续无需真人的小片。新增internal `src/LanRemote.Transport/ControlReadAhead.cs`，尚无任何live生产调用；39项合成测试与完整冻结均完成。构造无IO，Start唯一worker在gate内登记；流同步前缀、AsTask及原Task await在锁外完整归worker。固定一字节、None取消令牌，无timer/队列/帧解析/seq；仅原worker退出且未Stop/未消费时TryTake一次不可变byte或EOF，0字节不等于EOF。Snapshot保存不可变终态及原异常树，Completion表示排空而非读取成功。
+
+**停止和清理**：RequestStop只逻辑失效，可短暂竞争gate但不等待IO/回调，不关闭借出的流；owner仍须锁外关闭并await Completion。停止后的迟到字节不交付，原读故障仍保留；Take已先赢的不可变字节不能撤回。保留原Task多fault/嵌套Aggregate，不用await首异常替代所有兄弟。只有取得Task且await退出才清本方buffer；ReadAsync/AsTask抛错而未知隐藏IO的违规流不清写借出buffer、不假称已join。该组件保证自身唯一读，不强制外部其它对象不读同流；不接管Host现有只含计数的pendingRead，不证明首字节到达时间或帧deadline。
+
+**目标验证实绩（后续完整冻结见下段）**：`outputs/m6-read-ahead-20261009/initial/`首轮build0/test0、33 PASS，但完整build日志有两处CS8619测试可空性警告，不能称此首轮零警告。补重复同一异常叶子及迟到ObjectDisposedException×none/before/race后`coverage-v2/`39 PASS，仍有相同两处CS8619。三处真实变异single-take为8红31绿、stop-publication为5红34绿、fault-siblings为6红33绿，各build0/test1，无Guard代替目标断言；原生产字节恢复SHA `f23c12393131fd2f9afb4efb03f5d810de8cda222c29ee20a118f116b3b059ac`，`restored/`39 PASS。随后只给测试两处Task.Run显式可空泛型，不改断言/生产逻辑，`clean-target/`build0/test0、39 PASS且零警告零错误。原日志/TRX/变异源码/恢复SHA全部保留，定向红不冒作正常生产缺陷。上述目标阶段尚不能沿用4372证明新源码全量验证；随后独立新冻结结果如下。只读设计和新代码静态审查未报告确认P0/P1，仅供设计核对，不等于实际运行。本片不改Host审批/Client原monitor/Control额外数据拒绝，也不发送host_status、不改LRVF、次屏或键鼠；下一live接线仍需协商/方向白名单、帧预算、原IO交接与有界发布设计。
+
+**新完整冻结实绩**：`outputs/m6-read-ahead-20261009/final-v1/summary.json` passed/exit0，2026-10-09 12:08–12:15四Rebuild零警告错误、六命令rc0且直接子进程逐个wait，16TRX逐项/Counters核对Debug/Release各**4411 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport2852/Acceptance503/Capture243/Sessions244；首字节39）。356项前后及12边界原字节一致，清单SHA `7bb79707ebccfaae914e5d0611f336d07802ebe292533e26e43d9a7122136e09`，摘要SHA `6e64943e5452707fe4785007362a80d6cebcb62e5aa2ad9d37748cc14b583d10`。独立`independent-audit.json` passed，复数原TRX、日志SHA、源码/文档边界及旧M5 ZIP；相对元数据冻结原清单仅HANDOFF变化、另增本片两个文件。冻结后HANDOFF/ADR/memory记账是文档例外，不声称当前所有文件同原SHA。
+
+**审查边界与续作**：最终只读审查完整正文已收到，未报确认生产缺陷；重核三组目标红合计19，无Guard代替断言。反射await链依赖本轮.NET私有布局；夹具finally先开闸再Guard等待，只证本次有界故障，不保证任意永久阻塞流退出或全部清理完成。下一无人片为独立有界单帧接续：用已持有首字节读余3前缀，uint限长后单payload；暂不引入deadline/timer/协商，不接live。Host旧pendingRead仍未接管；旧M5 ZIP不变、不含M6，新版双机DoD仍待真人；M7不启动、不改系统网络/防护、不提交推送。
+
+### 19.33 M6 有界单帧接续最小片（2026-10-09，未提交工作树，独立验证完成）
+
+**范围（ADR077）**：§19.32首字节新冻结通过后自主继续，新增internal `ControlFrameContinuation.cs`及对应测试；独立生产Transport Debug构建已成功、零警告错误。首次目标109 PASS，增加独立小额度限长拒绝Fact后baseline 110 PASS；四处定向变异和恢复后110绿已完成（下段），新全量冻结各4521 PASS已通过（下段），4411仅上片历史。无live调用，不改原FrameReader/Host审批/Client monitor/元数据codec或M5产品。
+
+**设计**：已持有首字节→余三字节→uint验0/超限→固定有界payload，max 1..Control1MiB，无下一帧预读、无队列/重同步/JSON/认证；调用者保证唯一读者及之前原读结束。每次借用前清旧original，取得Task无论Stop都先await；原Task多fault与停止并列保留，无Task异常标BorrowExitUnproven且不清整块当前数组（其它已安全数组可清）。TryTake一次移交可变byte[]清内部引用；Stop同gate只清静止未交付数组，不擦已移交结果、不触在途区、不关流/回调。此片完全无deadline/timer/CTS，绝不接live，不宣称首字节到达时间或有限时长退出。后续统一预算/协商/方向仍待，不改网/防护、不启动M7。
+
+**目标与变异实绩**：`outputs/m6-frame-continuation-20261009/initial/`109 PASS，构建0警告0错误；补`TinyConfiguredLimitRejects65BytesBeforePayload`后`baseline/`110 PASS。四处真实生产变异：prefix-offset 9红0绿（余前缀offset断言）、length-limit 1红0绿（65字节/64上限错误进入payload，Assert.Single）、stale-original 15红3绿（BorrowExitUnproven被旧Task误清的状态断言先命中）、fault-siblings 8红12绿（原Aggregate退化为首IOException）。均build0/test1，原日志/TRX与变异源码/恢复SHA保留；`restored/`build0/test0、110 PASS。生产原字节SHA `2c31ee8b9e43b9f618a383b4aeef866c4017eaea0e7796897b017e7d950f21a0`，测试SHA `c84fa420c61ed2c7faed38ed57c54452bba3687245bfff3537eb30f070667c92`。这些红是定向合同验证，不是正常产品自然缺陷；未对巨量长度理论项放开上限运行。正常用例覆盖整块数组不被清写，但stale-original变异在状态断言先红，不能称已到后面的数组断言。新完整冻结结果如下。
+
+**新完整冻结实绩**：`outputs/m6-frame-continuation-20261009/final-v1/summary.json` passed/exit0，12:37–12:44四次solution/IsolatedAcceptance完整Rebuild均0警告0错误、六直接dotnet命令逐一wait且rc0；16TRX逐项/Counters/程序集复核Debug/Release各**4521 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport2962/Acceptance503/Capture243/Sessions244，单帧110）。358项前后及12阶段边界SHA一致，清单SHA `53f1814023469d3d3e6fcddeeed0b2c9b0fd6d9e86d5b6758f8aa4d473ef69b3`，摘要SHA `30defbb5fd6597005fc1c884e34a79ac6a90677432418b6fb360ae5112f51355`。独立`independent-audit.json` passed，重数原TRX、日志/源码SHA、当前文件重新枚举、文档/Git字节、四变异过滤器/恢复绑定及目标Assert消息/栈。相对上片原356清单仅HANDOFF变化，新增本片生产/测试两文件；旧M5 ZIP SHA保持0137f495…不含M6。冻结后HANDOFF/ADR/memory是文档例外，不声称当前清单仍完全相同；边界采样不是连续文件锁，只证明六直接子进程wait，非全系统排空。
+
+**审查及下一片**：完整只读审查已收到，未报确认阻断性生产缺陷；不替代实机运行。反射await探针依赖当前.NET私有布局，Guard/finally不证明任意永久阻塞条件下无后台任务；预算只指组件自有帧数组，非全机内存/异常树上界。下一独立片为显式观察锚点的绝对预算和timer原释放所有权：不把Start/Take当首字节物理到达，不改已验首读/接续与live审批；仍须之后组合验证、唯一读写者/协商/目录关联。M7不启动，无新GUI包/提交/推送/改网，M5新版双机DoD不跨版外推。
+
+### 19.34 M6 独立显式锚定时间预算（2026-10-09，未提交工作树，独立验证完成）
+
+**范围（ADR078）**：§19.33完成后继续无人片，新增`ControlFrameBudget.cs`和对应测试，生产独立Debug构建0警告0错误、rc0。首次目标101 PASS但测试两处CS8619，runner exit2；仅补两处Task.Run显式可空泛型后baseline/restored均101 PASS、0警告0错误，原证据保留。新完整冻结各4622已通过（如下），4521仅前片历史。显式clock/observedAt/observedFrequency/budget，构造纯参数；固定worker锁外取时与timer操作，精确Int128累计预算/频率/倒退检测，0预算无外部操作。timer禁用创建、回调有界合并，Stop纯标记通知，Finish须原释放后末检，不把Decision当join。Error与CleanupError分槽，无Task释放异常标未知退出。
+
+**实际目标/变异**：`outputs/m6-frame-budget-20261009/`保留initial/baseline/三mutation/restored。anchor-renewal和final-sample各1红，实际先命中Expiry中的TimeoutException为空断言（C#参数先求值，未执行后续状态断言）；original-dispose 1红，实际命中AssertAwaitAsync内Completion提前退出的Assert.False自定义消息，不是Guard超时。三次均build0/test1且0警告0错误，精确恢复生产SHA `fd6e5253038bb57a8bda1488291d3ad92fdfbeb9818aa77b4181fd8466963888`，测试SHA `a3644e1b1b117b3e982ed96bc52efeb6a1eaec5d923e062cfc06eb8b8f20e086`。构造前过期旧anchor使用独立Fact，不将构造后推进时钟场景误作该变异击杀。真实System timer MaxBudget Create/Change用例已在101目标中实际运行通过，但不等待49.7天到期。
+
+**边界与审查**：最大有限due-time4,294,967,294ms仅原语支持上限，非产品默认帧预算；已验证System timer可Create/Change，不证明49.7天后回调精度。最后采样到gate发布非原子现实时间裁决，不替代payload/父会话提交。完整只读审查未确认阻断生产缺陷；反射await探针依赖当前.NET私有布局，合作型异步IValueTaskSource完整桥接未直接专项覆盖，三处变异不代表所有近似破坏。首读仍无观察锚点接线、接续无时间预算，真实Control仍拒额外活动；不改两读原语/认证/网络/防护，不启动M7。单帧4521/358项是前片冻结，不当本片证明。
+
+**新完整冻结实绩**：`outputs/m6-frame-budget-20261009/final-v1/summary.json`及独立审计passed，13:07–13:13四完整Rebuild零警告错误、六命令rc0且直接子进程逐一wait，16TRX双配置各**4622 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport3063/Acceptance503/Capture243/Sessions244；预算101）。360项前后及12边界一致，清单SHA `105496df558731d53beda71fd7cfd00ffc5d051b15cb760423cbc0422923d449`、摘要SHA `c7c755481528cb19e32ac49835e8b0e63dd6461a9a3aef75f6c947e73e27f1ff`。独立核对重数原TRX、两CS8619原失败门禁/两处可空标注字节变化、三变异目标消息/栈/恢复SHA/过滤器、源码重新枚举/Git和旧M5包；相对单帧原清单仅HANDOFF变动，新增预算两个文件。冻结后HANDOFF/ADR/memory更新为文档例外，下一组合源码须另验。只证明边界快照与六直接进程wait，非全机/双机/持续文件锁。未新出包或提交推送。
+
+### 19.35 M6 独立单帧预算组合（2026-10-09，未提交工作树，独立验证完成）
+
+**范围（ADR079）**：§19.34新4622冻结后自主继续，新增`ControlFrameReadAttempt.cs`，借用同一流的唯一读者组合三底座，不修改原首读/接续/预算。原首读worker join后采可信本地anchor（非物理到达），EOF无timer，单帧完成后预算原释放join，再同锚点精确末检和Stop同gate发布原Task结果；指定唯一消费者接数组，重复await不生新所有权。不提供成功后任意延期兑换的TryTake。AbortRequired先拒绝通知，再等待原任务；外层独立关流并join关闭，不把通知当排空。私有clock高水位仅补跨三阶段回退检测，不包装原timer/释放。
+
+**真实缺陷与修复**：独立生产Debug普通build曾0警告0错误通过，生产原SHA `0f810b80e99fa05c90b40a69eefdb96184551f9ca45cf8cba39dd39dfcaebbd3`。完整只读审查指出拒绝静止自有payload的清理位于可能永久阻塞的原Dispose join之后；测试交付65静态例未包含所要求的清理Fact，主线程补`RejectedOwnedPayloadIsClearedBeforePendingDisposeJoins`后实际initial为**65 PASS/1 FAIL**。失败在已证接续Take完成、Stop和owner finally真实join后，Assert.All检查8字节中7字节仍非零；不是Guard/编译失败。仅在拒绝finally、join之前清理安全自有payload并置null，保留原任务完整join及后置兜底；`cleanup-fixed/`同测试字节**66 PASS**。原生产/测试备份、失败日志和TRX保留，初轮不洗绿。
+
+**专项与变异实绩**：`outputs/m6-frame-attempt-20261009/`的baseline/restored均**66 PASS**、0警告0错误；测试仅另将原读join变异的前置锚定改到未被变异的Budget await边，并使夹具独立join子worker。四定向变异各1红：final-sample和stop-commit首红均为AssertRejected里的Expected Rejected/Actual Frame；original-read-join在原释放放行而原读取仍pending时命中AssertAwaitAsync的Completion提前退出；abort-notification命中AbortRequired未完成的Assert.True。均非Guard、均build0/test1且零警告错误；final-sample采用不可到达的运行时delta<0条件而非if(false)，不靠不可达警告击杀。精确恢复生产SHA `da12dc685213d7b2b98f38a290ceec12ce444165915ad7e11f73f11b1f096b89`，测试SHA `850e7f8951dac7837541202db11847c7ab0686f060a8319a55aac324d6198d42`。四变异是合同破坏，不冒充四个正常生产缺陷。新完整冻结结果如下，4622仍只属于预算片。
+
+**新完整冻结实绩**：`outputs/m6-frame-attempt-20261009/final-v1/summary.json` passed/exit0，14:13:59–14:20:35四完整Rebuild零警告错误、六直接dotnet子进程逐一wait且rc0、16TRX双配置各**4688 PASS/0 FAIL/0 SKIP**（Core197/Security66/Protocol303/Integration3/Transport3129/Acceptance503/Capture243/Sessions244；组合66）。362项前后及12边界一致，清单SHA `d43e390e75616bd7608a2a73ceba6f26613b3824339b6bc497941cf8472f7660`，摘要SHA `12dd3fc21cd0ff411fb27960858f7a5fc7a73b64458f457dc58f8b2d480246d2`。独立审计passed：重数原TRX，绑定initial→cleanup-fixed同测试六行生产补丁与之后两处测试加强，四变异精确Fact/首断言/源行/恢复字节，源/文档重新枚举、证据库存、Git和旧M5包SHA。审计初跑曾错误要求所有Theory显示名唯一；原TRX证实长参数被xUnit截断显示而testId/executionId不同，保留审计原脚本后按真实身份核验通过，没有改测试/TRX或重跑冻结。相对预算原清单仅HANDOFF变化、新增两个组合文件，其他旧源码保持。
+
+**边界及下一片**：完整只读审查已收到；反射await链依赖本轮.NET私有布局，全部退出证据只针对夹具已取得的原任务，不证明隐藏IO、TLS/WPF副本清零或全机退出。outputs执行脚本不属源码scope，仅final执行脚本末态库存哈希；阶段快照非持续锁，冻结后文档记账是例外。下一片先做Host既有审批→holding私有单读槽所有权，保持直接await ValueTask的async计数包装、原IsCompleted活动判据和取消令牌/启动时刻，不以底层Task或新worker替代。Client monitor不改，组合当前自启首读、不能直接接Host挂起读；未知借用不清写，真实原读退出后才讨论安全清理。未接live帧、父gate、版本方向或目录UI，不启动M7、不改现网/防护/权限，旧M5候选与双机DoD边界保持。
+
+### 19.36 M6 Host 既有活动读单槽所有权（2026-10-09，未提交工作树，新冻结及独立核对通过）
+
+**范围（ADR080）**：保持原审批直接await ValueTask的async包装、Task.IsCompleted活动判据、原token与Read同步前缀调用位置。以具体私有owner保留同一包装Task和一字节buffer，审批到holding同owner，不增加读者/worker/AsTask/定时器或帧接线。无审批holding仍局部创建，不写_pendingRead；Client monitor、ApprovalStopAsync优先级、auth_success写/登记/Video锚点与Router收尾顺序保持。
+
+**当前停点（专项、四变异、新冻结与独立审计均已完成）**：已实施私有`OwnedControlActivityRead`，只允许成功完成包装Activity后清理；fault/cancel及未知借用不清写。并发清理只一次归属，不声称单个并行join就是所有擦除完成屏障。新证据独立置于`outputs/m6-host-read-owner-20261009/`，不覆盖旧组合或M5包。
+
+- `initial`实际build0但xUnit2013一警告，runner exit2、未test/无TRX；仅数组长度断言等价改为Assert.Single后，`initial-clean`零警告错误、49项31PASS/18FAIL，失败均原Memory应0实199。旧生产SHA`ee0c2d38ad2bdc52515f41ccb9bc3c63c9f7689f4084f13292a0483512ec21ad`。
+- `fixed`在两测试原字节不变时实际49/49PASS、build/test均0、零警告错误，唯一生产`ControlAuthSession.cs` SHA`6acd3c6af27f4d916d5cc20d7c204b8218ffd71ac9b76f5e1d40f1f5ed7b56b0`；原审批裁决/Router/Client不改。
+- 随后新增测试helper自测：`helper-initial`实际2PASS/3FAIL（兄弟异常被首错豁免、两种来源的不同取消token被误豁免），修helper后`strengthened`54/54PASS、零警告错误。原49例断言未改；最终测试SHA`29c5f9f010d4958fd00d7e13381721ea17748278a7ef0a78028b2edf90d46edc`。所有原失败和源码备份保留。
+- 原合同`regression`244/244PASS：ControlAuthSession partial（含cleanup/deadline）141、ClientControlMonitor57、ClientVideoAttachTls35、FirstFrameRouterFailure11。四处变异真实零警告构建/断言失败：join-cleanup2红1绿、holding-cleanup4红2绿、success-only12红、original-read-join12红；首失败分别原Memory0/199、0/199、199/0与join.IsCompleted提前True，非Guard或编译失败。全部恢复原生产字节，`restored`54/54PASS。
+- Last code commit仍`b3e1273`；Working tree at validation为未提交Host片叠加既有M5/M6成果。专项完成后实际另跑下述完整冻结，不把§19.35的4688外推本片新字节。未提交/推送/新GUI包，未启动M7。
+
+**完整验证（实际2026-10-09 15:00–15:07，独立final-v1）**：Solution与IsolatedAcceptance在Debug/Release各Rebuild一次，四次零警告零错误；六个直接dotnet子进程按顺序wait、rc均0。16份原TRX中每配置各4742PASS/0FAIL/0SKIP：Core197、Security66、Protocol303、Integration3、Transport3183、Acceptance503、Capture243、Sessions244，Host专项54全部进入。363项实际源scope（含HANDOFF）前后及12阶段边界一致，清单SHA`665d2fdc6316f5dc8f0216d1b493cd56c671d34ed9bd128cc89930cf6bf14eec`；摘要SHA`3e74190f1d5945c81ac1cf6318783a9ccba1c00bd83bf1081f109b53e6729864`；执行器开头、12边界、末态共14次字节绑定。只证明直接进程wait及阶段采样，不称全机/隐藏IO全部退出或连续文件锁。
+
+**独立核对**：`independent-audit.json`实际exit0/passed，SHA`4f000f66a19f898d5e3853c3bc28849de9856a9dfdba16b22cedb4281b549c90`；审计脚本SHA`07d245e6d570be1931b6ba4e13d57ee2b0bb20737e5eaf0272ad0e31c4afaccf`。从原日志/TRX核身份、计数、同测试字节红绿、helper自测插入和catch唯一替换、变异断言与恢复字节；旧组合两文件不变，旧M5 ZIP仍`0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945`。初次审计因日志正则贪婪前缀/跨行空白将18个FAIL误提为10个而exit1；保留`audit-failure-20261009-151014-467511.log`和`audit-failed-bytes-20261009-151139-068365.bin`，只修逐行fullmatch后正式通过，未改测试/TRX或重跑冻结。
+
+**审查边界及文档例外**：独立只读审查fixed/restored未发现新增阻断，旧反射入口适配确认。source-ready/wrapper-pending时直接两个join断言、success-write两测试末态清零断言是尚未加入的非阻断补强建议，不算已验证新用例。本段、顶部和ADR/memory是审计通过后的文档记账；冻结原文档快照保留，不宣称更新后的全部源scope仍等于冻结字节。交付说明位于`outputs/m6-host-read-owner-20261009/Host读槽验收结果.txt`。
+
+**当时下一最小片（后续已完成，见§19.37）**：私有owner成功完成后一次移交EOF/首字节，拟议`TryTakeCompleted(out byte? firstByte)`与清理共用原子夺权点；失败/取消/未知借用不能夺取或交付，EOF不得混同0x00。不在本片接帧reader、移除额外数据拒绝或修改Client。M5新版双端同哈希GUI实机仍待真人条件，M4不重做、M7不启动。
+
+### 19.37 M6 私有Host读槽一次结果移交（2026-10-09冻结，2026-10-10独立审计与交接收口）
+
+**最小生产边界（ADR081）**：仅`ControlAuthSession.cs`的private `OwnedControlActivityRead`新增`internal bool TryTakeCompleted(out byte? firstByte)`及注释，34行/1140字节，原CRLF保持；切除此连续新增区段后逐字节等于原生产。原可见性/字段/构造/Activity/ReadAsync/Clear、审批时序与优先级、auth_success/holding/join/Router和Client monitor均不改。src只有新方法声明、没有live调用点。Last code commit仍`b3e1273`；Working tree at validation是未提交本片叠加已有M5/M6成果。
+
+**合同**：false/null未取得、true/null成功EOF、true/0x00有效数据。仅成功包装Task可以取结果，不重复消费底层ValueTask；非法成功计数-1/2在夺权前拒绝，保留原Clear权。与Clear共用Interlocked.Exchange原数组一次归属，先复制标量再finally清零，成功Take返回前已清理。失败Take或输家Clear不是其他赢家擦除完成屏障；测试等待全部竞争调用。Take不证明父会话仍有效、认证/方向许可或帧预算，不启动任何新读。
+
+**真实红绿与失败留存**：证据根`outputs/m6-host-read-handoff-20261009/`。original-entry-gap仅保存原三份bin及缺入口事实，不计行为red；lazy-shell实际27PASS/19FAIL，其中18真实Assert、1同步void Fact误带Timeout配置错。原日志/TRX完整保留，仅删除入口Fact的Timeout，lazy-shell-clean28PASS/18FAIL且全部真实Assert；fixed相同测试原字节46PASS。测试包含同步/异步EOF/00/C7/FF、source ready而wrapper pending、GetResult只一次、原异常/取消token、未知迟到writer、非法计数、顺序和并发Take/Clear、合成同流第一帧接续/第二帧未消费。
+
+| 定向变异 | FAIL / PASS | 首类真实断言 |
+| --- | --- | --- |
+| eof-data-zero | 4 / 4 | EOF与数据0的Assert.Equal |
+| clear-before-copy | 4 / 4 | 标量复制结果Assert.Equal |
+| unshared-take | 2 / 2 | 原数组归属Assert.Null |
+| missing-clear | 6 / 2 | 原Memory归零Assert.Equal |
+| success-only | 8 / 0 | 不应抛出原错误Assert.Null |
+| claim-before-success | 2 / 0 | pending原数组仍归owner的Assert.Same |
+| extra-read | 8 / 0 | 原读计数Assert.Single |
+| invalid-count | 4 / 0 | 无效计数不取得Assert.False |
+
+八项均零警告构建/build0、test1、实际Assert击杀，非保护超时/编译失败；每次等待target直接子进程后精确恢复。变异汇总all_completed/final_restored为true、error=null；回归400PASS、restored46PASS。正常生产SHA `5b570be9a94630c1902fb93dd9dd251ac29068d7156249d1c9da7309fa01c93e`，新测试SHA `6bf0b645eae88e0bcf317f14f7876d129ae48ee14dc22738f8118f881926379a`。旧ownership/cleanup测试原字节保持。
+
+**新完整冻结**：final-v1实际日志时间2026-10-09 15:50:58–15:58:14（+08:00），四Rebuild零警告错误，六直接dotnet命令顺序wait/rc0记录。16原TRX逐项重数，Debug/Release各4788PASS/0FAIL/0SKIP：Core197/Security66/Protocol303/Integration3/Transport3229/Acceptance503/Capture243/Sessions244；新46与旧54精确进入，跨配置语义/testId多重集相同。364项实际源scope前后/12边界一致，清单SHA `fc3f584e4851237aef2e836bc593e9199a6c324ce979fd40b74453962651cadc`；摘要SHA `bcef134b56ef204bdf8c005e43d781ec7f9fd6d68b68ee2493139d119eb76a61`。前片4742及旧M5 ZIP字节保持。
+
+**正式独立审计**：2026-10-10 11:43:01–11:43:19（+08:00）实际main与外层返回0，外层原argv/PID/wait/rc记录`audit-execution-v1.json`，执行日志及脚本原bin均保存。审计未导入runner/validator，独立解析45份原TRX/19694个唯一execution，核原日志、源/文档/执行器快照、六主要历史阶段精确集合、同测试红绿、八变异精确补丁/断言源码行/恢复、旧freeze与ZIP。原审计未绑定validator且外层Python路径自证；执行前保留cc18版原bin，补已核b4f54版validator绑定、已知托管Python及runner PID互证后正式执行。执行审计SHA `7a183eab4cc8b44d40b86d9a409755d0a6c79b9d2c1225e59787276e22f1d008`；报告SHA `9d0f754170577361fce15f76a1d3f706bbf775c8263f3e28964486dcc0afa82d`。主线程另用不导入审计器的内联解析复算16TRX/9576唯一execution及当前364源一致，实际rc0。
+
+**证据局限**：恢复会话时旧后台句柄不存在，无法重新取得final外层终端rc；磁盘summary/runner-exit-code自报0与六直接dotnet rc记录可核，不冒充本轮观察到外层退出。此次审计外层真实rc0单独记录。final前后历史仅冻结original-entry-gap/lazy-shell/lazy-shell-clean/fixed/regression/restored；八变异与计划/执行器在审计时绑定，不在final前后覆盖。每次恢复无单独时刻bin，以恢复记录、下轮原基线及最终bin互证；不声称异常中断也保证所有子进程退出。边界采样非连续锁、直接wait非全机或隐藏I/O排空，测试不是新版双机/GUI/物理多屏或TLS/WPF副本清零证明。
+
+**文档及下一片**：本段/顶部/ADR081与2026-10-10日志为正式审计后的文档例外，不修改旧冻结快照，不宣称更新后364项仍与旧清单相同。验收TXT为`outputs/m6-host-read-handoff-20261009/Host读槽移交验收结果.txt`。下一片核定已取得首字节与原锚定预算接续，避免自启第二读或Start重置预算；已观察过期必须不发起接续，不把取时与锁外Read描述成物理原子事件。没有提交/推送/新GUI包，旧M5 ZIP仍`0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945`。真实Control协商/方向/父gate尚待开发，M5新版双机DoD待真人，M4不重做、M7不启动、不改现网/防护/桌面权限。
+
+### 19.38 M6 外部首字节原锚定入口（2026-10-10冻结、正式独立审计及交接）
+
+**生产边界（ADR082）**：`ControlFrameReadAttempt.cs`新增internal静态工厂`FromObservedFirstByte(Stream stream, byte firstByte, TimeProvider clock, long observedAt, long observedFrequency, TimeSpan budget, int maxBytes)`、私有record/构造链及RunAsync入口分支。外部分支不创建ControlReadAhead、不重读首字节、不重新采原锚点/频率，Snapshot.FirstRead恒null；后半复用既有Budget、Continuation、原worker join、最终采样与Stop提交gate。原自首读分支及EOF路径保留，公共局部byte?只让原入口表达EOF，外部byte的00是数据。未改三个原语、Host/Client/审批/Router/协议parser，不接live；`TryTakeCompleted`及新工厂在src只有定义。Last code commit仍`b3e1273`；本恢复段未改生产或测试。
+
+**使用与时限合同**：caller保证原读已完整退出、同一流且唯一读者，传入同源可信TimeProvider的原观察锚点/频率；工厂只校验参数，不替caller证明来源，不接owner/Task/ValueTask或父token。构造不碰流/取时。初始化首采样/Create/Change已经观察过期时零接续I/O；Ready后任意调度间隙的物理期限不保证零I/O，最终仍以原锚点Int128末检拒绝到期或等于截止。拒绝先清已Take的静止自有payload再join，不清未知借用；AbortRequired只通知，外层负责关闭原Task并独立等待，不能回等父自身。末样本与gate不是物理原子事件，成功结果不是未来权限/时间许可。Start重复调用抛InvalidOperationException；重复await已返回Task是同一结果/数组，不能冒称Start幂等。
+
+**同测试红绿与专项**：证据根`outputs/m6-observed-entry-20261010/`。original-entry-gap仅缺入口证据，非语义red；lazy-shell同测试3PASS/45真实断言FAIL，fixed48PASS，17 Fact+14 Theory/31 InlineData展开48项。覆盖构造零外部操作、00/高字节/单帧边界、原锚点/频率/long边界、首采样/Create/Change过期零接续、原Read/Dispose join、已取得payload清理、最终采样/Stop/重复Start拒绝及结果别名；不声称新48项直接覆盖并发Start。原测试字节不改。回归464PASS=新入口48+组合66+预算101+接续110+首读39+Host移交46+Host所有权54；restored48PASS。
+
+| 定向变异 | 实际FAIL / PASS |
+| --- | --- |
+| restart-first-read | 1 / 0 |
+| zero-becomes-eof | 1 / 0 |
+| discard-high-byte | 2 / 0 |
+| refresh-anchor | 1 / 0 |
+| replace-frequency | 2 / 0 |
+| skip-ready-rejection | 3 / 0 |
+| final-reset-anchor | 1 / 0 |
+| final-allow-equality | 1 / 0 |
+| drop-original-join | 2 / 0 |
+| skip-final-cleanup | 1 / 0 |
+
+**两类工具失败都保留**：十变异均实际build0/test1，15个真实断言失败并逐项恢复。原mutate_contract执行器做到第九项后因分类器仅接受`Assert.`前缀、拒绝真实自定义Assert.False消息而外层exit2；`complete_mutations.py`只补第十项并exit0，引用原summary SHA且明确original_exit_code=2。审计以原TRX消息/堆栈对应测试原字节/原日志绑定，Guard/框架错/超时不计击杀。另首轮完整冻结final-v1外层真实exit2：验证器错误要求`lanremote.integration.tests`，真实程序集为`lanremote.integrationtests`。该轮两Debug Rebuild和一次全量test都rc0，八TRX Debug4836PASS，Release未执行；没有history-after，原summary/脚本/外层记录完整保留，不能称其完整冻结通过。修正版使用显式八程序集集合，新脚本/新final-v2，并单独冻结原失败目录before/after/facts，不删白名单或补写旧后态。
+
+**新完整冻结**：final-v2外层2026-10-10 12:40:43–12:47:10（+08:00）实际rc0已回收，child_waited/script_unchanged均true。六dotnet命令逐个rc0/wait，solution+IsolatedAcceptance各Debug/Release四Rebuild原日志均0警告/0错误。16原TRX逐条与Counters一致，Debug/Release各4836PASS/0FAIL/0SKIP：Core197/Security66/Protocol303/Integration3/Transport3277/Acceptance503/Capture243/Sessions244。旧4788用例稳定身份/多重集加新48按程序集精确对应，9672个execution唯一。365源项前后/12命令边界一致，28文档前后及命令边界一致；源码scope包含HANDOFF、未跟踪与忽略文件，仅排除bin/obj/.git等声明目录边界。主要专项/十变异历史、旧final-v1和根脚本原字节分别绑定；本次外层动态final-v2.*不纳入根冻结，另核实际argv/PID/wait/rc。验证器SHA `24589a9b56380f73fed5e552c64d400005996838dce2a230d9990a88ea881367`。
+
+**正式独立审计**：`audit_final_v2.py`不导入runner/validator、不跑dotnet；2026-10-10 12:52:35–12:52:37（+08:00）main及外层实际exit0，输出`independent-audit-v2.json`，不是先前仅helper的prefinal通过。独立解析54原TRX/54唯一run/24707唯一execution，核原四构建日志及额外diagnostic、命令原argv/PID/wait/rc、test日志与TRX/真实断言行、全部非生产源码及文档跨阶段一致、完整源/文档路径重新枚举、同测试红绿/变异精确补丁/恢复、旧4788及新48按程序集稳定身份相加、原两类exit2与旧ZIP。审计脚本SHA `1116c0f91d5e96f5c3a89c263ed83b42f6e3098c6384b381c08b6ca4a5dade24`。主线程另从原16TRX读取Counters并回收新冻结、正式审计外层，审计输出log与报告JSON一致。
+
+**关键SHA256**：
+- 生产`ControlFrameReadAttempt.cs`：`8bb426a63af2a202b62c6c5ca8266e9583f7318fae9ec0682671ab483ae77c95`。
+- 专项`ControlFrameObservedEntryTests.cs`：`d1cab8828c0d7167cf72b0744857fe358517331b3b7f614c517189b5fcb71783`。
+- 365项冻结清单：`aebc6475c4e608a265a8e76124843ec2ad32f48f2d16dfef980820bb158ce3f6`。
+- 新final-v2摘要：`f5971eb33a13c6193ed5034cf1bbe7fb9794f86c384237dd1c881e213b2faabc`。
+- 正式审计报告：`f544a2bd6e5db12dba1d3c9e53292315f7e17c9f8236f8b2a757c1a5c6e59302`。
+- 保留失败final-v1摘要：`6c0af26b90d3dd7045eb3dcfc2e62a8af08c6c000b27cf1db8a51102d989b96b`。
+
+**文档边界与交付**：HANDOFF/ADR082/2026-10-10日志在正式审计之后更新，属于三个既有文档例外；不修改旧快照，不再声称当前365项全同冻结SHA。交接前独占保存边界，后置检查重新枚举并只允许HANDOFF在源scope变化、上述三文档变化及新增验收TXT，原证据/脚本/旧Host移交全目录与旧M5 ZIP必须保持；检查记录在本证据根`handoff-v1/`。验收TXT为`外部首字节入口验收结果.txt`。边界快照不是连续锁，直接子进程wait不证明全机/隐藏I/O排空；反射join夹具依赖运行时布局，Guard不计语义击杀；不保证恶意或永久阻塞stream/clock/timer有限退出，不证明TLS/WPF副本清零或真实双机/GUI/物理多屏DoD。未提交/推送/新包，不改现网/防护/桌面权限。
+
+**下一接缝仅只读定位**：当前HelloFrame严格v1无应用层能力协商，TLS NegotiatedProtocol仅TLS版本，Discovery非授权，auth transcript没有未来能力字段；Host holding仍拒额外上行，Client视频attach所启动monitor仍拒额外下行。目录保持Host→Client，候选专用Host Offer→Client Accept先处理应用版本/legacy兼容决策，之后独立纯合同验证，再谈唯一读写者/截止/父gate/live。protocol2、4KiB、字段、fallback在本节冻结时均未实施或批准，不能把现有serverProof说成已绑定协商。随后用户B及纯codec进展见§19.39，本节保留历史。新版M5双机DoD仍待真人，M6整体未完成，M4不重做、M7不启动。
+
+### 19.39 M6 新版专用目录 Offer/Accept 纯合同（2026-10-10）
+
+**政策和代码边界（ADR083）**：用户明确选B：仅新版双方连接，旧端明确拒绝并要求升级，不保留legacy单屏分支、不静默降级；政策已经确定，不再询问。新生产只有`src/LanRemote.Transport/DisplayCatalogAgreementFrame.cs`，新专项为`tests/LanRemote.Transport.Tests/DisplayCatalogAgreementFrameTests.cs`。Last code commit仍`b3e1273`，代码及测试未提交。本片不改现行Hello/Auth/Video/monitor/审批；尚无实际旧端拒绝、升级UI、live Offer/Accept或目录传输。
+
+**纯合同**：固定四必填字段`type`、`applicationProfile=2`、`catalogSchema=1`、`sessionId`。Offer为`display_catalog_offer`，只Host→Client；Accept为`display_catalog_accept`，只Client→Host；方向由调用方选择解析入口。profile2为应用合同，schema1为既有目录载荷版式，不是TLS或LRVF版本。载荷1..4096字节（含JSON空白、不含长度前缀），MaxDepth1；拒未知/重复/转义同名/错大小写字段、非整数词法、非canonical非空Guid、错会话、非法UTF-8/代理、BOM/注释/尾逗号/第二值/尾垃圾。允许字段重排、合法空白及等值JSON转义。Guid token在GetString前限216字节。序列化每次新数组，解析不持有输入。输出只有SessionId/IsOffer，不是授权对象。
+
+**明确局限**：Guid匹配仅关联，caller传入已认证上下文不是本类能验证的事实。4KiB仅纯payload入口门槛，不证明live读流预分配限长。重复合法Accept可重复解析，不是反重放；未来一次Offer/Accept/无同会话重试须真实状态机实现。现行serverProof没有绑定此合同。后续若采用proof前协商，须明确并修订当前XML已认证上下文前提，另建立V2强类型规范字节与双方proof；此时点尚未定案，不将建议写成已实现。保持目录方向、原读退出/唯一读者/原预算与真实父gate，不能把codec成功当交付资格。
+
+**同测试红绿与恢复**：拒绝壳编译成功，red展开108项=94PASS/14真实Assert FAIL，外层exit1；仅换生产后同测试原字节green108PASS/外层0。八变异外层总执行0，每项构建0/test1并等待，均真实Assert.False失败；每项恢复bin、原TRX/日志、argv/PID/wait/rc保留。回收后当前生产/测试与green原bin逐字节一致，再实跑restored108PASS/外层0。部分错token/截断/非法UTF-8矩阵主要Offer，共享Parse，不声称两方向全部排列直接覆盖。
+
+| 生产变异 | 实际FAIL / PASS |
+| --- | --- |
+| allow-old-profile | 1 / 25 |
+| accept-wrong-direction | 2 / 0 |
+| skip-session-binding | 2 / 0 |
+| allow-duplicate | 4 / 0 |
+| relax-byte-limit | 2 / 0 |
+| skip-trailing-read | 8 / 0 |
+| skip-required-fields | 4 / 0 |
+| allow-wrong-schema | 1 / 25 |
+
+**完整冻结**：新`outputs/m6-catalog-agreement-20261010/final-v1/`，外层14:19:38–14:27:04（+08:00）真实exit0/child_waited/script_unchanged。六dotnet命令rc0/wait，solution及IsolatedAcceptance的Debug/Release四Rebuild均零警告错误；16原TRX每配置4944PASS/0FAIL/0SKIP：Core197/Security66/Protocol303/Integration3/Transport3385/Acceptance503/Capture243/Sessions244。367源/28文档前后及12命令边界保持，green/restored/final绑定同一完整交付源码。没有另跑旧parser专门回归轮；全量精确稳定身份核旧4836+新108，不删旧测。冻结包含baseline/红绿/恢复/八变异完整目录，五根脚本及既有外层文件完整集合；final当前动态外层三项另核，原首字节目录/Host目录和M5 ZIP保持。
+
+**独立审计**：`audit.py`不导入执行器、不跑dotnet。冻结前修订独立完整集合、TRX真实结果反推rc、固定变异方法/期望失败、原日志/命令/PID/时序/源码及文档原字节、green/restored/final完整源码绑定；只读审查重读修复后无剩余确定阻断。正式main及外层14:27:19–14:27:25实际exit0，不是只读前检替代。独立43原TRX/43唯一run/19958唯一execution，含本片27份及前片16份；原Counters/稳定身份/失败堆栈源码行与原日志一致，日志输出与报告JSON相等。完整冻结和正式审计分别核实，初始红灯未覆盖；本片没有构建/执行器失败被解释成通过。
+
+**SHA256**：
+- 生产：`687c57766ed5959b1e3e44a4b38668f277919682018f9b611e5c9b007b715224`。
+- 测试：`1acce6561b1e20b4547b5ef08469f3c5e34c95d35b9b5e4440c082ea2a43c244`。
+- 367项冻结清单：`567806036322f92f83ae906958a6e29a3ae81279fbfe967d8b478af6bae690aa`。
+- 完整冻结摘要：`9b95ef8c41d9910dd406bf7c18e94a444ea3de67ddf7417f168e718b1ca33b39`。
+- 正式审计报告：`015875406168e134466c2de334ec97a0eca41badd78f8a18d58d1e947ce0b334`。
+- 冻结脚本：`f070599280de0bfdc2570b2475843a4d20e9e43d2b43e4ae12bd614261c6fa98`；审计脚本：`c8771b2e9d89c9a27d6948a193c4439460a14fa5ab05bc511328c933cd9110f2`。
+
+**交付和下一片**：正式审计后仅HANDOFF/ADR083/2026-10-10日志作为文档例外，交接前后独立核原证据和旧ZIP；不再声称当前367源清单全同冻结SHA。新增验收`新版专用协商合同验收结果.txt`，后置检查在`handoff-v1/`。边界快照非连续锁，直接子进程wait不证明全机或隐藏I/O排空；纯codec绿不证明真实GUI/双机/物理多屏或TLS副本擦除。下一片按B设计V2认证绑定与时序、严格版本拒绝及Video父资格；不以EOF/超时断言旧端，不用升级提示掩盖pin/proof/审批失败。没有提交/推送/新GUI包、不改网/防火墙/防护/权限、不覆盖旧包；M5新版双机DoD仍待真人，M6未完成，M4不重做、M7不启动。
+
+### 19.40 M6 proof前强类型约定绑定与V2认证纯核（2026-10-12）
+
+**用户收口与本片范围。** 用户明确“稳定，之前的卡顿应该是误判，可告一段落继续M6了”；M5按用户确认收口，撤回的卡顿判断不继续调查、不重复要求人工验收/无必要压测。§19.39及更早的“待M5真人/待proof前后定案”均是当时历史，不是当前停点。B政策不变：新版双方-only，不保留legacy，不静默降级。最近代码提交仍`b3e1273`；本片产品/测试和此前工作树均未提交。
+
+**生产改动。** 新增`Auth/DisplayCatalogAgreementBinding.cs`及`Auth/AuthTranscriptV2.cs`（均internal），新增`AuthTranscriptV2Tests.cs`75项与`scripts/reference/gen-auth-v2-golden-vectors.py`。既有`DisplayCatalogAgreementFrame.cs`只改XML独占注释行，移除“已认证上下文”这一错误前提；codec行为不改。Binding校验非空expectedSessionId、非空两帧、Offer/Accept正确方向、两个SessionId与expected一致；transcript再校验agreement与认证session一致。值对象可重复构建使用，不是一次性授权/反重放机制。当前`ControlClientConnector`/`ControlAuthSession`真实链仍调用V1，未接Hello2/Challenge2/live V2，也未完成实际拒旧/升级UI。
+
+**已定顺序。** TLS+pinning→Client Control Hello2→Host auth_challenge V2→Host Offer→Client Accept→clientProof V2→真实本机审批→serverProof V2→新版父会话资格。该顺序是后续接线约束，纯核只绑定本地严格解析后的语义，不证明真实消息来源、收发顺序/新鲜性或真人审批。Offer/Accept必须消耗原绝对认证窗口，不重置deadline；目录仍只Host→Client。
+
+**规范字节与权限。** client固定16个ASCII字段，以15个单字节NUL分隔，无尾NUL：`LANREMOTE-AUTH-V2`、sessionId、serverDeviceId、clientDeviceId、serverNonce(base64)、clientNonce(base64)、certificateSha256(大写hex)、requestedPermission、`display_catalog_offer`、`2`、`1`、sessionId、`display_catalog_accept`、`2`、`1`、sessionId。Guid小写D且非空；nonce/pin各32字节，key16字节，profile/schema invariant。grant=`LANREMOTE-GRANT-V2\0`+SHA256(完整client).大写hex+NUL+grantedPermission；clientProof=HMAC-SHA256(key,client)，serverProof=HMAC-SHA256(key,`server\0`||grant)，7字节前缀hex=73657276657200。ViewOnly请求不可授Control，Control可降ViewOnly。拒外部raw/V1 transcript导入，导出均副本；临时server message/grant清零，不承诺托管字符串/TLS/框架副本擦除。JSON属性重排/空白/等值转义的语义等价不改变proof。
+
+**同测试红绿与原失败。** 首次red因分析器警告门禁为invalid/exit2/0TRX，保留原日志及失败套件；不能计产品红灯或mutation kill。有效red-v2同75项为67PASS/8真实Assert FAIL，仅恢复生产后green75PASS。十个定向生产变异均build0/test1且逐项wait/恢复；restored全75PASS。原红灯11份TRX共28条RunInfo Error是逐例xUnit完整FAIL回显，不是RunInfo自己带Assert/堆栈；对应Failed结果才有断言与自身方法堆栈。
+
+| 生产变异 | 实际FAIL / PASS |
+| --- | --- |
+| allow-escalation | 1 / 0 |
+| grant-domain-v1 | 3 / 0 |
+| leak-private-array | 1 / 0 |
+| skip-accept-session | 1 / 2 |
+| skip-auth-session | 1 / 0 |
+| skip-offer-session | 1 / 2 |
+| wrong-accept-schema | 3 / 0 |
+| wrong-direction | 3 / 0 |
+| wrong-offer-profile | 3 / 0 |
+| wrong-server-prefix | 3 / 0 |
+
+**完整冻结。** `outputs/m6-auth-v2-20261012/final-v1/`四Rebuild（solution及IsolatedAcceptance，Debug/Release）零警告错误，六dotnet命令真实rc0/wait，16TRX双配置各5019PASS/0FAIL/0SKIP：Core197/Security66/Protocol303/Integration3/Transport3460/Acceptance503/Capture243/Sessions244。每配置旧4944稳定身份+新75完整身份精确相等，green/restored/final同371项源码清单，源码及29文档前后/命令边界保持。原进程链launcher52724→freeze39612→runner17724→dotnet，完整冻结外层真实exit0已回收，不把freeze PID错当runner。freeze前后原清单1214项均保留，final130项无缺失/额外项。本次收尾未重新跑dotnet，不将审计复算误称一次新构建。
+
+**独立审计护栏。** 仅red-v2及十个固定mutation的精确filter、rc1且已wait允许RunInfo断言回显；整行fullmatch、完整参数化名称Counter、adapter、Assert与本方法堆栈、非空机器、带时区且落在TRX/dotnet运行窗、原日志整行计数全部绑定。其他阶段拒任何RunInfo，不靠[FAIL]子串白名单。重复/错归属关键TRX容器、ErrorInfo/Text、DLL完整起始路径与storage/codeBase、falsey非列表audit_issues均有负例；自测报告绑定当前完整方法身份。
+
+**审计修订与实跑。** 旧60项正式自测已通过并真实wait0；保留原六产物及修复前audit/post脚本八项固定摘要，明确它不证明后续修订。补上两个确定交接缺口：报告写完后将bytes/SHA256写进终态stdout并与外层日志绑定（新自测同样绑定）；audit末尾保存完整evidence manifest，before要求原项不变，仅当前空audit log→已绑定终态及新增report/execution/wait三准确名称，history另按同一canonical比较。新68项正式自测全通过，launcher49588→selftest55140、外层真实0；正式审计launcher17896→audit15680、外层真实0。报告独立核45原TRX/45唯一run/20175唯一execution、3214历史项（含三前片目录及原M5ZIP）；22已闭合外层记录=20原执行+旧/新自测。本次audit在报告内诚实记pending outer wait，结束后由独立post解析器再核五件套/PID/时窗/报告字节并闭合，不在运行中伪称已wait。审计后独立边界检查及handoff before均真实exit0。
+
+**固定SHA256。**
+- AuthTranscriptV2：`1cc0ced4d09c25f395c55c31e9e02f85dae69632ae41ffb9ac068506381de1b9`；Binding：`1301d08404143ec0fa5a35f9412d1c27126677b3ab9b96ff6f52499336200ec4`。
+- Frame：`89930dec391ffe45138662e7c4f3ae8a9c07e6544749c63729327f53088248e5`；专项：`3a45da192b1c4c6db9ba7486e3748d523a2e66beb20df1e122e1097999c93273`。
+- 371源码清单：`2bb62b17e480af86fe8185c8815c8b68d915dfd6b8956a695333139295e69dd3`；final摘要：`498678a0322bd577302432e08abe477297d6a78a2688f26f74f10b347782e2c0`。
+- freeze-before/after：`f83325adc169ae3b629768b020248bdf3dbec9b442b07795f251d5343d2ad5e1`；68项正式自测报告：`ea29d0a8575b48ed22b7b319dc054223df2d97d839978e28e7f1356d90978c7c`。
+- 正式`audit-report-v2.json`（481826字节）：`f1c7158d15aac4da28b24f1a251dbd411ab5c21b102f39d2c1386be84b3bdd62`；audit脚本：`01fcd8b142023676aad66f95a187e7915a0ddb3ab6bcb88cc91531106fcd2fc1`。
+
+**交接与边界。** 审计后只改HANDOFF/ADR084/本日日志/MEMORY四文档，唯一新增`M6-V2认证绑定验收结果.txt`；交接before保护1376本片原项及3214历史项，四文档原字节备份在`handoff-v2/`。after独占落盘，最终完成与否以`handoff-v2/post-handoff-check.json`实际passed为准；不是事先声称结果。文档例外意味着当前含HANDOFF的源码清单不再全同冻结SHA，不冒称更新文档后重跑测试。快照非连续锁、自报PID/摘要链非OS不可篡改审计，直接wait非全机/隐藏IO排空。本片不交新GUI包、不涉及真实双端V2/物理多屏/混合DPI验收，不等于M6完成。
+
+**下一最小片。** 独立Hello2/Challenge2严格wire合同与版本证据测试；不全局换常量，不在V2失败时回退V1，两个Host首帧入口最终同策略；不以EOF/timeout断言旧版本，不覆盖pin/proof/密码/审批失败；新版父认证后才给Video资格。仍保护TLS/pinning/HMAC/serverProof/DPAPI/同子网/真实审批/ViewOnly/紧急停止/有界队列。M5按用户反馈收口、不重跑M4、不启动M7、不改任何现网或防护、不覆盖旧ZIP，不擅自提交/推送。
+
+### 19.41 M6 独立Hello2/Challenge2严格报文与版本证据（2026-10-12）
+
+**范围及现态。** 承接§19.40，仅新增`WireV2ParseStatus.cs`、`ControlHelloV2.cs`、`Auth/AuthChallengeV2.cs`、`Auth/WireV2Json.cs`和`WireV2FrameTests.cs`。本片没有修改任何既有产品/测试文件；已有未提交工作保持。新类型没有接入live：两Host入口仍调用HelloFrame，FrameWriter仍写V1，ControlAuthSession/ControlClientConnector仍使用AuthChallengeFrame，AuthProtocol常量仍1。Last code commit仍`b3e1273`，不提交/推送或发M6 GUI包。
+
+**合同。** Hello固定type=channel_hello/channel=control/protocol=2；Challenge固定type=auth_challenge/protocol/sessionId/serverDeviceId/serverNonce/certSha256/expiresInMs七字段。入口含空白总长1..4096，MaxDepth1；未知/缺失/解码同名重复字段、错类型、嵌套、注释/BOM/尾随值、非法UTF-8/代理转义均拒。合法空白、重排、等值JSON转义允许。protocol与expiry是正Int32整数字面量，拒小数/指数/符号/0/负数/溢出。Guid小写D，nonce canonical base64与pin大写hex均解码32字节；V2两Guid非空。输入复制、Copy导出与Serialize均独立新数组，不暴露私有ReadOnlyMemory底层数组。
+
+**版本证据。** `Invalid=0/UnsupportedVersion/LegacyV1/AcceptedV2`；必须完整结构、共同字段及尾部通过后才分类，所有非AcceptedV2令out=null。完整合法V1的canonical零Guid保留LegacyV1，与现行V1合同一致，不收紧共享CanonicalGuid；V2及未知正版本零Guid仍Invalid。UnsupportedVersion仅指当前已知完整字段形状中的其他正Int32版本，不是任意未来schema识别器。LegacyV1不证明真实旧软件/身份，不授权重连降级，也不是V1握手对象；后续消费方须先保留适用的目标device/实际TLS证书pin及proof/密码/审批检查，不能因升级提示遮掉安全失败。expiry只是提示，codec不建立或重置deadline。
+
+**有效红绿与变异。** baseline-v2采集时五文件均不存在，371原源码、29文档、4598历史项。最初baseline缺新终态summary_record，仅保留历史；补新片runner末行绑定完整summary字节后以全新baseline-v2重采，未覆盖旧产物。93项专项同测试/同展开身份：red为84PASS/9真实Assert FAIL、build0/test1；仅恢复两处生产V2接受分支后green93PASS。没有把构建/基础设施错误当产品红灯。八定向生产变异均实际build0/test1、逐项wait并恢复，restored93PASS/外层0：
+
+| 生产变异 | 实际FAIL / PASS |
+| --- | --- |
+| oversize（4096→8192） | 2 / 0 |
+| duplicate（去重复检查） | 2 / 0 |
+| numeric-form（错误接受小数/指数） | 5 / 13 |
+| early-legacy（提前分类V1） | 6 / 0 |
+| empty-id（空Guid错误归LegacyV1） | 2 / 0 |
+| nonce-export（泄漏私有数组） | 1 / 0 |
+| pin-export（泄漏私有数组） | 1 / 0 |
+| hello-legacy-accepted（V1当V2） | 1 / 0 |
+
+**完整冻结。** `outputs/m6-wire-v2-20261012/final-v1/`四Rebuild（solution及IsolatedAcceptance、Debug/Release）零警告错误；六dotnet命令真实wait0，16TRX每配置5112PASS/0FAIL/0SKIP：Core197/Security66/Protocol303/Integration3/Transport3553/Acceptance503/Capture243/Sessions244。原5019稳定身份+新93精确相等，双配置多重集相同；green/restored/final同376源码，前后及12命令边界源码/文档/runner一致。完整冻结launcher27484→runner8928，2026-10-12 15:00:56–15:08:32（+08:00），外层真实0已回收；本次收尾只复算证据，未重跑产品冻结。
+
+**独立审计与交接。** 新audit.py不导入runner/CORE，不执行dotnet，独立解析原XML/日志/命令/脚本快照、失败自身Assert/RunInfo与真实时窗/机器/完整身份，重新生成固定八变异期望并核恢复。主线程在正式运行前修正审计候选的相对报告路径、字段、终态键和旁路清单接口；未放宽post护栏。正式100项审计自测（含正式入口内存正反例）及7项交接护栏均真实wait0，分别launcher55468→23360、36260→17716。正式审计launcher41868→38380，15:16:59–15:17:20（+08:00）真实wait0；独立核43原TRX/43唯一run/20574唯一execution，13个本片阶段，4598历史文件不变。100/7是审计脚本自测，不加入产品5112。
+
+报告完整bytes/SHA256进入执行期唯一终态stdout，外层记录绑定日志；报告内嵌1118项完整evidence_boundary，包含原baseline和仍为空的audit.execution.log，不排除宽泛后缀。主线程再次核对报告/PID/时窗及终态；before实际passed，恰好新增report/execution/wait三项并空log→已绑定终态，保护1121本片原文件。正式自测报告也校验当前脚本、父子PID/实际wait及报告字节。四文档原字节备份在`handoff-v1/`；after独占落盘，最终结果以`handoff-v1/post-handoff-check.json`实际passed为准，非事先声明完成。
+
+**固定SHA256。**
+- Hello：`a3e1764e75409144fe1e473ea87ac850adca14eaa0840e7fbcbabac5a3c406b9`；Challenge：`c133cf73499426bab7f1ec505cdd58394b4c570927c263f9588725abee8cae4b`。
+- WireV2Json：`0c2c30054f9affccd0e3111bdaffdfd5b7889b13a75a9b02e0018432be61a4aa`。
+- 376源码清单：`bfd00f3a1a4965f9ae2ddbaa785f363fa090a37430c38b3d7bf972391ed14dd5`；final摘要：`954d0454f82a4519a81383a8e27af79ce43626bb8f29d35eae506348d6a780fd`。
+- 正式审计报告（1416419字节）：`90c61a45b181f13c60438bd242b4d152d96ff9536288589753234c0e01c8f0a8`；audit脚本：`a131d9f641649341794f2e08a94f532f74f57cee774f25fede1c64000a8ff980`。
+- 100项自测报告：`1f97332d1f7a21a8244901e8b40a377772a117bc9567a1937fe54d298c971854`；7项护栏报告：`602be3a3788bdce20c9c85dd47994fd8bfdb2d2e939f95d833b0a75e241928c4`。
+
+**局限及下一片。** 93为TRX展开身份，不是内部矩阵断言总数；双零Guid叠加畸形载荷、未来public字段/返回Memory反射检查、属性名的更多非法UTF-8序列是未补的非阻断建议，不能冒称全部覆盖。文件快照不是连续锁，PID/日志摘要链不是OS不可篡改审计；dotnet命令无历史parent_pid字段，直接wait不证明间接进程/全机或隐藏IO排空。文档为冻结后例外，当前含HANDOFF的清单不再全同冻结SHA；不把纯codec与旧live全量回归称真实V2拒旧/升级UI/双机多屏或M6 DoD。下一片核两Host入口和Client的V2-only握手接缝，沿已定proof前顺序、唯一读者和原绝对预算，保持安全失败分类，认证成功才给新版Video父资格。M5已收口，不重做M4、不启动M7、不改网/防护/桌面权限、不覆盖旧ZIP。

@@ -277,13 +277,43 @@ public sealed class AuthenticatedControlSessionRevocationTests
         string[] properties = ["GrantedPermission", "Identity", "SessionId", "ShortCode"];
         Assert.Equal(properties, type.GetProperties(publicDeclared)
             .Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
-        string[] methods = ["AttachVideoAsync", "Dispose", "DisposeAsync", "get_GrantedPermission", "get_Identity", "get_SessionId", "get_ShortCode"];
+        string[] methods = ["AttachVideoAsync", "Dispose", "DisposeAsync", "GetDisposalEvidenceAsync", "get_GrantedPermission", "get_Identity", "get_SessionId", "get_ShortCode"];
         Assert.Equal(methods, type.GetMethods(publicDeclared)
             .Select(method => method.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         Assert.DoesNotContain(type.GetMethods(publicDeclared), method =>
             typeof(Stream).IsAssignableFrom(method.ReturnType) || method.ReturnType == typeof(byte[])
             || method.ReturnType == typeof(Memory<byte>) || method.ReturnType == typeof(ReadOnlyMemory<byte>)
             || method.ReturnType == typeof(Span<byte>) || method.ReturnType == typeof(ReadOnlySpan<byte>));
+        MethodInfo evidence = Assert.Single(type.GetMethods(publicDeclared), method =>
+            method.Name == nameof(AuthenticatedControlSession.GetDisposalEvidenceAsync));
+        Assert.False(evidence.IsStatic);
+        Assert.Empty(evidence.GetParameters());
+        Assert.Equal(typeof(Task<ClientDisposalEvidence>), evidence.ReturnType);
+
+        Type certificate = typeof(ClientDisposalEvidence);
+        Assert.True(certificate.IsPublic);
+        Assert.True(certificate.IsSealed);
+        Assert.Empty(certificate.GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Empty(certificate.GetFields(publicDeclared));
+        Assert.Empty(certificate.GetEvents(publicDeclared));
+        PropertyInfo[] certificateProperties = certificate.GetProperties(publicDeclared);
+        Assert.Equal(new[] { "AllOwnedRootsReleased", "OriginalOperationsFinished" },
+            certificateProperties.Select(property => property.Name)
+                .OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        Assert.All(certificateProperties, property =>
+        {
+            Assert.Equal(typeof(bool), property.PropertyType);
+            Assert.True(property.GetMethod!.IsPublic);
+            Assert.Null(property.SetMethod);
+        });
+        Assert.Equal(new[] { "get_AllOwnedRootsReleased", "get_OriginalOperationsFinished" },
+            certificate.GetMethods(publicDeclared).Select(method => method.Name)
+                .OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        Assert.DoesNotContain(certificateProperties, property =>
+            typeof(Stream).IsAssignableFrom(property.PropertyType)
+            || typeof(TlsConnection).IsAssignableFrom(property.PropertyType)
+            || property.PropertyType == typeof(byte[])
+            || property.Name.Contains("Token", StringComparison.OrdinalIgnoreCase));
         Assert.Empty(type.GetFields(publicDeclared));
         Assert.Empty(type.GetConstructors(publicDeclared));
         Assert.Empty(type.GetEvents(publicDeclared));

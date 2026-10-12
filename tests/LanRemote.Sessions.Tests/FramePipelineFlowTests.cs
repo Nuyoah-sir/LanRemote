@@ -236,6 +236,43 @@ public sealed class FramePipelineFlowTests
         rig.AssertReleased();
     }
 
+    [Theory]
+    [InlineData(10, 100)]
+    [InlineData(15, 67)]
+    [InlineData(20, 50)]
+    [InlineData(30, 33)]
+    public async Task Explicit_preview_settings_schedule_expected_interval_without_changing_owned_frame_lifetime(
+        int fps, int expectedIntervalMs)
+    {
+        var settings = new VideoQualitySettings(fps, 0.75, 60, false);
+        var rig = new Rig(settings: settings);
+        try
+        {
+            rig.Pipeline.Start();
+            CaptureCall first = await Guard(rig.Capture.At(0));
+            Assert.Equal(TimeSpan.Zero, first.StartedAt);
+            first.Reply();
+            EncodeCall encode = await Guard(rig.Encoder.At(0));
+            Assert.Equal(settings, encode.Settings);
+            ScheduledDelay delay = await Guard(rig.Clock.ScheduleAt(0));
+            // Task.Delay(TimeProvider) 最终使用毫秒粒度的 ITimer；15 FPS 的66.666ms被下取整为66ms。
+            TimeSpan scheduled = TimeSpan.FromMilliseconds(1000 / fps);
+            Assert.Equal(scheduled, delay.Delay);
+            Assert.Equal(scheduled, delay.DueAt);
+            Assert.InRange(1000d / fps, expectedIntervalMs - 1, expectedIntervalMs + 1);
+            Assert.Equal(0, rig.Clock.Advance(scheduled - TimeSpan.FromTicks(1)));
+            Assert.Equal(1, rig.Capture.Count);
+            Assert.Equal(1, rig.Clock.Advance(TimeSpan.FromTicks(1)));
+            CaptureCall second = await Guard(rig.Capture.At(1));
+            Assert.Equal(scheduled, second.StartedAt);
+        }
+        finally
+        {
+            await rig.DisposeAsync();
+        }
+        rig.AssertReleased();
+    }
+
     [Fact]
     public async Task Overlapping_read_is_rejected_and_reader_cancellation_does_not_stop_pipeline()
     {
@@ -614,11 +651,13 @@ public sealed class FramePipelineFlowTests
         private Task _startCalls = Task.CompletedTask;
         private Task? _cleanup;
 
-        public Rig(int rawCapacity = 2, int encodedCapacity = 2, DisplayId? display = null)
+        public Rig(int rawCapacity = 2, int encodedCapacity = 2, DisplayId? display = null,
+            VideoQualitySettings? settings = null)
         {
             Capture = new ControlledCapture(Clock, _frames);
             Encoder = new ControlledEncoder(_frames);
-            Pipeline = new FramePipeline(Capture, Encoder, display ?? new DisplayId(7), rawCapacity, encodedCapacity, Clock);
+            Pipeline = new FramePipeline(Capture, Encoder, display ?? new DisplayId(7), rawCapacity, encodedCapacity,
+                Clock, settings);
         }
 
         public ManualClock Clock { get; } = new();

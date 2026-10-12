@@ -26,6 +26,8 @@ public sealed class TlsConnection : IDisposable
     private int _disposeErrorObserver;
     private Exception? _clientError;
     private Exception? _streamError;
+    private int _clientDisposeSucceeded;
+    private int _streamDisposeSucceeded;
 
     internal TlsConnection(ConnectionIdentity identity, TcpClient client, SslStream stream)
     {
@@ -86,6 +88,11 @@ public sealed class TlsConnection : IDisposable
 
     internal bool IsCloseRequested => Volatile.Read(ref _closeRequested) != 0;
 
+    // 必须在共享 Close 任务退出后逐根检查正常返回，不能由请求关闭或 CleanupErrors 为空推断成功。
+    internal bool AllOwnedRootsReleased => Volatile.Read(ref _closeTask) is { IsCompletedSuccessfully: true }
+        && Volatile.Read(ref _clientDisposeSucceeded) != 0
+        && Volatile.Read(ref _streamDisposeSucceeded) != 0;
+
     /// <summary>每次返回同一任务；完成仅表示两项释放尝试结束，错误见 CleanupErrors。</summary>
     internal Task CloseAsync()
     {
@@ -136,6 +143,7 @@ public sealed class TlsConnection : IDisposable
         try
         {
             _client.Dispose();
+            Volatile.Write(ref _clientDisposeSucceeded, 1);
         }
         catch (Exception error)
         {
@@ -145,6 +153,7 @@ public sealed class TlsConnection : IDisposable
         try
         {
             _stream.Dispose();
+            Volatile.Write(ref _streamDisposeSucceeded, 1);
         }
         catch (Exception error)
         {

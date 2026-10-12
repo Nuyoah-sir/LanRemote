@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Text.Json;
+using LanRemote.App.Services;
 using LanRemote.Core.Abstractions;
 using LanRemote.Core.Configuration;
 using LanRemote.Core.Encoding;
@@ -9,6 +11,8 @@ using LanRemote.Core.Infrastructure;
 using LanRemote.Core.Models;
 using LanRemote.Discovery;
 using LanRemote.Security.Identity;
+using LanRemote.Sessions;
+using LanRemote.Transport;
 using Microsoft.Extensions.Logging;
 
 namespace LanRemote.App.ViewModels;
@@ -34,6 +38,8 @@ public sealed class MainViewModel : ViewModelBase
     private readonly IAccessSecretStore _secretStore;
     private readonly IDiscoveryService _discovery;
     private readonly DiscoveryRuntimeState _runtimeState;
+    private readonly HostRuntimeService _hostRuntime;
+    private readonly SemaphoreSlim _persistGate = new(1, 1);
     private readonly ILogger<MainViewModel> _logger;
     private readonly SynchronizationContext? _uiContext;
 
@@ -43,11 +49,24 @@ public sealed class MainViewModel : ViewModelBase
     private bool _isBusy;
     private string _statusText = "正在初始化…";
     private bool _isAccessKeyVisible;
+    private bool _hostSettingsReady;
+    private bool _useClearerPreview;
+    private bool _useSmootherPreview;
+    private bool _useFastPreview;
+    private bool _useThirtyFpsPreview;
+    private double _manualPreviewScale = 0.75;
+    private int _manualJpegQuality = 60;
+    private bool _useManualVideoQuality;
+    private bool _isExiting;
+    private string _hostStatusText = "主机未监听：正在验证配置与身份。";
 
     private CancellationTokenSource? _watchCts;
     private CancellationTokenSource? _cleanupCts;
     private Task? _watchTask;
     private Task? _cleanupTask;
+    private Task? _hostStopTask;
+    private Task? _exitStopTask;
+    private long _sharingIntentVersion;
 
     /// <summary>由 DI 容器构造。</summary>
     /// <param name="paths">数据目录定位。</param>
@@ -64,6 +83,7 @@ public sealed class MainViewModel : ViewModelBase
         IAccessSecretStore secretStore,
         IDiscoveryService discovery,
         DiscoveryRuntimeState runtimeState,
+        HostRuntimeService hostRuntime,
         ILogger<MainViewModel> logger)
     {
         _paths = paths;
@@ -72,6 +92,7 @@ public sealed class MainViewModel : ViewModelBase
         _secretStore = secretStore;
         _discovery = discovery;
         _runtimeState = runtimeState;
+        _hostRuntime = hostRuntime;
         _logger = logger;
 
         // 在 UI 线程构造时捕获上下文，用于把后台线程的设备更新 marshalling 回来。
@@ -131,6 +152,170 @@ public sealed class MainViewModel : ViewModelBase
         set => SetProperty(ref _statusText, value);
     }
 
+    /// <summary>传输主机的独立状态；不会被设备发现或配置保存的文案覆盖。</summary>
+    public string HostStatusText
+    {
+        get => _hostStatusText;
+        private set => SetProperty(ref _hostStatusText, value);
+    }
+
+    public bool HostSettingsReady
+    {
+        get => _hostSettingsReady;
+        private set => SetProperty(ref _hostSettingsReady, value);
+    }
+
+    public bool NeedsLocalApprovalRepair => HostSettingsReady && !RequireLocalApproval;
+
+    /// <summary>只影响下一次明确开启的主机；不写入 config.json，也不修改在途会话。</summary>
+    public bool UseClearerPreview
+    {
+        get => _useClearerPreview;
+        set
+        {
+            if (!SetProperty(ref _useClearerPreview, value)) return;
+            if (value && _useSmootherPreview)
+            {
+                _useSmootherPreview = false;
+                OnPropertyChanged(nameof(UseSmootherPreview));
+            }
+            if (value && _useFastPreview)
+            {
+                _useFastPreview = false;
+                OnPropertyChanged(nameof(UseFastPreview));
+            }
+            if (value && _useThirtyFpsPreview)
+            {
+                _useThirtyFpsPreview = false;
+                OnPropertyChanged(nameof(UseThirtyFpsPreview));
+            }
+            ReportPendingVideoSelection();
+        }
+    }
+
+    /// <summary>同为75%缩放的15FPS试验档；与10FPS互斥，未授权时不能自动启动共享。</summary>
+    public bool UseSmootherPreview
+    {
+        get => _useSmootherPreview;
+        set
+        {
+            if (!SetProperty(ref _useSmootherPreview, value)) return;
+            if (value && _useClearerPreview)
+            {
+                _useClearerPreview = false;
+                OnPropertyChanged(nameof(UseClearerPreview));
+            }
+            if (value && _useFastPreview)
+            {
+                _useFastPreview = false;
+                OnPropertyChanged(nameof(UseFastPreview));
+            }
+            if (value && _useThirtyFpsPreview)
+            {
+                _useThirtyFpsPreview = false;
+                OnPropertyChanged(nameof(UseThirtyFpsPreview));
+            }
+            ReportPendingVideoSelection();
+        }
+    }
+
+    /// <summary>20FPS固定试验档；与10/15FPS互斥且只在下一次显式开启时生效。</summary>
+    public bool UseFastPreview
+    {
+        get => _useFastPreview;
+        set
+        {
+            if (!SetProperty(ref _useFastPreview, value)) return;
+            if (value && _useClearerPreview)
+            {
+                _useClearerPreview = false;
+                OnPropertyChanged(nameof(UseClearerPreview));
+            }
+            if (value && _useSmootherPreview)
+            {
+                _useSmootherPreview = false;
+                OnPropertyChanged(nameof(UseSmootherPreview));
+            }
+            if (value && _useThirtyFpsPreview)
+            {
+                _useThirtyFpsPreview = false;
+                OnPropertyChanged(nameof(UseThirtyFpsPreview));
+            }
+            ReportPendingVideoSelection();
+        }
+    }
+
+    /// <summary>30FPS固定试验档；与其他帧率档互斥且仅下一次显式共享开启时生效。</summary>
+    public bool UseThirtyFpsPreview
+    {
+        get => _useThirtyFpsPreview;
+        set
+        {
+            if (!SetProperty(ref _useThirtyFpsPreview, value)) return;
+            if (value && _useClearerPreview)
+            {
+                _useClearerPreview = false;
+                OnPropertyChanged(nameof(UseClearerPreview));
+            }
+            if (value && _useSmootherPreview)
+            {
+                _useSmootherPreview = false;
+                OnPropertyChanged(nameof(UseSmootherPreview));
+            }
+            if (value && _useFastPreview)
+            {
+                _useFastPreview = false;
+                OnPropertyChanged(nameof(UseFastPreview));
+            }
+            ReportPendingVideoSelection();
+        }
+    }
+
+    /// <summary>手动画质须另外显式勾选；单纯浏览下拉值不影响默认档或现役会话。</summary>
+    public bool UseManualVideoQuality
+    {
+        get => _useManualVideoQuality;
+        set
+        {
+            if (SetProperty(ref _useManualVideoQuality, value)) ReportPendingVideoSelection();
+        }
+    }
+
+    public IReadOnlyList<double> ManualPreviewScales => VideoQualitySettings.AllowedScales;
+
+    public IReadOnlyList<int> ManualJpegQualities { get; } =
+        Enumerable.Range(VideoQualitySettings.MinJpegQuality,
+            VideoQualitySettings.MaxJpegQuality - VideoQualitySettings.MinJpegQuality + 1).ToArray();
+
+    public double ManualPreviewScale
+    {
+        get => _manualPreviewScale;
+        set
+        {
+            if (SetProperty(ref _manualPreviewScale, value)) ReportPendingVideoSelection();
+        }
+    }
+
+    public int ManualJpegQuality
+    {
+        get => _manualJpegQuality;
+        set
+        {
+            if (SetProperty(ref _manualJpegQuality, value)) ReportPendingVideoSelection();
+        }
+    }
+
+    private static string ActivePreviewDescription(VideoQualitySettings? settings) => settings is null
+        ? "5 FPS / 50% / JPEG 60"
+        : $"{settings.TargetFps} FPS / {settings.Scale * 100:0}% / JPEG {settings.JpegQuality}";
+
+    private void ReportPendingVideoSelection()
+    {
+        if (!_hostRuntime.IsListening) return;
+        HostStatusText = $"仅查看主机正在监听：当前 {ActivePreviewDescription(_hostRuntime.ActivePreviewSettings)}；" +
+            "更改帧率或手动画质须先紧急停止共享，再显式开启。";
+    }
+
     /// <summary>数据目录。</summary>
     public string ConfigRootPath => _paths.RootDirectory;
 
@@ -157,17 +342,24 @@ public sealed class MainViewModel : ViewModelBase
     /// <summary>是否允许控制。</summary>
     public bool AllowControl
     {
-        get => _config.AllowControl;
-        set => UpdateConfig(_config with { AllowControl = value }, nameof(AllowControl));
+        get => false;
+        set => OnPropertyChanged(nameof(AllowControl));
     }
 
     /// <summary>陌生控制端是否需要本机确认。</summary>
     public bool RequireLocalApproval
     {
         get => _config.RequireLocalApprovalForUnknownController;
-        set => UpdateConfig(
-            _config with { RequireLocalApprovalForUnknownController = value },
-            nameof(RequireLocalApproval));
+        set
+        {
+            if (!value)
+            {
+                OnPropertyChanged(nameof(RequireLocalApproval));
+                return;
+            }
+            UpdateConfig(_config with { RequireLocalApprovalForUnknownController = true },
+                nameof(RequireLocalApproval));
+        }
     }
 
     /// <summary>是否随 Windows 登录自动启动。</summary>
@@ -189,97 +381,154 @@ public sealed class MainViewModel : ViewModelBase
     /// </remarks>
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
+        if (LoadingStopped(cancellationToken))
+        {
+            return;
+        }
+
         IsBusy = true;
         StatusText = "正在加载配置…";
 
         try
         {
-            AppConfig loaded = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(true);
-            ReplaceConfig(loaded, raisePropertyChanged: true);
+            bool configVerified = true;
+            bool firstInstallDiscovery = false;
+            AppConfig loaded;
+            try
+            {
+                loaded = await _hostRuntime.LoadVerifiedConfigAsync(cancellationToken).ConfigureAwait(true);
+                if (LoadingStopped(cancellationToken)) return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+            {
+                if (LoadingStopped(cancellationToken)) return;
+                // 产品规格要求首次安装的设备自动发现；只在严格读取的同一配置文件确实不存在时启用。
+                // 损坏、字段缺失或无权访问时禁止公告；两种情况均不授权屏幕共享。
+                firstInstallDiscovery = ex is FileNotFoundException { FileName: { } missingFile } &&
+                    string.Equals(Path.GetFullPath(missingFile), Path.GetFullPath(_paths.ConfigFilePath),
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !File.Exists(_paths.ConfigFilePath);
+                configVerified = false;
+                loaded = new AppConfig
+                {
+                    AllowDiscovery = firstInstallDiscovery,
+                    AllowViewing = false,
+                    AllowControl = false,
+                    RequireLocalApprovalForUnknownController = true,
+                };
+                HostStatusText = firstInstallDiscovery
+                    ? "主机未监听：首次安装自动发现设备；仅查看共享须在本机显式开启。"
+                    : "主机未监听：配置不存在或损坏；请在本机显式开启“允许查看屏幕”。";
+                _logger.LogWarning(ex, "配置没有通过严格读取，传输监听保持关闭。");
+            }
+            ReplaceConfig(loaded with { AllowControl = false }, raisePropertyChanged: true);
 
             DeviceIdentity identity = await _identityService.GetOrCreateAsync(cancellationToken)
                 .ConfigureAwait(true);
+            if (LoadingStopped(cancellationToken)) return;
             SetIdentity(identity);
+            HostSettingsReady = true;
+            OnPropertyChanged(nameof(NeedsLocalApprovalRepair));
 
-            // 身份与配置都就绪之后才允许 discovery 看见它们。
-            _runtimeState.Initialize(identity, _config);
+            // M5 只广播查看能力；即使旧配置写有 AllowControl=true，也不能对外宣称已支持控制。
+            _runtimeState.Initialize(identity, _config with { AllowViewing = false, AllowControl = false });
 
-            // 注意：这里只记录设备名/设备码/开关状态。访问密钥永远不进日志。
             _logger.LogInformation(
-                "本机={MachineName}，设备码={DeviceCode}，允许被发现={AllowDiscovery}，允许控制={AllowControl}，陌生控制端需本机确认={RequireApproval}",
+                "本机={MachineName}，设备码={DeviceCode}，允许被发现={AllowDiscovery}，允许控制=false，陌生控制端需本机确认={RequireApproval}",
                 LocalDeviceName,
                 identity.DeviceCode,
                 _config.AllowDiscovery,
-                _config.AllowControl,
                 _config.RequireLocalApprovalForUnknownController);
 
+            long sharingIntentBeforeDiscovery = _sharingIntentVersion;
             bool discoveryStarted = await StartDiscoveryAsync(cancellationToken).ConfigureAwait(true);
-
-            // 只有 discovery 真的起来了才写「正常启动」状态。
-            // 失败时 StartDiscoveryAsync 已经写入了具体的网络错误原因，
-            // 这里再无条件覆盖就会把「端口被占用」这类真问题伪装成「加载成功」。
+            if (LoadingStopped(cancellationToken)) return;
             if (discoveryStarted)
             {
-                StatusText = File.Exists(_paths.ConfigFilePath)
+                StatusText = configVerified
                     ? "已从磁盘加载配置与本机身份。"
-                    : "未发现配置文件，使用安全默认值。";
+                    : firstInstallDiscovery
+                        ? "首次安装已启动局域网自动发现；查看权限仍关闭。"
+                        : "配置不可用，已用禁止发现与查看的默认值加载本机身份。";
+            }
+
+            // 历史配置里的 AllowViewing=true 并不证明本轮操作者已同意共享。
+            // 旧版本的无关设置保存会把默认 true 写入磁盘，因此每次启动均保持零监听。
+            if (configVerified && sharingIntentBeforeDiscovery == _sharingIntentVersion)
+            {
+                HostStatusText = !_config.AllowViewing
+                    ? "主机未监听：未允许查看屏幕。"
+                    : !RequireLocalApproval
+                        ? "主机未监听：配置关闭了本机审批；请勾选修复后再显式开启。"
+                        : "主机未监听：请在本机明确点击“开启仅查看共享”。";
             }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or UnauthorizedAccessException)
+        catch (OperationCanceledException)
         {
-            ReplaceConfig(new AppConfig(), raisePropertyChanged: true);
-            StatusText = "配置加载失败，已回落到安全默认值。";
-            _logger.LogWarning(ex, "加载配置失败，使用默认配置。");
+            if (!LoadingStopped(cancellationToken))
+            {
+                HostStatusText = "主机未监听：初始化已取消。";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (!LoadingStopped(cancellationToken))
+            {
+                HostStatusText = "主机未监听：身份或本机秘密加载失败。";
+            }
+            _logger.LogError(ex, "身份或本机秘密加载失败，传输监听保持关闭。");
         }
         catch (CryptographicException ex)
         {
             // DPAPI 失败通常意味着换了用户或用户配置损坏，不是可以自愈的错误。
-            StatusText = "本机秘密无法读取（可能更换了 Windows 用户账户）。";
+            if (!LoadingStopped(cancellationToken))
+            {
+                StatusText = "本机秘密无法读取（可能更换了 Windows 用户账户）。";
+            }
             _logger.LogError(ex, "访问 secrets.bin 失败。");
+        }
+        catch (Exception ex) when (LoadingStopped(cancellationToken))
+        {
+            _logger.LogDebug(ex, "退出或取消后初始化已停止。");
         }
         finally
         {
-            IsBusy = false;
+            if (!_isExiting) IsBusy = false;
         }
     }
 
+    private bool LoadingStopped(CancellationToken token) => _isExiting || token.IsCancellationRequested;
+
     /// <summary>
-    /// 停止设备流消费与 TTL 清理循环。
+    /// 完整等待 ViewModel 的设备流与 TTL 清理原任务；不把等待预算超时当已退出。
     /// </summary>
-    /// <remarks>只停止 ViewModel 自己的后台任务；socket 的释放由
-    /// <see cref="IDiscoveryService.StopAsync"/> 负责（App.OnExit 调用）。</remarks>
+    /// <remarks>socket 与发现服务循环另由 LanDiscoveryService.JoinAndDisposeAsync 完整等待。</remarks>
     public async Task StopDiscoveryAsync()
     {
-        _watchCts?.Cancel();
-        _cleanupCts?.Cancel();
+        List<Task> cancellations = new();
+        if (_watchCts is { } watch) cancellations.Add(watch.CancelAsync());
+        if (_cleanupCts is { } cleanup) cancellations.Add(cleanup.CancelAsync());
 
-        List<Task> tasks = new();
-        if (_watchTask is not null)
+        List<Task> tasks = new(cancellations);
+        if (_watchTask is not null) tasks.Add(_watchTask);
+        if (_cleanupTask is not null) tasks.Add(_cleanupTask);
+
+        Task joined = Task.WhenAll(tasks);
+        try
         {
-            tasks.Add(_watchTask);
+            await joined.ConfigureAwait(true);
         }
-
-        if (_cleanupTask is not null)
+        finally
         {
-            tasks.Add(_cleanupTask);
-        }
-
-        if (tasks.Count > 0)
-        {
-            try
+            // 若任一原任务仍未退出（例如注入的取消回调不合作），不能提前释放根 CTS。
+            if (tasks.All(task => task.IsCompleted))
             {
-                await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
-            }
-            catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
-            {
-                _logger.LogDebug(ex, "停止设备流/清理循环时超时或取消。");
+                _watchCts?.Dispose();
+                _cleanupCts?.Dispose();
+                _watchCts = null;
+                _cleanupCts = null;
             }
         }
-
-        _watchCts?.Dispose();
-        _cleanupCts?.Dispose();
-        _watchCts = null;
-        _cleanupCts = null;
     }
 
     /// <summary>手动刷新：立即发一次 probe（组播 + 各网卡定向广播）。</summary>
@@ -367,9 +616,11 @@ public sealed class MainViewModel : ViewModelBase
     /// </remarks>
     private async Task<bool> StartDiscoveryAsync(CancellationToken cancellationToken)
     {
+        if (LoadingStopped(cancellationToken)) return false;
         try
         {
             await _discovery.StartAsync(cancellationToken).ConfigureAwait(true);
+            if (LoadingStopped(cancellationToken)) return false;
 
             StartDeviceWatch();
             StartTtlCleanupLoop();
@@ -380,7 +631,10 @@ public sealed class MainViewModel : ViewModelBase
                                      or UnauthorizedAccessException)
         {
             // 端口被占用、网卡异常等都不能影响 M1：身份照旧，只是发现不可用。
-            StatusText = "本机身份已加载，但局域网发现启动失败。";
+            if (!LoadingStopped(cancellationToken))
+            {
+                StatusText = "本机身份已加载，但局域网发现启动失败。";
+            }
             _logger.LogError(ex, "局域网发现启动失败；本机身份保持原样。");
             return false;
         }
@@ -533,21 +787,322 @@ public sealed class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(CertificateFingerprintShort));
     }
 
+    /// <summary>仅由本机明确点击“开启仅查看共享”时调用；历史配置和勾选设置不授权监听。</summary>
+    public async Task EnableViewOnlySharingAsync(CancellationToken token = default, bool useClearerPreview = false,
+        bool useSmootherPreview = false, bool useFastPreview = false, bool useThirtyFpsPreview = false,
+        bool useManualVideoQuality = false, double manualScale = 0.75, int manualJpegQuality = 60)
+    {
+        if (_isExiting) return;
+        if ((useClearerPreview ? 1 : 0) + (useSmootherPreview ? 1 : 0) +
+            (useFastPreview ? 1 : 0) + (useThirtyFpsPreview ? 1 : 0) > 1)
+        {
+            throw new ArgumentException("不能同时启用多个预览帧率档。");
+        }
+        int fps = useThirtyFpsPreview ? 30 : useFastPreview ? 20 : useSmootherPreview ? 15 :
+            useClearerPreview ? 10 : 5;
+        // 无勾选则保留原5/50/60或显式FPS的75/60，UI选择值本身不能静默改变产品行为。
+        VideoQualitySettings? previewSettings = useManualVideoQuality
+            ? new VideoQualitySettings(fps, manualScale, manualJpegQuality, false)
+            : fps == 5 ? null : new VideoQualitySettings(fps, 0.75, 60, false);
+        if (previewSettings is not null) FramePipeline.ValidateSettings(previewSettings);
+        long intent = ++_sharingIntentVersion;
+        const string notReady = "主机未监听：请先允许查看屏幕并启用本机审批，再明确点击开启。";
+        if (!CanEnableViewOnlySharing(intent))
+        {
+            _hostRuntime.BlockListening();
+            _hostRuntime.BlockApprovals();
+            HostStatusText = notReady;
+            PublishDiscoveryCapabilities();
+            Task stopTask = _hostRuntime.StopAndDisposeAsync();
+            _hostStopTask = stopTask;
+            try
+            {
+                await stopTask.ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                if (intent == _sharingIntentVersion && !_isExiting)
+                {
+                    HostStatusText = "未排空，不安全关闭；请查看本机日志。";
+                }
+                _logger.LogError(ex, "开启条件不足时旧传输主机未能完整停止。");
+                throw;
+            }
+            return;
+        }
+
+        try
+        {
+            await _persistGate.WaitAsync(token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (intent == _sharingIntentVersion && !_hostRuntime.IsListening && !_isExiting)
+            {
+                HostStatusText = "主机未监听：启动已取消。";
+            }
+            return;
+        }
+        bool started = false;
+        try
+        {
+            if (_hostStopTask is { } stopTask)
+            {
+                await stopTask.ConfigureAwait(true);
+            }
+            if (!CanEnableViewOnlySharing(intent))
+            {
+                if (intent == _sharingIntentVersion && !_isExiting) HostStatusText = notReady;
+                return;
+            }
+            AppConfig verified = await _hostRuntime.LoadVerifiedConfigAsync(token).ConfigureAwait(true);
+            token.ThrowIfCancellationRequested();
+            if (!CanEnableViewOnlySharing(intent) ||
+                !verified.AllowViewing || !verified.RequireLocalApprovalForUnknownController ||
+                verified.TransportPort != _config.TransportPort ||
+                verified.TransportPort != TransportConstants.Port)
+            {
+                if (intent == _sharingIntentVersion && !_isExiting)
+                {
+                    HostStatusText = "主机未监听：磁盘配置与当前安全设置或传输端口不一致。";
+                }
+                return;
+            }
+            if (_hostRuntime.IsListening)
+            {
+                started = true;
+                HostStatusText = $"仅查看主机已在监听：本次 {ActivePreviewDescription(_hostRuntime.ActivePreviewSettings)}；" +
+                    "须先紧急停止并完整排空后再显式开启才能切换画质。";
+                PublishDiscoveryCapabilities();
+                return;
+            }
+            if (!_hostRuntime.OpenApprovals())
+            {
+                HostStatusText = "主机未监听：本机审批不可用或旧主机尚未排空。";
+                return;
+            }
+
+            _hostRuntime.AllowListening();
+            started = await StartHostAsync(token, intent, previewSettings).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = "主机未监听：启动已取消。";
+            }
+        }
+        catch (Exception ex)
+        {
+            if (intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = "主机未监听：配置、审批或旧连接排空失败（详见日志）。";
+            }
+            _logger.LogError(ex, "仅查看共享未能显式开启。");
+        }
+        finally
+        {
+            try
+            {
+                if (!started)
+                {
+                    _hostRuntime.BlockListening();
+                    _hostRuntime.BlockApprovals();
+                    try
+                    {
+                        Task cleanupTask = _hostRuntime.StopAndDisposeAsync();
+                        _hostStopTask = cleanupTask;
+                        await cleanupTask.ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (intent == _sharingIntentVersion && !_isExiting)
+                        {
+                            HostStatusText = "未排空，不安全关闭；请查看本机日志。";
+                        }
+                        _logger.LogError(ex, "开启失败后旧传输主机未能完整停止。");
+                        throw;
+                    }
+                    PublishDiscoveryCapabilities();
+                }
+            }
+            finally
+            {
+                _persistGate.Release();
+            }
+        }
+    }
+
+    private bool CanEnableViewOnlySharing(long intent) =>
+        intent == _sharingIntentVersion && HostSettingsReady && _identity is not null && !_isExiting &&
+        _config.AllowViewing && _config.RequireLocalApprovalForUnknownController;
+
+    /// <summary>紧急撤销仅查看共享；只影响当前进程，不修改下次启动仍需显式开启的配置。</summary>
+    public Task StopViewOnlySharingAsync()
+    {
+        long intent = ++_sharingIntentVersion;
+        _hostRuntime.BlockListening();
+        _hostRuntime.BlockApprovals();
+        PublishDiscoveryCapabilities();
+        if (!_isExiting)
+        {
+            HostStatusText = "正在停止仅查看共享并排空连接；下次仍需显式点击开启。";
+        }
+
+        Task stopTask = StopAndReportAsync(_hostRuntime.StopAndDisposeAsync(), intent);
+        _hostStopTask = stopTask;
+        return stopTask;
+    }
+
+    private async Task StopAndReportAsync(Task stopTask, long intent)
+    {
+        try
+        {
+            await stopTask.ConfigureAwait(true);
+            if (intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = "仅查看共享已停止且连接已排空；下次仍需显式点击开启。";
+            }
+        }
+        catch (Exception ex)
+        {
+            if (intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = "共享未排空，不安全关闭；请查看本机日志。";
+            }
+            _logger.LogError(ex, "紧急停止仅查看共享未能完整排空。");
+            throw;
+        }
+    }
+
+    /// <summary>同步禁止关窗后开启监听与审批，并立即撤销发现广播的查看能力。</summary>
+    public void BeginExit()
+    {
+        if (_isExiting) return;
+        _isExiting = true;
+        ++_sharingIntentVersion;
+        HostSettingsReady = false;
+        OnPropertyChanged(nameof(NeedsLocalApprovalRepair));
+        _hostRuntime.BeginShutdown();
+        PublishDiscoveryCapabilities();
+        HostStatusText = "正在退出：仅查看共享已撤销，等待连接排空…";
+    }
+
+    public Task StopHostForExitAsync()
+    {
+        BeginExit();
+        if (_exitStopTask is null || _exitStopTask.IsFaulted || _exitStopTask.IsCanceled)
+        {
+            _exitStopTask = StopHostForExitCoreAsync();
+        }
+        return _exitStopTask;
+    }
+
+    private async Task StopHostForExitCoreAsync()
+    {
+        Task stopTask = _hostRuntime.StopAndDisposeAsync();
+        try
+        {
+            // 所有在途 Enable/PersistAsync 都先释放 gate；停机任务已在排队，不会被配置保存绕过。
+            await _persistGate.WaitAsync().ConfigureAwait(true);
+            _persistGate.Release();
+            await stopTask.ConfigureAwait(true);
+            HostStatusText = "主机未监听：退出前连接已完整排空。";
+        }
+        catch (Exception ex)
+        {
+            HostStatusText = "未排空，不安全关闭；请查看本机日志后重试。";
+            _logger.LogError(ex, "关窗前传输主机或在途配置保存未能完整停止。");
+            throw;
+        }
+    }
+
+    private async Task<bool> StartHostAsync(CancellationToken cancellationToken, long intent,
+        VideoQualitySettings? previewSettings)
+    {
+        try
+        {
+            TransportHostStartResult result = await _hostRuntime.StartAsync(cancellationToken, previewSettings)
+                .ConfigureAwait(true);
+            if (result.IsListening && _hostRuntime.IsListening && !cancellationToken.IsCancellationRequested &&
+                CanEnableViewOnlySharing(intent))
+            {
+                HostStatusText = result.Failures.Count == 0
+                    ? $"仅查看主机正在监听：{string.Join(", ", result.BoundAddresses)}"
+                    : $"仅查看主机部分网卡可用：{string.Join(", ", result.BoundAddresses)}；另有 {result.Failures.Count} 个地址绑定失败（详见日志）。";
+                HostStatusText += $"；本次 {ActivePreviewDescription(_hostRuntime.ActivePreviewSettings)}。";
+                PublishDiscoveryCapabilities();
+                return true;
+            }
+
+            if (intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = result.IsListening
+                    ? "主机未监听：开启过程中查看权限或本机审批被撤销。"
+                    : result.Failures.Count == 0
+                        ? "主机未监听：无合格 RFC1918 网卡地址；未修改网络设置。"
+                        : $"主机未监听：{result.Failures.Count} 个地址绑定失败（详见日志）。";
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = "主机未监听：启动已取消。";
+            }
+        }
+        catch (Exception ex)
+        {
+            if (intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = "主机未监听：认证素材或网络初始化失败（详见日志）。";
+            }
+            _logger.LogError(ex, "仅查看传输主机未能启动。");
+        }
+        return false;
+    }
+
+    private void PublishDiscoveryCapabilities() =>
+        _runtimeState.UpdateFromConfig(_config with
+        {
+            AllowViewing = !_isExiting && _config.AllowViewing &&
+                _config.RequireLocalApprovalForUnknownController && _hostRuntime.IsListening,
+            AllowControl = false,
+        });
+
     private void UpdateConfig(AppConfig newConfig, string propertyName)
     {
+        if (!HostSettingsReady || _isExiting)
+        {
+            OnPropertyChanged(propertyName);
+            return;
+        }
         if (newConfig.Equals(_config))
         {
             return;
         }
 
-        _config = newConfig;
+        Task? immediateStop = null;
+        if (propertyName == nameof(AllowViewing) && !newConfig.AllowViewing)
+        {
+            // 在任何保存 I/O 前同步撤销监听和全部待审批，再异步完整 join。
+            ++_sharingIntentVersion;
+            _hostRuntime.BlockListening();
+            _hostRuntime.BlockApprovals();
+            immediateStop = _hostRuntime.StopAndDisposeAsync();
+            _hostStopTask = immediateStop;
+            HostStatusText = "正在停止仅查看主机并排空连接…";
+        }
+        else if (propertyName == nameof(AllowViewing) && newConfig.AllowViewing)
+        {
+            HostStatusText = "主机未监听：请在本机明确点击“开启仅查看共享”。";
+        }
 
-        // 先让 discovery 看到新的快照：下一次 announce / probe 响应立即使用最新值，
-        // 不需要重启 UDP 服务，也不需要等下一轮读盘。
-        _runtimeState.UpdateFromConfig(_config);
-
+        _config = newConfig with { AllowControl = false };
+        PublishDiscoveryCapabilities();
         OnPropertyChanged(propertyName);
-        _ = PersistAsync();
+        OnPropertyChanged(nameof(NeedsLocalApprovalRepair));
+        _ = PersistAsync(_config, immediateStop, _sharingIntentVersion);
     }
 
     private void ReplaceConfig(AppConfig newConfig, bool raisePropertyChanged)
@@ -563,20 +1118,65 @@ public sealed class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(AllowViewing));
         OnPropertyChanged(nameof(AllowControl));
         OnPropertyChanged(nameof(RequireLocalApproval));
+        OnPropertyChanged(nameof(NeedsLocalApprovalRepair));
         OnPropertyChanged(nameof(AutoStartOnLogin));
     }
 
-    private async Task PersistAsync()
+    private async Task PersistAsync(AppConfig snapshot, Task? immediateStop, long intent)
     {
+        await _persistGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await _configStore.SaveAsync(_config).ConfigureAwait(true);
-            StatusText = "配置已保存。";
+            Exception? stopError = null;
+            if (immediateStop is not null)
+            {
+                try
+                {
+                    await immediateStop.ConfigureAwait(true);
+                }
+                catch (Exception ex)
+                {
+                    stopError = ex;
+                    if (intent == _sharingIntentVersion && !_isExiting)
+                    {
+                        HostStatusText = "未排空，不安全关闭；请查看本机日志。";
+                    }
+                    _logger.LogError(ex, "禁止查看时传输主机未能完整停止。");
+                }
+            }
+
+            try
+            {
+                await _configStore.SaveAsync(snapshot).ConfigureAwait(true);
+                if (!_isExiting) StatusText = "配置已保存。";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (!_isExiting) StatusText = "配置保存失败。";
+                if (!snapshot.AllowViewing && intent == _sharingIntentVersion && !_isExiting)
+                {
+                    HostStatusText = stopError is null
+                        ? "主机已停止，但配置保存失败；重启前请修复配置。"
+                        : "共享未排空且配置保存失败；请查看本机日志。";
+                }
+                _logger.LogError(ex, "保存配置失败。");
+                return;
+            }
+
+            if (stopError is not null)
+            {
+                return;
+            }
+            if (immediateStop is not null && !_config.AllowViewing &&
+                intent == _sharingIntentVersion && !_isExiting)
+            {
+                HostStatusText = "主机未监听：查看屏幕已关闭且连接已完整排空。";
+            }
+            // 保存配置（包括重新勾选查看/修复审批）不代表本轮操作者同意开启主机。
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        finally
         {
-            StatusText = "配置保存失败。";
-            _logger.LogError(ex, "保存配置失败。");
+            _persistGate.Release();
         }
     }
 }

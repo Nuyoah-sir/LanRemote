@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\tools\LanRemote.Acceptance\LanRemote.Acceptance.csproj" />
+    <ProjectReference Include="..\..\src\LanRemote.App\LanRemote.App.csproj" />
   </ItemGroup>
 
 </Project>

@@ -310,7 +310,7 @@ public sealed class HostConnectionLifetimeTests
     public async Task HostFinally_AttemptsEveryCleanupEvenWhenEarlierItemsThrow()
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
-        await using TransportHost host = CreateHost(certificate, (_, _) => Task.CompletedTask);
+        TransportHost host = CreateHost(certificate, (_, _) => Task.CompletedTask);
         Exception socketError = new IOException("测试 socket 错误");
         Exception sslError = new IOException("测试 SSL 错误");
         Exception admissionError = new InvalidOperationException("测试 admission 错误");
@@ -322,19 +322,39 @@ public sealed class HostConnectionLifetimeTests
         ProbeDisposable registration = new(() => { order.Add("registration"); throw registrationError; });
         ConnectionCloseHandle closer = new(socket, host.LifecycleErrors);
         closer.Attach(ssl);
+        Task finishing = host.FinishConnectionAsync(closer, admission, registration);
 
-        await host.FinishConnectionAsync(closer, admission, registration).WaitAsync(Guard);
-
-        Assert.Equal(new[] { "socket", "ssl", "admission", "registration" }, order);
-        Assert.Equal(1, socket.DisposeCount);
-        Assert.Equal(1, ssl.DisposeCount);
-        Assert.Equal(1, admission.DisposeCount);
-        Assert.Equal(1, registration.DisposeCount);
-        Assert.Equal(4, host.LifecycleErrors.Snapshot.Count);
-        AssertError(host.LifecycleErrors, HostLifecycleErrorKind.SocketCleanup, socketError);
-        AssertError(host.LifecycleErrors, HostLifecycleErrorKind.StreamCleanup, sslError);
-        AssertError(host.LifecycleErrors, HostLifecycleErrorKind.AdmissionCleanup, admissionError);
-        AssertError(host.LifecycleErrors, HostLifecycleErrorKind.RegistrationCleanup, registrationError);
+        try
+        {
+            await finishing.WaitAsync(Guard);
+            Assert.Equal(new[] { "socket", "ssl", "admission", "registration" }, order);
+            Assert.Equal(1, socket.DisposeCount);
+            Assert.Equal(1, ssl.DisposeCount);
+            Assert.Equal(1, admission.DisposeCount);
+            Assert.Equal(1, registration.DisposeCount);
+            Assert.Equal(4, host.LifecycleErrors.Snapshot.Count);
+            AssertError(host.LifecycleErrors, HostLifecycleErrorKind.SocketCleanup, socketError);
+            AssertError(host.LifecycleErrors, HostLifecycleErrorKind.StreamCleanup, sslError);
+            AssertError(host.LifecycleErrors, HostLifecycleErrorKind.AdmissionCleanup, admissionError);
+            AssertError(host.LifecycleErrors, HostLifecycleErrorKind.RegistrationCleanup, registrationError);
+        }
+        finally
+        {
+            try
+            {
+                await finishing.WaitAsync(Guard);
+            }
+            finally
+            {
+                AggregateException failure = await Assert.ThrowsAsync<AggregateException>(
+                    () => host.DisposeAsync().AsTask().WaitAsync(Guard));
+                Assert.Collection(failure.InnerExceptions,
+                    error => Assert.Same(socketError, error),
+                    error => Assert.Same(sslError, error),
+                    error => Assert.Same(admissionError, error),
+                    error => Assert.Same(registrationError, error));
+            }
+        }
     }
 
     [Fact]
@@ -374,7 +394,7 @@ public sealed class HostConnectionLifetimeTests
         using DisposeGate synchronousGate = new();
         Exception expected = new InvalidOperationException("测试 handler 原始错误");
         int port = GetFreePort();
-        await using TransportHost host = CreateHost(certificate, (connection, _) =>
+        TransportHost host = CreateHost(certificate, (connection, _) =>
         {
             accepted.TrySetResult(connection);
             if (synchronous)
@@ -417,7 +437,14 @@ public sealed class HostConnectionLifetimeTests
         {
             release.TrySetResult();
             synchronousGate.Release();
-            await host.StopAsync(Guard).WaitAsync(Guard + Guard);
+            try
+            {
+                await host.StopAsync(Guard).WaitAsync(Guard + Guard);
+            }
+            finally
+            {
+                await host.DisposeAsync().AsTask().WaitAsync(Guard);
+            }
         }
     }
 
@@ -555,7 +582,7 @@ public sealed class HostConnectionLifetimeTests
     public async Task UnregisteredClose_ComponentGate_PreventsAllFinishedUntilCleanupCompletes(bool closeThrows)
     {
         using X509Certificate2 certificate = TestCertificateFactory.Create();
-        await using TransportHost host = CreateHost(certificate, (_, _) => Task.CompletedTask);
+        TransportHost host = CreateHost(certificate, (_, _) => Task.CompletedTask);
         using DisposeGate gate = new();
         Exception expected = new IOException("测试未登记连接关闭失败");
         ProbeDisposable socket = new(() =>
@@ -615,9 +642,26 @@ public sealed class HostConnectionLifetimeTests
         finally
         {
             gate.Release();
-            await finishing.WaitAsync(Guard);
-            await acceptLifetime.WaitAsync(Guard);
-            await host.StopAsync(Guard).WaitAsync(Guard + Guard);
+            try
+            {
+                await finishing.WaitAsync(Guard);
+                await acceptLifetime.WaitAsync(Guard);
+                await host.StopAsync(Guard).WaitAsync(Guard + Guard);
+            }
+            finally
+            {
+                Task disposal = host.DisposeAsync().AsTask();
+                if (closeThrows)
+                {
+                    AggregateException failure = await Assert.ThrowsAsync<AggregateException>(
+                        () => disposal.WaitAsync(Guard));
+                    Assert.Same(expected, Assert.Single(failure.InnerExceptions));
+                }
+                else
+                {
+                    await disposal.WaitAsync(Guard);
+                }
+            }
         }
     }
 
@@ -714,6 +758,100 @@ public sealed class HostConnectionLifetimeTests
         Assert.Equal(0, host.ActiveConnections);
         Assert.Equal(0, host.AdmittedConnections);
         Assert.Empty(host.LifecycleErrors.Snapshot);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task HostDispose_BoundsRepeatedCleanupWithoutIncludingBusinessFaultsOrFlattening()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        TransportHost host = CreateHost(certificate, (_, _) => Task.CompletedTask);
+        AggregateException firstError = new("首个 socket 释放错误树",
+            new IOException("底层 IO 错误"), new InvalidOperationException("底层状态错误"));
+        Exception laterError = new IOException("第二个 socket 释放错误");
+        Exception handlerError = new InvalidOperationException("业务处理错误");
+        Exception connectionError = new IOException("连接处理错误");
+        ConnectionCloseHandle first = new(new ProbeDisposable(() => throw firstError), host.LifecycleErrors);
+        ConnectionCloseHandle second = new(new ProbeDisposable(() => throw laterError), host.LifecycleErrors);
+        host.LifecycleErrors.Record(HostLifecycleErrorKind.Handler, handlerError);
+        host.LifecycleErrors.Record(HostLifecycleErrorKind.Connection, connectionError);
+
+        try
+        {
+            await host.FinishConnectionAsync(first, admission: null, registration: null).WaitAsync(Guard);
+            await host.FinishConnectionAsync(second, admission: null, registration: null).WaitAsync(Guard);
+            AssertError(host.LifecycleErrors, HostLifecycleErrorKind.SocketCleanup, firstError);
+            Assert.Equal(3, host.LifecycleErrors.Snapshot.Count);
+            Assert.DoesNotContain(host.LifecycleErrors.Snapshot,
+                entry => ReferenceEquals(entry.Error, laterError));
+            Assert.True((await host.StopAsync(Guard).WaitAsync(Guard + Guard)).AllFinished);
+        }
+        finally
+        {
+            first.CompleteAttachment();
+            second.CompleteAttachment();
+            try
+            {
+                await first.CloseAsync().WaitAsync(Guard);
+                await second.CloseAsync().WaitAsync(Guard);
+            }
+            finally
+            {
+                AggregateException failure = await Assert.ThrowsAsync<AggregateException>(
+                    () => host.DisposeAsync().AsTask().WaitAsync(Guard));
+                Assert.Same(firstError, Assert.Single(failure.InnerExceptions));
+                Assert.Equal(2, firstError.InnerExceptions.Count);
+            }
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task HostDispose_JoinsUnregisteredCloseBeforeReportingLateCleanupFailure()
+    {
+        using X509Certificate2 certificate = TestCertificateFactory.Create();
+        TransportHost host = CreateHost(certificate, (_, _) => Task.CompletedTask);
+        using DisposeGate gate = new();
+        Exception expected = new IOException("未登记连接迟到的 socket 释放失败");
+        ProbeDisposable socket = new(() => { gate.Block(); throw expected; });
+        ConnectionCloseHandle closer = new(socket, host.LifecycleErrors);
+        Task finishing = host.FinishConnectionAsync(closer, admission: null, registration: null);
+        Task acceptLifetime = host.AwaitUnregisteredHandlingAsync(finishing, registered: false);
+        FieldInfo acceptLoopsField = typeof(TransportHost).GetField(
+            "_acceptLoops", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.IsType<List<Task>>(acceptLoopsField.GetValue(host)).Add(acceptLifetime);
+        Task? disposal = null;
+
+        try
+        {
+            await gate.Entered.Task.WaitAsync(Guard);
+            disposal = host.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            Assert.Equal(0, host.ActiveConnections);
+            Assert.Equal(0, host.AdmittedConnections);
+            Assert.False(acceptLifetime.IsCompleted);
+
+            gate.Release();
+            await acceptLifetime.WaitAsync(Guard);
+            await finishing.WaitAsync(Guard);
+            AggregateException failure = await Assert.ThrowsAsync<AggregateException>(
+                () => disposal.WaitAsync(Guard));
+            Assert.Same(expected, Assert.Single(failure.InnerExceptions));
+            Assert.Equal(1, socket.DisposeCount);
+        }
+        finally
+        {
+            gate.Release();
+            try
+            {
+                await finishing.WaitAsync(Guard);
+                await acceptLifetime.WaitAsync(Guard);
+            }
+            finally
+            {
+                AggregateException failure = await Assert.ThrowsAsync<AggregateException>(
+                    () => (disposal ?? host.DisposeAsync().AsTask()).WaitAsync(Guard));
+                Assert.Same(expected, Assert.Single(failure.InnerExceptions));
+            }
+        }
     }
 
     [Fact(Timeout = 60_000)]

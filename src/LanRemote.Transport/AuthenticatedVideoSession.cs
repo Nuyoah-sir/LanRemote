@@ -21,4 +21,8 @@ public sealed class AuthenticatedVideoSession : IAsyncDisposable
     /// 不可从本会话跟踪的操作或回调内等待释放；已交付帧不由此方法回收。
     /// </summary>
     public ValueTask DisposeAsync() => new(_lifetime.GetPublicDisposeTask());
+
+    /// <summary>测试专用：等待同一原 DisposeAsync 任务，再取得子会话释放证明。</summary>
+    internal Task<ClientDisposalEvidence> GetDisposalEvidenceAsync() =>
+        _lifetime.GetPublicDisposalEvidenceTask();
 }

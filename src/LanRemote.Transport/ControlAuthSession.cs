@@ -96,7 +96,7 @@ public sealed class ControlAuthSession
     private readonly TransportTimeouts _timeouts;
     private readonly byte[] _serverNonce;
     private readonly AuthChallengeFrame _challenge;
-    private Task<int>? _pendingRead;
+    private OwnedControlActivityRead? _pendingRead;
     private Task<LocalApprovalDecision>? _approvalDecision;
     private int _started;
 
@@ -285,7 +285,7 @@ public sealed class ControlAuthSession
 
             // ⑥ 本机审批（v1：每个新控制连接都要批；ADR-038 第 3 条）。
             SessionPermission grantedPermission = response.RequestedPermission;
-            Task<int>? pendingRead = null;
+            OwnedControlActivityRead? pendingRead = null;
             if (Context.Options.RequireLocalApproval)
             {
                 ApprovalAttempt attempt = await RunApprovalAsync(response, cancellationToken)
@@ -296,11 +296,11 @@ public sealed class ControlAuthSession
                 }
 
                 grantedPermission = attempt.Granted!.Value;
-                pendingRead = attempt.ReadTask;
+                pendingRead = attempt.Read;
                 // success 写出/登记若中途退出，Host 关流仍可能使挂起读 fault；观察不另开读者。
                 if (pendingRead is not null)
                 {
-                    ObserveQuietly(pendingRead);
+                    ObserveQuietly(pendingRead.Activity);
                 }
             }
 
@@ -410,7 +410,7 @@ public sealed class ControlAuthSession
     // Router 在 RunAsync 结束（含异常）并由 Host 关流后调用；不延迟原失败返回，也不另开读者。
     internal async Task JoinPendingReadAsync()
     {
-        Task<int>? pendingRead = _pendingRead;
+        OwnedControlActivityRead? pendingRead = _pendingRead;
         if (pendingRead is null)
         {
             return;
@@ -418,11 +418,15 @@ public sealed class ControlAuthSession
 
         try
         {
-            _ = await pendingRead.ConfigureAwait(false);
+            _ = await pendingRead.Activity.ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
         {
             // 正常断连/取消都等原读真正结束；意外异常留给 Host 做有界诊断。
+        }
+        finally
+        {
+            pendingRead.ClearCompletedBuffer();
         }
     }
 
@@ -492,7 +496,8 @@ public sealed class ControlAuthSession
 
             Guid requestId = Guid.NewGuid();
             string shortCode = LocalApprovalRequest.ComputeShortCode(SessionId, response.ClientNonce.Span);
-            Task<int> clientActivity = _pendingRead = ReadOneByteAsync(_stream, cancellationToken);
+            OwnedControlActivityRead read = _pendingRead = new(_stream, cancellationToken);
+            Task<int> clientActivity = read.Activity;
 
             // 调用 gate 前起算；包含同步前缀与 UI 调度。UTC 仅供显示，不参与接受判据。
             using AuthenticationDeadline approval = new(
@@ -511,7 +516,7 @@ public sealed class ControlAuthSession
             Task<LocalApprovalDecision> decision = _approvalDecision = RequestApprovalSafeAsync(request, approval.Token);
             Task window = Task.Delay(Timeout.InfiniteTimeSpan, approval.Token);
 
-            Task<int>? handOff = null;
+            OwnedControlActivityRead? handOff = null;
             try
             {
                 // WhenAny 只唤醒；多个 ready 的任务不能由数组顺序决定授权或本地短码。
@@ -559,7 +564,7 @@ public sealed class ControlAuthSession
                     return new ApprovalAttempt(stop ?? rejection, null, null);
                 }
 
-                handOff = clientActivity;
+                handOff = read;
                 return new ApprovalAttempt(null, decided!.GrantedPermission, handOff);
             }
             finally
@@ -590,16 +595,17 @@ public sealed class ControlAuthSession
     /// EOF / RST / 越界数据都结束会话（数据在此阶段没有消费方，不静默丢弃也不假装理解）。
     /// </remarks>
     private static async Task HoldUntilDisconnectAsync(
-        Task<int>? pendingRead,
+        OwnedControlActivityRead? pendingRead,
         Stream stream,
         CancellationToken cancellationToken)
     {
-        Task<int> read = pendingRead ?? ReadOneByteAsync(stream, cancellationToken);
+        // 无审批时只在原 holding 位置创建局部所有者，不改变 Router 的异常传播范围。
+        OwnedControlActivityRead read = pendingRead ?? new(stream, cancellationToken);
 
         try
         {
             // 0 = 有序 EOF（对端正常关闭）；>0 = 越界数据（M4 无消费方）——两者都结束会话。
-            _ = await read.ConfigureAwait(false);
+            _ = await read.Activity.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -609,17 +615,80 @@ public sealed class ControlAuthSession
         {
             // RST / 流被释放：会话随连接结束，正常收尾。
         }
+        finally
+        {
+            read.ClearCompletedBuffer();
+        }
     }
 
-    /// <summary>读 1 字节（断连侦测 / 保持读；异常也捕获进返回的 Task，不在调用点同步抛）。</summary>
-    private static Task<int> ReadOneByteAsync(Stream stream, CancellationToken cancellationToken)
+    /// <summary>原一字节活动读及其内存；Activity 保持直接 async await 的观察边界。</summary>
+    private sealed class OwnedControlActivityRead
     {
-        return ReadAsync();
+        private byte[]? _buffer;
 
-        async Task<int> ReadAsync()
+        internal OwnedControlActivityRead(Stream stream, CancellationToken cancellationToken)
         {
+            Activity = ReadAsync(stream, cancellationToken);
+        }
+
+        internal Task<int> Activity { get; }
+
+        private async Task<int> ReadAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            // 分配与流的同步前缀仍在 async 方法内，异常捕获进原形状的包装 Task。
             byte[] buffer = new byte[1];
+            _buffer = buffer;
             return await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>只移交已成功原读的历史结果：null 表示 EOF，0x00 仍是数据。</summary>
+        /// <remarks>与 Clear 共用一次归属；不授予会话权限、帧预算或后续读取许可。</remarks>
+        internal bool TryTakeCompleted(out byte? firstByte)
+        {
+            firstByte = null;
+            if (!Activity.IsCompletedSuccessfully)
+            {
+                return false;
+            }
+
+            // 观察同一个已成功的包装 Task，不再消费底层 ValueTask。
+            int count = Activity.GetAwaiter().GetResult();
+            if (count is not (0 or 1))
+            {
+                return false;
+            }
+
+            byte[]? buffer = Interlocked.Exchange(ref _buffer, null);
+            if (buffer is null)
+            {
+                return false;
+            }
+
+            try
+            {
+                firstByte = count == 0 ? (byte?)null : buffer[0];
+                return true;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(buffer);
+            }
+        }
+
+        internal void ClearCompletedBuffer()
+        {
+            // fault/cancel 不证明未知借用已结束；只清理已成功退出的原包装读。
+            if (!Activity.IsCompletedSuccessfully)
+            {
+                return;
+            }
+
+            // 一次清理权，不是并发调用之间的擦除完成屏障。
+            byte[]? buffer = Interlocked.Exchange(ref _buffer, null);
+            if (buffer is not null)
+            {
+                CryptographicOperations.ZeroMemory(buffer);
+            }
         }
     }
 
@@ -772,5 +841,5 @@ public sealed class ControlAuthSession
     private sealed record ApprovalAttempt(
         string? Rejection,
         SessionPermission? Granted,
-        Task<int>? ReadTask);
+        OwnedControlActivityRead? Read);
 }

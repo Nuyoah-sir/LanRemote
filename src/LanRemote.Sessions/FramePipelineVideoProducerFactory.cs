@@ -17,6 +17,7 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
     private readonly int _rawCapacity;
     private readonly int _encodedCapacity;
     private readonly TimeProvider? _timeProvider;
+    private readonly VideoQualitySettings? _settings;
 
     /// <summary>只验证并保存参数，不调用委托；队列容量均只能为 1 或 2。</summary>
     public FramePipelineVideoProducerFactory(
@@ -24,10 +25,12 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
         Func<IFrameEncoder> createEncoder,
         int rawCapacity = 2,
         int encodedCapacity = 2,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        VideoQualitySettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(createCapture);
         ArgumentNullException.ThrowIfNull(createEncoder);
+        if (settings is not null) FramePipeline.ValidateSettings(settings);
         if (rawCapacity is not (1 or 2))
         {
             throw new ArgumentOutOfRangeException(nameof(rawCapacity), rawCapacity, "容量只能为 1 或 2。");
@@ -43,6 +46,7 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
         _rawCapacity = rawCapacity;
         _encodedCapacity = encodedCapacity;
         _timeProvider = timeProvider;
+        _settings = settings;
     }
 
     /// <inheritdoc />
@@ -73,10 +77,18 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
             cancellationToken.ThrowIfCancellationRequested();
             DisplayInfo primary = displays.Single(display => display.IsPrimary);
             cancellationToken.ThrowIfCancellationRequested();
+            if (primary.Width is < 1 or > FrameLimits.MaxDimension ||
+                primary.Height is < 1 or > FrameLimits.MaxDimension ||
+                (long)primary.Width * primary.Height > FrameLimits.MaxDecodedPixels)
+            {
+                throw new ArgumentOutOfRangeException(nameof(primary),
+                    "主屏超过M5单帧像素预算；不创建编码器或采集大型原始帧。");
+            }
 
             encoder = _createEncoder() ?? throw new InvalidOperationException("编码器工厂返回了 null。");
             cancellationToken.ThrowIfCancellationRequested();
-            pipeline = new FramePipeline(capture, encoder, primary.Id, _rawCapacity, _encodedCapacity, _timeProvider);
+            pipeline = new FramePipeline(capture, encoder, primary.Id, _rawCapacity, _encodedCapacity, _timeProvider,
+                _settings);
             cancellationToken.ThrowIfCancellationRequested();
 
             // 最后一次取消检查前一直由局部变量拥有；成功构造 adapter 后一次性交付，不再后置取消。

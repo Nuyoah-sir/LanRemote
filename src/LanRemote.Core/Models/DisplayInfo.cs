@@ -3,7 +3,7 @@ namespace LanRemote.Core.Models;
 /// <summary>
 /// 显示器标识。
 /// </summary>
-/// <param name="Value">Win32 <c>HMONITOR</c> 枚举序号。负坐标/多显示器场景下由 <see cref="DisplayInfo"/> 承载几何信息。</param>
+/// <param name="Value">后端设备枚举序号；GDI 使用本次 EnumDisplayDevicesW 原始索引，不是 HMONITOR 或跨拓扑变化的持久身份。负坐标由 <see cref="DisplayInfo"/> 承载。</param>
 public readonly record struct DisplayId(int Value);
 
 /// <summary>

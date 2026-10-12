@@ -33,8 +33,11 @@ public sealed class LanDiscoveryService : IDiscoveryService
     private readonly IPAddress _multicastAddress = IPAddress.Parse(DiscoveryConstants.MulticastGroupAddress);
     private readonly object _gate = new();
 
+    private readonly Func<CancellationToken, Task>? _additionalLoop;
+    private readonly Func<CancellationToken, Task>? _initialProbeOverride;
     private CancellationTokenSource? _cts;
     private Task[] _loops = Array.Empty<Task>();
+    private Task? _stopTask;
     private Socket? _receiver;
     private List<Socket> _senders = new();
     private IReadOnlyList<NetworkBinding> _activeBindings = Array.Empty<NetworkBinding>();
@@ -66,6 +69,18 @@ public sealed class LanDiscoveryService : IDiscoveryService
                 SingleReader = false,
                 SingleWriter = false,
             });
+    }
+
+    internal LanDiscoveryService(
+        INetworkBindingProvider bindingProvider,
+        DiscoveryRuntimeState runtimeState,
+        ILogger<LanDiscoveryService> logger,
+        Func<CancellationToken, Task> additionalLoop,
+        Func<CancellationToken, Task>? initialProbeOverride = null)
+        : this(bindingProvider, runtimeState, logger)
+    {
+        _additionalLoop = additionalLoop ?? throw new ArgumentNullException(nameof(additionalLoop));
+        _initialProbeOverride = initialProbeOverride;
     }
 
     /// <summary>启动时实际使用的网卡绑定（供诊断与日志）。</summary>
@@ -107,9 +122,15 @@ public sealed class LanDiscoveryService : IDiscoveryService
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         CancellationTokenSource cts;
+        TaskCompletionSource<bool> initialProbeCompletion;
 
         lock (_gate)
         {
+            if (_stopTask is not null)
+            {
+                throw new InvalidOperationException("局域网发现已停止，无法再次启动。");
+            }
+
             if (_cts is not null)
             {
                 return;
@@ -155,55 +176,52 @@ public sealed class LanDiscoveryService : IDiscoveryService
                 throw;
             }
 
-            _loops = new[]
+            initialProbeCompletion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Task[] loops =
             {
                 Task.Run(() => ReceiveLoopAsync(cts.Token), CancellationToken.None),
                 Task.Run(() => AnnounceLoopAsync(cts.Token), CancellationToken.None),
                 Task.Run(() => CleanupLoopAsync(cts.Token), CancellationToken.None),
+                // Stop 也要等待锁外的首次探测，否则可能在它读取 cts.Token 前释放 CTS。
+                initialProbeCompletion.Task,
             };
+            Func<CancellationToken, Task>? additionalLoop = _additionalLoop;
+            _loops = additionalLoop is null
+                ? loops
+                : [.. loops, Task.Run(() => additionalLoop(cts.Token), CancellationToken.None)];
         }
 
         // 启动后立即主动探测一次，避免必须等下一个 announce 周期才看到别人。
         try
         {
-            await ProbeAsync(cts.Token).ConfigureAwait(false);
+            Task firstProbe = _initialProbeOverride is null
+                ? ProbeAsync(cts.Token)
+                : _initialProbeOverride(cts.Token);
+            await firstProbe.ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
             _logger.LogWarning(ex, "启动后的首次探测发送失败；后续 announce 周期会继续尝试。");
         }
+        finally
+        {
+            initialProbeCompletion.SetResult(true);
+        }
     }
 
     /// <inheritdoc />
-    /// <remarks>幂等：重复调用不会抛异常，也不会重启 socket。停止后不支持再次启动（v1 只在退出时停止）。</remarks>
+    /// <remarks>
+    /// 幂等；5 秒等待预算或调用者取消只结束本次等待，不会放弃原后台循环的停止任务。
+    /// 停止后不支持再次启动（v1 只在退出时停止）。
+    /// </remarks>
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        CancellationTokenSource? cts;
-        Task[] loops;
-
-        lock (_gate)
-        {
-            if (_cts is null)
-            {
-                return;
-            }
-
-            cts = _cts;
-            _cts = null;
-            loops = _loops;
-            _loops = Array.Empty<Task>();
-
-            CloseSocketsCore();
-        }
-
-        cts.Cancel();
-
-        // 完成 channel，让 WatchAsync 的消费者自然结束，不留悬挂等待。
-        _updates.Writer.TryComplete();
+        Task stopTask = BeginStop();
 
         try
         {
-            await Task.WhenAll(loops).WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            await stopTask.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
@@ -211,16 +229,164 @@ public sealed class LanDiscoveryService : IDiscoveryService
         }
         catch (OperationCanceledException)
         {
-            // 正常停止。
+            // 只取消调用方的等待；原停止任务继续运行。
         }
         catch (Exception ex)
         {
-            // 必须观察后台任务异常，避免 unobserved exception。
             _logger.LogDebug(ex, "局域网发现后台循环退出时抛出异常。");
         }
-        finally
+    }
+
+    /// <summary>
+    /// 无时间预算地等待原后台循环与取消回调全部退出，再释放 linked CTS。
+    /// 可在 StopAsync 超时或调用方取消后再次调用；停止故障会在全部循环退出后抛出。
+    /// </summary>
+    public Task JoinAndDisposeAsync() => BeginStop();
+
+    private Task BeginStop()
+    {
+        CancellationTokenSource? cts;
+        Task[] loops;
+        Socket? receiver;
+        Socket[] senders;
+        TaskCompletionSource<bool> completion;
+
+        lock (_gate)
         {
-            cts.Dispose();
+            if (_stopTask is not null)
+            {
+                return _stopTask;
+            }
+
+            completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _stopTask = completion.Task;
+            cts = _cts;
+            loops = _loops;
+            receiver = _receiver;
+            senders = _senders.ToArray();
+            _receiver = null;
+            _senders = new List<Socket>();
+            _activeBindings = Array.Empty<NetworkBinding>();
+        }
+
+        // 关闭 socket、完成 channel 与 CancelAsync 都必须在锁外执行；取消回调可能执行任意代码。
+        _ = CompleteStopAsync(cts, loops, receiver, senders, completion);
+        return completion.Task;
+    }
+
+    private async Task CompleteStopAsync(
+        CancellationTokenSource? cts,
+        Task[] loops,
+        Socket? receiver,
+        Socket[] senders,
+        TaskCompletionSource<bool> completion)
+    {
+        List<Exception> errors = new();
+
+        if (receiver is not null)
+        {
+            try
+            {
+                SafeDisposeSocket(receiver);
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        }
+
+        foreach (Socket sender in senders)
+        {
+            try
+            {
+                SafeDisposeSocket(sender);
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        }
+
+        try
+        {
+            // 即使取消回调或某条循环报错，也不留下悬挂的 WatchAsync 消费者。
+            _updates.Writer.TryComplete();
+        }
+        catch (Exception ex)
+        {
+            errors.Add(ex);
+        }
+
+        Task cancellation = Task.CompletedTask;
+        if (cts is not null)
+        {
+            try
+            {
+                cancellation = cts.CancelAsync();
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        }
+
+        Task allLoops = Task.WhenAll(loops);
+        try
+        {
+            await cancellation.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (cancellation.Exception is { } failure)
+            {
+                errors.AddRange(failure.Flatten().InnerExceptions);
+            }
+            else
+            {
+                errors.Add(ex);
+            }
+        }
+
+        try
+        {
+            await allLoops.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (allLoops.Exception is { } failure)
+            {
+                errors.AddRange(failure.Flatten().InnerExceptions);
+            }
+            else
+            {
+                errors.Add(ex);
+            }
+        }
+
+        try
+        {
+            cts?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            errors.Add(ex);
+        }
+
+        lock (_gate)
+        {
+            _cts = null;
+            _loops = Array.Empty<Task>();
+        }
+
+        if (errors.Count == 0)
+        {
+            completion.SetResult(true);
+        }
+        else
+        {
+            completion.SetException(new AggregateException(errors));
+            // StopAsync 可能早已按等待预算返回；后台故障仍须标记已观察，Join 仍会收到它。
+            _ = completion.Task.Exception;
         }
     }
 
