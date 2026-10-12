@@ -1,17 +1,17 @@
 # LanRemote HANDOFF
 
 > 模板来源：`LanRemote_Implementation_Package/09_HANDOFF_TEMPLATE.md`
-> 更新时间：**2026-10-12（M5按用户稳定反馈收口，不重复人工验收。M6新增独立Hello2/Challenge2严格合同与版本证据：93专项红绿、八变异/恢复；四Rebuild零警告错误、16TRX双配置各5112 PASS、376源码冻结。100项正式审计自测、7项交接护栏与正式独立审计真实wait0，见§19.41/ADR085。真实认证仍V1，实际V2握手/拒旧/升级UI/live多屏未接。Last code commit仍b3e1273；未提交工作树、原失败与M5ZIP保留，M7不启动）**
+> 更新时间：**2026-10-12（M5按用户稳定反馈收口，不重复人工验收。M6新增独立Hello2/Challenge2严格合同与版本证据：93专项红绿、八变异/恢复；四Rebuild零警告错误、16TRX双配置各5112 PASS、376源码冻结。100项正式审计自测、7项交接护栏与正式独立审计真实wait0，见§19.41/ADR085。真实认证仍V1，实际V2握手/拒旧/升级UI/live多屏未接。Last code commit为acec599；累计已验证工作树已提交推送，原失败与M5ZIP保留，M7不启动）**
 >
 > **M4历史两机进展：用户 A client `31255177` / B host `d8fd8b0d` 双方 PASS。** 成功会话按完整 SessionId 配对：serverProof已验证、Control授权、保持采样达标、自然注销；两个超时负例按端口精确配对，pin拒绝仅顺序关联。审批超时不再是M4阻断，**不外推到当前M5产品实屏**。
 > **软件及验收不得导致任一端断网，短暂也不接受；不能以确认框/UAC或可撤销为理由继续改现网。新版已移除改网执行链，旧脚本也无条件拒绝；不默认执行 Undo。日志不能代替双方互联网无影响的人工确认。**
 >
 > **当前状态：M4完成。** 原Control/降权/拒绝/错key、联网/审批/短码、密钥显示与遮挡、监听关窗均已通过；`b42a1553`坏proof和`0cd5d3b8`人工活动停止日志通过，用户本轮明确确认固定文案完整可见、停止后恢复及原控件可访问。原FAIL/INVALID_RUN/UNMET结果保留，不翻绿、不重跑、不外推全DPI或内存擦除。
-> **最近已提交代码（历史基线）：`b3e1273`完成Transport认证Video资格预约、Control注销子任务join及Host完整Dispose（ADR-066），当时双配置各3613 PASS，见§19.22。** 当前产品App/Transport/Discovery及M6源码/测试仍为**未提交工作树**。M5此前十分钟、慢网、双方上网逐项用户确认保留；2026-10-12用户又明确稳定并要求告一段落，现按用户确认收口，不再把其作为M6阻断，不虚构原始数字/截图时间序列或独立性能审计。§19.29原ZIP不覆盖、不重打；M4不重做、键鼠M7不启动。
+> **最近已提交代码：`acec599`，2026-10-12已推送origin/main并逐字符核对远端提交。** 这是此前M5产品与M6独立合同累计81文件的已验证检查点，不伪造过去逐片提交；冻结各5112 PASS见§19.41。`b3e1273`为§19.22历史基线。M5此前十分钟、慢网、双方上网逐项用户确认保留；2026-10-12用户又明确稳定并要求告一段落，现按用户确认收口，不再把其作为M6阻断，不虚构原始数字/截图时间序列或独立性能审计。§19.29原ZIP不覆盖、不重打；M4不重做、键鼠M7不启动。
 > 阶段 5 新增 8 项运行期变异 kill 并恢复；证据与局限见 §18.11，现行合同 ADR-042/043/044。
 > **2026-09-24 用户已明确确认本轮A/B测试前、中、后上网始终正常，无观察到短暂中断；审批条目/按钮显示正常且批准前已核对两端短码一致。** 该Control轮网络无影响及审批交互人工项通过，不自动外推后续轮次或全部DPI、密钥清空、真实serverProof错误显示与关窗路径；降权和有效拒绝后续均已通过，见§18.16–17；其余原范围人工项现已配齐，最终收口见§18.25。
 > **推进规则（2026-09-28用户重申）：不涉及人工辅助的测试由助手自主执行，通过后直接继续下一任务，不等待用户再次说“继续”。只有真正需要人工操作/观察或权限的依赖才暂停；不额外增设人工门槛，不重复已通过项，不把未验项目记为通过。** 原有里程碑DoD与安全约束不自动豁免；不再等待外部模型或重问已定交互。
-> 当前**未提交的产品工作树**已接入App Host显式ViewOnly启停与WPF本机审批、Client远端密钥输入及Control/Video双TLS、JPEG有界WPF显示和退出排空；同机loopback夹具的冻结WPF画面已验证，**不能等同两台真实LAN产品GUI实屏**，仍无键鼠控制。新增修正要求已有配置的`allowDiscovery`必须存在且为唯一布尔值，真正首装无文件才允许只公告身份。本轮实际存在App/Transport/Discovery等`src`及`tests`未提交改动；不将前片已提交`b3e1273`或文档提交误作当前App代码提交；M5候选已于§19.29出包，但不包含§19.30的M6本机目录。
+> 当前**已归档于acec599的产品工作树**已接入App Host显式ViewOnly启停与WPF本机审批、Client远端密钥输入及Control/Video双TLS、JPEG有界WPF显示和退出排空；同机loopback夹具的冻结WPF画面已验证，**不能等同两台真实LAN产品GUI实屏**，仍无键鼠控制。新增修正要求已有配置的`allowDiscovery`必须存在且为唯一布尔值，真正首装无文件才允许只公告身份。App/Transport/Discovery等`src`及`tests`已随累计检查点`acec599`提交，不将前片`b3e1273`或文档提交误作当前App代码提交；M5候选已于§19.29出包，但不包含§19.30的M6本机目录。
 > **M5已按用户确认收口；M6仍进行中。** 历史各片见§19.30–40；最新§19.41完成独立Hello2/Challenge2合同，版本分类只在完整载荷校验后形成，非AcceptedV2不产生V2对象。93专项进入各5112完整冻结并完成独立审计；真实链仍V1，未接live。下一片为两Host入口及Client的V2-only握手接缝与安全失败分类；proof前顺序已定，不再询问。纯合同不证明实际拒旧/升级UI、远端目录/切屏或每Session质量。保持真实审批、原活动观察时刻、唯一读者、额外数据拒绝与有界队列；M7不启动、不改网/防火墙/防护、不绕权限、不覆盖旧ZIP。
 > **启动补记（2026-09-24）：修复版ZIP及说明已交付；本机系统应用控制拦截经用户明确确认后处理，指定安装目录的验收器窗口已启动，并由独立进程查询确认非零窗口句柄和响应正常。** 本次没有改产品代码或网络；仅证明启动成功，不代表完整GUI/两机验收通过，系统防护处理不属于产品功能。
 > §18.9/§18.10 保留阶段 4 与评审等待历史，不再是当前停点。
@@ -34,11 +34,11 @@
 
 ## 1. 当前状态
 
-- **当前里程碑：M5按2026-10-12用户稳定反馈收口；M6进行中。** 最新§19.41完成独立Hello2/Challenge2严格合同和未认证版本声明分类，93专项、八变异/恢复、各5112完整冻结与正式独立审计通过。§19.30–40各片及原失败保留；真实Control仍V1，live V2握手/拒旧、升级UI、目录传输/切屏/每会话画质未实现，未出M6产品包。M5产品及M6源码/测试仍未提交；不额外要求M5复测、不重做M4，M7未启动。
+- **当前里程碑：M5按2026-10-12用户稳定反馈收口；M6进行中。** 最新§19.41完成独立Hello2/Challenge2严格合同和未认证版本声明分类，93专项、八变异/恢复、各5112完整冻结与正式独立审计通过。§19.30–40各片及原失败保留；真实Control仍V1，live V2握手/拒旧、升级UI、目录传输/切屏/每会话画质未实现，未出M6产品包。M5产品及M6源码/测试已归档于acec599并推送；不额外要求M5复测、不重做M4，M7未启动。
 - **下一步：按B推进两Host入口与Client的V2-only握手接缝及安全失败分类。** 先核唯一读者/原认证deadline/旧版证据消费和父资格，不全局换常量或把只改首帧当完成。顺序固定：TLS/pinning→Hello2→Challenge2→Host Offer→Client Accept→clientProof V2→真实审批→serverProof V2→新版父资格。§19.40–41只完成纯核/载荷，不证明真实收发。禁止V2失败fallback V1，FirstFrameRouter与独立ControlPreAuthSession须同策略。完整LegacyV1只是未认证声明，不能覆盖目标device/实际TLS证书pin检查、proof/密码/审批错误；EOF/timeout不等于旧端。Offer/Accept消耗原绝对预算、不重置deadline；保留Host holding/Client monitor额外数据拒绝、同流唯一读者、原IO退出和父gate，目录只Host→Client。新版父认证成功后才给Video资格；不全局更改TLS/LRVF、不重做M4/加人工门槛，不改网/防护、不执行旧Undo、不覆盖旧ZIP。
 - 已完成：M0 → M1 → M1.1 → M1.2 → M1.3 → M2 → M2.1 → **M3 → M3.1 → M4 → M5（用户确认）**。M6进行中，不能将纯核冻结称M6整体完成。
 - 版本：`0.1.0-m2`（本轮**未**推进版本号）
-- **Last code commit：`b3e1273`**（已提交的Transport认证Video父子生命周期及Host完整Dispose，ADR-066，16 files/+2225/−423）；其双配置各3613 PASS来自2026-10-01历史冻结（§19.22），**不是本轮App产品实现的代码提交**。其后文档提交不改变Last code commit。
+- **Last code commit：`acec599`**（2026-10-12累计已验证M5产品及M6独立合同，81 files/+21247/−240）。普通push成功，远端refs/heads/main实读为`acec5995307984cfdb01ce8fb231c920ae345d61`；源于§19.41各5112冻结，提交前375非HANDOFF源项逐字节核对相同。本次只追加授权/归档注，不重跑旧冻结；后续文档提交不改变Last code commit。
 - **Working tree at validation（最新）：2026-10-12未提交Hello2/Challenge2独立合同，`outputs/m6-wire-v2-20261012/final-v1/summary.json` passed/exit0。** 四Rebuild零警告错误，16TRX双配置各5112PASS/0FAIL/0SKIP（Transport3553，原5019+新93精确身份）。376源码冻结SHA `bfd00f3a1a4965f9ae2ddbaa785f363fa090a37430c38b3d7bf972391ed14dd5`，final摘要SHA `954d0454f82a4519a81383a8e27af79ce43626bb8f29d35eae506348d6a780fd`；外层launcher27484→runner8928真实wait0已回收。100项审计自测、7项交接护栏及正式审计外层均wait0；独立核43TRX/20574唯一execution及4598历史文件，报告SHA `90c61a45b181f13c60438bd242b4d152d96ff9536288589753234c0e01c8f0a8`。审计后字节绑定和before实际通过，保护1121本片原项；随后仅四文档及唯一TXT交接变化，最终after以`handoff-v1/post-handoff-check.json`实际结果为准。未改live，详§19.41。
 - **Working tree at validation（V2绑定历史）：2026-10-12未提交V2认证绑定纯核，`outputs/m6-auth-v2-20261012/final-v1/summary.json` passed/exit0。** 四Rebuild零警告错误、16TRX双配置各5019PASS/0FAIL/0SKIP（Transport3460，旧4944+新增75），371项源码冻结SHA `2bb62b17e480af86fe8185c8815c8b68d915dfd6b8956a695333139295e69dd3`，summary SHA `498678a0322bd577302432e08abe477297d6a78a2688f26f74f10b347782e2c0`。原完整冻结外层真实0；新68项正式护栏自测及正式独立审计外层真实0，后者独立核45TRX/20175唯一execution，报告SHA `f1c7158d15aac4da28b24f1a251dbd411ab5c21b102f39d2c1386be84b3bdd62`。审计字节绑定及handoff before已独立通过；随后仅四文档及唯一TXT交接变更，最终after以`handoff-v2/post-handoff-check.json`实际结果为准。真实认证仍V1，纯核不等于live，详§19.40。
 - **Working tree at validation（Offer/Accept历史）：2026-10-10未提交新版专用Offer/Accept纯codec；`outputs/m6-catalog-agreement-20261010/final-v1/summary.json` passed/exit0，完整冻结及正式独立审计外层真实exit0已回收。** 四Rebuild零警告错误，六dotnet命令rc0/wait，16TRX Debug/Release各4944PASS/0FAIL/0SKIP（Transport3385、新108）。367源前后/12边界与28文档保持，源清单SHA `567806036322f92f83ae906958a6e29a3ae81279fbfe967d8b478af6bae690aa`，摘要SHA `9b95ef8c41d9910dd406bf7c18e94a444ea3de67ddf7417f168e718b1ca33b39`。正式审计独立43TRX/19958唯一execution，报告SHA `015875406168e134466c2de334ec97a0eca41badd78f8a18d58d1e947ce0b334`；旧4836稳定身份+新108精确对应，八变异真实断言/恢复、全部历史及根脚本/旧ZIP绑定。B政策已定但live拒旧/V2认证未实施；本HANDOFF/ADR083/本日日志为审计后文档例外，见§19.39。
