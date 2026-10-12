@@ -2,16 +2,16 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至085：Hello2/Challenge2独立合同；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至086：Challenge2身份消费入口；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-12，权威详HANDOFF§19.41/ADR085）
+## 当前续作点（2026-10-12，权威详HANDOFF§19.42/ADR086）
 
 最近代码`acec599`：M5产品及M6合同累计81文件已提交并核对origin/main相同；5112冻结不变，后续逐片提交推送。Host显式ViewOnly与真实WPF本机审批；Client独立远端key、Control/Video双TLS、有界JPEG和安全关停；Control仍灰显（M7），不可因用户想控制就放松审批/权限。首装无配置可只公告身份，已有配置`allowDiscovery`必须唯一布尔，否则拒公告/监听。
 
 **M5已按用户确认收口。** 2026-10-12用户明确“稳定，之前的卡顿应该是误判，可告一段落继续M6了”；不重查撤回的卡顿判断，不要求重复人工验收/额外性能压测。此前十分钟内存、慢网、双方上网逐项用户确认保留，但不捏造两机原始数字、截图时序或独立性能审计。§19.29完整手动画质ZIP `LanRemote-M5-完整手动画质-20261008-win-x64.zip`（63,951,214字节，SHA0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945）不覆盖/重打，不含M6。Host默认5/50/JPEG60；显式10/15/20/30默认75/JPEG60，手动scale50/67/75/100、JPEG40..85，Auto禁、不写config/热切，停完整后再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限，不是全机内存上界。
 
-**M6本片Hello2/Challenge2合同完成，live未接。** 四internal产品类+93专项；1..4096含空白/MaxDepth1，三/七字段、严格整数和canonical编码、副本。完整校验后才分类，非V2不产对象；合法V1零Guid保留LegacyV1/null，新版/未知版本拒零，共享V1不改。red84绿9红→93绿；八变异真实test1并恢复、restored93绿。final-v1四Rebuild零警告错误、16TRX双配置各5112PASS；376源SHA及分项见§19.41，launcher27484→runner8928真实wait0。100审计自测+7交接护栏、正式独立审计wait0；43TRX/20574 execution/4598历史，报告SHA90c61a45b181f13c60438bd242b4d152d96ff9536288589753234c0e01c8f0a8。报告绑定stdout，完整manifest含空log，before精确3新增、保护1121项；最终见handoff-v1/post-handoff-check.json。快照非连续锁、wait非全机排空、历史dotnet parent_pid未采集。
+**M6 Challenge2身份消费子片完成，live未接。** ValidateForConnection与Parse共用严格核：既有TLS pin→完整payload→目标device→实际TLS pin→版本分类；只有匹配V2返回对象，无I/O/deadline/proof/审批/父资格。31旧实现红均是入口缺失Assert，不能称31种独立行为红；新31绿，四生产变异TLS/device/payload pin/提前Legacy各4/4/4/3红并恢复。四Rebuild零警告错误、16TRX双配置各5143PASS，六子命令/外层wait0；旧5112+新31身份相等。独立核验exit0，报告SHA9a04b94673bab229b6e6e309a860c9b3a666bd883c43dae124804e43f4c18ab2。355项快照不含tools/docs/memory/HANDOFF，未执行本片100/7护栏、全历史边界或post-handoff；不是§19.41的376项完整审计。证据outputs/m6-challenge-admission-20261012/，默认不推原日志。§19.41的93专项/八变异/5112及完整审计保留历史。快照非连续锁、wait非全机排空。
 
 **下一片：两Host入口及Client的V2-only握手接缝/安全失败分类。** proof前顺序已定：TLS/pinning→Hello2→Challenge2→Offer→Accept→clientProof V2→真实审批→serverProof V2→新版父资格。§19.40 Binding三会话/方向再绑定认证session；16字段/15NUL/无尾NUL、AUTH/GRANT-V2域及server前缀、ViewOnly不提权、副本、非一次性授权；其75专项/十变异/5019冻结及原invalid红保持历史。真实Control仍V1，未完成实际拒旧/升级UI/目录传输/切屏/每会话质量，M6未完成。LegacyV1仅未认证声明，不能遮掉目标device/实际TLS证书pin及proof/密码/审批检查；EOF/timeout不确诊旧端。禁止fallback，两Host同策略，协商沿原绝对deadline不重置、同流唯一读者，新版父认证后才给Video资格。不全局换TLS/LRVF，不重做M4/启动M7、不改网/防护/权限、不执行旧Undo。
 
@@ -63,7 +63,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.41 Hello2/Challenge2合同93项，各5112冻结及独立审计通过；live未接。 |
+| **M6** | 进行中：§19.42 Challenge2身份消费31项，各5143回归及限域独立核验通过；live未接。 |
 | M7~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。

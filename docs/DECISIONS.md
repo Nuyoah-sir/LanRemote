@@ -1754,3 +1754,13 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **真实证据。** 同93身份red84PASS/9Assert FAIL→green93PASS；八生产变异build0/test1全被杀死并恢复，restored93PASS。final-v1四Rebuild零警告错误、16TRX每配置5112PASS/0FAIL/0SKIP，原5019+新93稳定身份精确相等，376源码和29文档及12边界一致，完整冻结外层真实0。独立审计100项正式自测与7项交接护栏真实wait0；正式审计独立核43TRX/20574唯一execution/4598历史文件，外层真实0；不把自测107加入产品数。主线程修正审计候选的相对路径、交接字段、终态键和外置manifest偏差，新增正式入口内存正反例，不放宽post验证。报告完整字节绑定执行期stdout，内嵌1118项完整证据（含空audit log）；before允许精确3新增及空log转终态，实际passed并保护1121原项。
 
 **交付边界。** 证据目录`outputs/m6-wire-v2-20261012/`；376源码SHA `bfd00f3a1a4965f9ae2ddbaa785f363fa090a37430c38b3d7bf972391ed14dd5`，正式报告SHA `90c61a45b181f13c60438bd242b4d152d96ff9536288589753234c0e01c8f0a8`。HANDOFF/本ADR/当日日志/MEMORY为审计后四文档例外，新增唯一验收TXT，最终after以handoff-v1/post-handoff-check.json实际结果为准。快照不是连续锁，自报PID/摘要不是OS不可篡改证明；直接wait非全机排空，dotnet历史parent_pid未采集。未接真实V2/拒旧/升级UI或双机多屏，不代表M6完成。下一片为两Host入口与Client的V2-only握手接缝，沿ADR084顺序/原绝对预算/唯一读者/真实审批；新版父认证成功后才给Video资格，不改网/防护/权限、不启动M7、不覆盖原M5ZIP。
+
+### ADR-086 — Challenge2版本提示前的连接身份绑定
+
+**2026-10-12，前置消费入口已实现，live未接。** 原Parse对非V2返回null，直接按status给升级提示会绕过既有目标device/实际TLS pin校验。因此增加internal `AuthChallengeV2.ValidateForConnection(ReadOnlySpan<byte>, ConnectionIdentity)`，与Parse共用严格ParseCore；只有完整且匹配连接的V2返回独立载荷对象，不构造V1/未知版对象，不引入fallback。
+
+**固定失败优先级。** identity非null→已有TLS PinsMatch→完整已知payload结构/语义/尾部→目标DeviceId→actual presented pin恒时匹配→版本分类。TLS pin错保持精确AuthenticationException；其余为既有ControlClientAuthenticationException及固定本地短码。畸形载荷先invalid；完整合法V1零Guid的历史Parse语义保持，在身份入口零device必不匹配，零session且身份匹配可给升级要求。V2/未知版零Guid先invalid。版本仍是proof前未认证声明，不能证明软件身份，也不能将EOF/timeout当旧端证据。此入口不处理proof/密码/审批，不能把后续安全失败统一变成升级提示。
+
+**非授权边界。** 无流、时钟、密钥或审批，无session注册和Video资格；对象非一次性能力，未来live须在消费前后检查原绝对预算。真实旧Host收Hello2可能直接关线，新Client无法仅从EOF判断旧版；已发布旧UI也不能保证识别新增拒绝文案。不伪装Challenge1，不新增legacy live分支。
+
+**实测。** 31专项旧实现31Assert红（全部为入口缺失，非31独立行为红）→新实现31绿；TLS/device/payload pin/提前Legacy分类四产品变异各4/4/4/3失败并精确恢复。四Rebuild零警告错误，16TRX双配置各5143PASS，旧5112+新31精确身份核对；独立核验实际exit0。355项源码快照不含tools/docs/memory/HANDOFF，未沿用上一片完整audit/post合同或100/7自测，不混称同强度审计。详HANDOFF§19.42及outputs/m6-challenge-admission-20261012/。下一片直接推进ADR084完整V2-only真实链与新版父资格，保持真实审批、原预算/唯一读者/清理和原Video合同。

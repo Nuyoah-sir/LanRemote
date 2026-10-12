@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace LanRemote.Transport.Auth;
@@ -57,9 +59,42 @@ internal sealed class AuthChallengeV2
         return output.WrittenSpan.ToArray();
     }
 
-    internal static WireV2ParseStatus Parse(ReadOnlySpan<byte> utf8, out AuthChallengeV2? frame)
+    internal static WireV2ParseStatus Parse(ReadOnlySpan<byte> utf8, out AuthChallengeV2? frame) =>
+        ParseCore(utf8, null, out frame, out _);
+
+    /// <summary>
+    /// 未来客户端的身份绑定消费入口；只有完整且匹配本连接的 V2 返回载荷对象。
+    /// 不执行 I/O、计时、proof 或审批，不创建认证会话；live 调用方仍须在消费前后检查原 deadline。
+    /// TLS pin 失败保持原异常类别；完整载荷的设备和实际 TLS pin 检查优先于版本提示。
+    /// </summary>
+    internal static AuthChallengeV2 ValidateForConnection(ReadOnlySpan<byte> utf8, ConnectionIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        if (!identity.PinsMatch)
+            throw new AuthenticationException("TLS 连接的实际证书指纹与冻结目标不一致。");
+
+        var status = ParseCore(utf8, identity, out var frame, out string? identityRejection);
+        if (identityRejection == "client-server-device-mismatch")
+            throw new ControlClientAuthenticationException(identityRejection, "远端设备身份与连接目标不一致。");
+        if (identityRejection == "client-challenge-pin-mismatch")
+            throw new ControlClientAuthenticationException(identityRejection, "远端认证证书与实际 TLS 连接不一致。");
+        return status switch
+        {
+            WireV2ParseStatus.AcceptedV2 => frame!,
+            WireV2ParseStatus.LegacyV1 => throw new ControlClientAuthenticationException(
+                "client-upgrade-required", "远端声明使用旧版协议；仅支持新版双方连接，请将两端升级后重试。"),
+            WireV2ParseStatus.UnsupportedVersion => throw new ControlClientAuthenticationException(
+                "client-protocol-unsupported", "双方协议版本不兼容，请将两端升级至兼容版本后重试。"),
+            _ => throw new ControlClientAuthenticationException(
+                "client-challenge-invalid", "远端认证 challenge 无效或顺序错误。"),
+        };
+    }
+
+    private static WireV2ParseStatus ParseCore(ReadOnlySpan<byte> utf8, ConnectionIdentity? identity,
+        out AuthChallengeV2? frame, out string? identityRejection)
     {
         frame = null;
+        identityRejection = null;
         if (utf8.Length is < 1 or > MaxPayloadByteLength) return WireV2ParseStatus.Invalid;
         var reader = WireV2Json.Reader(utf8);
         try
@@ -98,9 +133,23 @@ internal sealed class AuthChallengeV2
                 }
             }
             if (reader.TokenType != JsonTokenType.EndObject || seen != 127 || reader.Read()) return WireV2ParseStatus.Invalid;
-            // V1 的 canonical 零 Guid 属于其历史值域，仅作为完整旧报文证据，不创建 V2 对象。
+            // V1 的 canonical 零 Guid 属于其历史值域；其余版本先完成非空语义校验。
+            if (protocol != 1 && (session == Guid.Empty || device == Guid.Empty)) return WireV2ParseStatus.Invalid;
+            // 只在整个已知载荷有效后消费身份字段；不创建任何 V1/未知版本对象。
+            if (identity is not null)
+            {
+                if (device != identity.DeviceId)
+                {
+                    identityRejection = "client-server-device-mismatch";
+                    return WireV2ParseStatus.Invalid;
+                }
+                if (!CryptographicOperations.FixedTimeEquals(pin, identity.PresentedCertSha256.Span))
+                {
+                    identityRejection = "client-challenge-pin-mismatch";
+                    return WireV2ParseStatus.Invalid;
+                }
+            }
             if (protocol == 1) return WireV2ParseStatus.LegacyV1;
-            if (session == Guid.Empty || device == Guid.Empty) return WireV2ParseStatus.Invalid;
             if (protocol != Protocol) return WireV2ParseStatus.UnsupportedVersion;
             frame = new AuthChallengeV2(session, device, nonce, pin, expires);
             return WireV2ParseStatus.AcceptedV2;
