@@ -1800,3 +1800,11 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **帧及截止。** 唯一顺序writer由外层保证，内部只取得一次已严格验证的不可变DisplayCatalogFrame，序列化为有界256KiB host_status protocol1，四字节BE前缀，一次Write及一次Flush；不授予认证或选屏能力。source之前本地观察锚点计入来源、序列化、IO及原timer释放；每阶段与最终接受均复核固定频率/Int128精确>=截止，不重置预算。sampleGate覆盖完整inner频率前检→GetTimestamp→频率后检→共享高水位发布，不只锁高水位变量；owner gate不嵌套sampleGate，Stop不调用clock/外部回调。坏clock永久阻塞时不能保证及时截止通知或有限join。门禁与锁外调用非物理原子，已越过门禁的调用可能在Stop返回后才进入。Sent仅为历史接受，不证明对端收到、未来权限或物理到达；Rejected无法回滚已写字节。
 
 **本片测试与证据口径。** 受控source/stream/clock/timer，不是新产品Host的回环TLS或双机实屏。新增65例包括原句柄发布、同步前缀/不合作原Task的Stop/截止通知与join、错误树、未知借用、原timer释放、精确截止、跨worker高水位以及独立160字节literal线格式和256条/128名称/最大数字组合。未穷举AsTask阻塞细分、强制双worker同时争锁、timer.Change阻塞/失败和全部错误笛卡尔积。首轮join变异6红但自定义文案无Assert.令固定runner分类exit2，原证据保留；仅补断言文案标识后基线65绿。四项v2变异分别6/1/3/1断言红并原字节恢复，恢复682绿；高水位红是ObservationError归因缺失，既有预算可能仍拒绝，不能称去掉一项即错误Sent。完整回归已实跑四Rebuild零警告错误、双配置各5344/0FAIL/0SKIP、六子命令及外层wait0；387源快照，本片最终独立核验/提交收据以HANDOFF§19.45为准，旧5279不外推；不出M6产品包、不启动M7、不重验M4/M5，不改网/防护/权限或旧ZIP。
+
+### ADR-090 — Router固定关闭监督先于不合作主体的join
+
+**2026-10-13，M6关闭监督前置切片。** 在`FirstFrameRouter.RunAsync`已验证Host关闭权限、读取原enteredAt之后，先发布一个固定监督Task，等待异步continuation的`closeRequired`信号。Host令牌回调仅发信号；原core正常返回/早退/异常的finally也发信号。监督锁外调用原`AcceptedConnection.CloseAsync`、保存且完整await原Task；Router随后join监督、原审批活动读和决定，再完成已有子预约lease。不把通知或CloseHandle任务正常完成等同于物理释放成功，原socket/SSL释放失败仍由Host有界诊断保留。
+
+**最小边界。** 只把关闭监督放到worker，`RunCoreAsync`和Auth、首帧及holding读的同步前缀仍从原调用链进入，不加同流reader、不改public六参数factory、Registry入口、SessionRegistration属性或Auth授权/秘密清理。目录发送底座的AbortRequired尚未接该信号，产品自动目录发送仍未实现；后续才接认证后持有登记资格的生命周期，登记Dispose完成后取VideoCompletion的合同不变。
+
+**非保证。** 不保证任意不合作同步source/读/写/timer/close能有限退出；首次外部clock调用仍在监督发布之前，Host自身其它取消回调可阻塞本通知派发。Stop只通知并不与外部调用物理原子。保留既有首帧IO/ODE/OCE分类，不利用本片吞掉将来的目录来源错误；下一片须在原首帧豁免之外保存目录故障。本片受控测试/回归和提交事实见HANDOFF§19.46：新17/恢复464、双配置各5361通过，四Rebuild零警告错误；两变异各2断言红并恢复。独立核验36原TRX/21895唯一execution、旧5344+17/-0、388源及126证据保持，实际exit0；代码e7d098b已提交推送核完整号。stop变异是10秒有界观察未收到关闭信号后的Assert.Same红，不是无看门狗或Timeout异常证明；未新增核验器穷举篡改自测。
