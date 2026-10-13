@@ -68,7 +68,34 @@ public sealed class IsolatedUiScenarioTests
 
         // 读取的就是被测引擎将要送上 TLS 的缓冲，而不是另一套模拟对端。
         byte[] transcript = Assert.Single(test.Secrets.Select(secret => secret.Copy), bytes =>
-            bytes.AsSpan().StartsWith("LANREMOTE-AUTH-V1\0"u8));
+            bytes.AsSpan().StartsWith("LANREMOTE-AUTH-V2\0"u8));
+        string[] fields = Encoding.UTF8.GetString(transcript).Split('\0');
+        Assert.Equal(16, fields.Length);
+        Assert.Equal(15, transcript.Count(value => value == 0));
+        Assert.NotEqual((byte)0, transcript[^1]);
+        string sessionId = request.Request.SessionId.ToString("D");
+        Assert.Equal(new[]
+        {
+            "LANREMOTE-AUTH-V2", sessionId, test.Resources.Target.DeviceId.ToString("D"),
+            test.Resources.ClientIdentity.DeviceId.ToString("D"),
+        }, fields[..4]);
+        foreach (string nonceText in fields[4..6])
+        {
+            byte[] nonce = Convert.FromBase64String(nonceText);
+            try
+            {
+                Assert.Equal(32, nonce.Length);
+                Assert.Equal(nonceText, Convert.ToBase64String(nonce));
+            }
+            finally { CryptographicOperations.ZeroMemory(nonce); }
+        }
+        Assert.Equal(Convert.ToHexString(test.Resources.Target.ExpectedCertSha256.Span), fields[6]);
+        Assert.Equal("control", fields[7]);
+        Assert.Equal(new[]
+        {
+            "display_catalog_offer", "2", "1", sessionId,
+            "display_catalog_accept", "2", "1", sessionId,
+        }, fields[8..]);
         byte[] frame = Assert.Single(test.Secrets.Select(secret => secret.Copy), bytes =>
             Encoding.UTF8.GetString(bytes).Contains("\"auth_success\"", StringComparison.Ordinal));
         using JsonDocument success = JsonDocument.Parse(frame);
@@ -77,7 +104,7 @@ public sealed class IsolatedUiScenarioTests
         byte[] actual = Convert.FromBase64String(success.RootElement.GetProperty("serverProof").GetString()!);
         byte[] digest = SHA256.HashData(transcript);
         byte[] grantTranscript = Encoding.UTF8.GetBytes(string.Join('\0',
-            "server", "LANREMOTE-GRANT-V1", Convert.ToHexString(digest), wireGrant));
+            "server", "LANREMOTE-GRANT-V2", Convert.ToHexString(digest), wireGrant));
         using HMACSHA256 hmac = new(test.KeyCopy!);
         byte[] correct = hmac.ComputeHash(grantTranscript);
         try

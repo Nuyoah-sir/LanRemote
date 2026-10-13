@@ -3,6 +3,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Reflection;
 using LanRemote.Core.Models;
+using LanRemote.Transport.Auth;
 
 namespace LanRemote.Transport.Tests;
 
@@ -68,6 +69,48 @@ public sealed class AuthenticatedControlSessionAttachBudgetTests
                 ? Assert.IsType<ArgumentNullException>(rejection)
                 : Assert.IsType<ArgumentOutOfRangeException>(rejection);
             Assert.Equal(parameter, argument.ParamName);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Constructor_RejectsMissingOrMismatchedAgreement_BeforeTokenCopyOrDelivery(bool missing)
+    {
+        using SessionFixture fixture = new();
+        ProbeClock clock = new(0);
+        byte[] token = new byte[1024 * 1024];
+        Array.Fill(token, (byte)0xA5);
+        DisplayCatalogAgreementBinding? agreement = missing ? null
+            : V2AgreementFixture.Create(new Guid("11111111-2222-3333-4444-555555555555"));
+        bool delivered = false;
+        Action construct = () =>
+        {
+            using AuthenticatedControlSession session = new(fixture.Connection, SessionPermission.Control,
+                SessionId, "ABCDEF", token, 15_000, 0, clock, agreement!);
+            session.CommitDelivery();
+            delivered = true;
+        };
+
+        AssertRejection(Record.Exception(construct));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Exception? error = Record.Exception(construct);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        AssertRejection(error);
+        Assert.False(delivered);
+        Assert.True(allocated < token.Length, $"拒绝构造分配了 {allocated} 字节，疑似先复制了 token。");
+        Assert.True(token.AsSpan().IndexOfAnyExcept((byte)0xA5) < 0, "拒绝目录约定不应修改调用方 token。");
+        Assert.Equal(0, clock.TimestampReads);
+        Assert.Equal(0, clock.FrequencyReads);
+        clock.AssertNoTimersOrWallClock();
+        fixture.AssertNotClosingOrDoingIo();
+
+        void AssertRejection(Exception? rejection)
+        {
+            ArgumentException argument = missing
+                ? Assert.IsType<ArgumentNullException>(rejection)
+                : Assert.IsType<ArgumentException>(rejection);
+            Assert.Equal("agreement", argument.ParamName);
         }
     }
 
@@ -337,11 +380,11 @@ public sealed class AuthenticatedControlSessionAttachBudgetTests
         Assert.True(constructor.IsAssembly);
         ParameterInfo[] parameters = constructor.GetParameters();
         Assert.Equal(new[] { typeof(TlsConnection), typeof(SessionPermission), typeof(Guid), typeof(string),
-            typeof(ReadOnlySpan<byte>), typeof(int), typeof(long), typeof(TimeProvider) },
+            typeof(ReadOnlySpan<byte>), typeof(int), typeof(long), typeof(TimeProvider), typeof(DisplayCatalogAgreementBinding) },
             parameters.Select(parameter => parameter.ParameterType).ToArray());
-        Assert.Equal(new[] { "videoAttachExpiresInMsHint", "successReceivedAt", "clock" },
-            parameters.TakeLast(3).Select(parameter => parameter.Name).ToArray());
-        Assert.All(parameters.TakeLast(3), parameter =>
+        Assert.Equal(new[] { "videoAttachExpiresInMsHint", "successReceivedAt", "clock", "agreement" },
+            parameters.TakeLast(4).Select(parameter => parameter.Name).ToArray());
+        Assert.All(parameters.TakeLast(4), parameter =>
         {
             Assert.False(parameter.IsOptional);
             Assert.False(parameter.HasDefaultValue);
@@ -434,7 +477,8 @@ public sealed class AuthenticatedControlSessionAttachBudgetTests
             byte[]? token = null)
         {
             _session = new AuthenticatedControlSession(Connection, SessionPermission.Control,
-                SessionId, "ABCDEF", token ?? _callerToken, hint, successReceivedAt, clock!);
+                SessionId, "ABCDEF", token ?? _callerToken, hint, successReceivedAt, clock!,
+                V2AgreementFixture.Create(SessionId));
             _ownedToken = TestOnlyControlSessionSecrets.GetOwnedToken(_session);
             return _session;
         }

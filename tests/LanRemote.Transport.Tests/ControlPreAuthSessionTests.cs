@@ -48,7 +48,8 @@ public sealed class ControlPreAuthSessionTests
     {
         (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
             async (connection, _) =>
-                await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline));
+                await FrameWriter.WriteFrameAsync(connection.Stream, ControlHelloV2.Serialize(),
+                    TransportConstants.MaxPreAuthMessageBytes, PrefixDeadline));
 
         Assert.True(result.Completed, result.Rejection);
         Assert.Null(result.Rejection);
@@ -63,6 +64,26 @@ public sealed class ControlPreAuthSessionTests
         Assert.NotEqual(Guid.Empty, handoff.Security.ConnectionId);
         Assert.Equal(IPAddress.Loopback, handoff.Security.RemoteAddress);
         Assert.Equal(CertificatePin.LengthBytes, handoff.Security.ServerCertificateSha256.Length);
+    }
+
+    [Theory]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":1}")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":3}")]
+    [InlineData("{\"type\":\"channel_hello\",\"protocol\":2}")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":2}{}")]
+    public void Handoff_Requires_Complete_V2_Payload_And_Has_No_Default_Constructor_Path(string json)
+    {
+        AcceptedConnection connection = CreateDetachedConnection();
+        using (connection.Stream)
+        {
+            ArgumentException error = Assert.Throws<ArgumentException>(() =>
+                new ControlPreAuthHandoff(connection.Stream, connection.Security, Encoding.UTF8.GetBytes(json)));
+            Assert.Equal("helloPayload", error.ParamName);
+        }
+        var constructor = Assert.Single(typeof(ControlPreAuthHandoff).GetConstructors(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic));
+        Assert.Equal(3, constructor.GetParameters().Length);
+        Assert.All(constructor.GetParameters(), parameter => Assert.False(parameter.HasDefaultValue));
     }
 
     /// <summary>
@@ -91,11 +112,15 @@ public sealed class ControlPreAuthSessionTests
     /// 步骤 19：结构合法但不是 hello —— 断开，并把解析器的短原因带出来。
     /// </summary>
     [Theory(Timeout = 60_000)]
-    [InlineData(HelloFrame.RejectWrongChannel, """{"type":"channel_hello","channel":"video","protocol":1}""")]
-    [InlineData(HelloFrame.RejectWrongProtocol, """{"type":"channel_hello","channel":"control","protocol":2}""")]
-    [InlineData(HelloFrame.RejectWrongType, """{"type":"auth_hello","channel":"control","protocol":1}""")]
-    [InlineData(HelloFrame.RejectMissingField, """{"channel":"control","protocol":1}""")]
-    [InlineData(HelloFrame.RejectMalformedJson, "not json at all")]
+    [InlineData(ControlPreAuthSession.RejectHelloInvalid, """{"type":"channel_hello","channel":"video","protocol":1}""")]
+    [InlineData(ControlPreAuthSession.RejectUpgradeRequired, """{"type":"channel_hello","channel":"control","protocol":1}""")]
+    [InlineData(ControlPreAuthSession.RejectUnsupportedVersion, """{"type":"channel_hello","channel":"control","protocol":3}""")]
+    [InlineData(ControlPreAuthSession.RejectHelloInvalid, """{"type":"auth_hello","channel":"control","protocol":1}""")]
+    [InlineData(ControlPreAuthSession.RejectHelloInvalid, """{"channel":"control","protocol":1}""")]
+    [InlineData(ControlPreAuthSession.RejectHelloInvalid, "not json at all")]
+    [InlineData(ControlPreAuthSession.RejectHelloInvalid, """{"type":"channel_hello","channel":"control","protocol":1,"extra":true}""")]
+    [InlineData(ControlPreAuthSession.RejectHelloInvalid, """{"type":"channel_hello","channel":"control","protocol":1,"protocol":2}""")]
+    [InlineData(ControlPreAuthSession.RejectHelloInvalid, """{"type":"channel_hello","channel":"control","protocol":2}{}""")]
     public async Task First_Frame_Must_Be_Exactly_The_Hello(string expected, string json)
     {
         (ControlPreAuthResult result, ControlPreAuthSession session, _) = await RunAgainstHostAsync(
@@ -146,7 +171,8 @@ public sealed class ControlPreAuthSessionTests
 
         (ControlPreAuthResult result, _, _) = await RunAgainstHostAsync(
             async (connection, _) =>
-                await FrameWriter.WriteHelloAsync(connection.Stream, PrefixDeadline),
+                await FrameWriter.WriteFrameAsync(connection.Stream, ControlHelloV2.Serialize(),
+                    TransportConstants.MaxPreAuthMessageBytes, PrefixDeadline),
             afterOutcome: async connection =>
             {
                 // handler 还挂着（hold 未放行）：马上读应当<b>没有</b> EOF。
@@ -318,7 +344,7 @@ public sealed class ControlPreAuthSessionTests
         (ControlPreAuthResult result, _, _) = await RunAgainstHostAsync(
             client: async (connection, stall) =>
             {
-                byte[] hello = HelloFrame.Serialize();
+                byte[] hello = ControlHelloV2.Serialize();
                 byte[] extra = new byte[] { 0xAA, 0xBB, 0xCC };
 
                 byte[] glued = new byte[

@@ -1394,7 +1394,8 @@ public sealed class AuthenticatedVideoSessionTests
         {
             Video = new Endpoint(wrongIdentity);
             Parent = new AuthenticatedControlSession(Control.Connection, SessionPermission.Control,
-                new Guid(SessionText), "ABCDEF", _callerToken, 15_000, 0, Clock);
+                new Guid(SessionText), "ABCDEF", _callerToken, 15_000, 0, Clock,
+                V2AgreementFixture.Create(new Guid(SessionText)));
             _ownedToken = Field<byte[]>(Parent, "_sessionToken");
             Assert.NotSame(_callerToken, _ownedToken);
             ControlRead = NewPause();

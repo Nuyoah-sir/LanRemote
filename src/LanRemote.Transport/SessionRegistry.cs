@@ -83,8 +83,13 @@ public sealed class SessionRegistry
         ReadOnlySpan<byte> sessionToken,
         VideoAttachWindow attachWindow,
         ReadOnlySpan<byte> controlCertificateSha256,
-        CancellationToken controlCancellationToken)
+        CancellationToken controlCancellationToken,
+        DisplayCatalogAgreementBinding agreement)
     {
+        ArgumentNullException.ThrowIfNull(agreement);
+        if (agreement.SessionId != sessionId)
+            throw new ArgumentException("目录约定不属于本控制会话。", nameof(agreement));
+        // 仅约束登记入口；约定对象本身不是授权，调用点仍须完成 V2 双向证明、审批和成功写出。
         ArgumentNullException.ThrowIfNull(attachWindow);
         ArgumentNullException.ThrowIfNull(remoteAddress);
         if (sessionToken.Length != 32)

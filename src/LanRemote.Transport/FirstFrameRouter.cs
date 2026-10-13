@@ -95,14 +95,23 @@ internal sealed class FirstFrameRouter
             try
             {
                 byte[] payload = await ReadHelloAsync(connection, enteredAt, cancellationToken).ConfigureAwait(false);
-                bool control = HelloFrame.TryParse(payload, out _);
+                WireV2ParseStatus control = ControlHelloV2.Parse(payload);
                 CheckEnvelope(enteredAt, cancellationToken);
-                if (control)
+                if (control == WireV2ParseStatus.AcceptedV2)
                 {
                     // 首帧已消费；不能再调用 public pre-auth 重读，也不能把信封令牌泄漏到 holding。
-                    ControlPreAuthHandoff handoff = new(connection.Stream, connection.Security);
+                    ControlPreAuthHandoff handoff = new(connection.Stream, connection.Security, payload);
+                    CheckEnvelope(enteredAt, cancellationToken);
                     auth = handoff.BeginAuthentication(_context, _timeouts);
                     await auth.RunAsync(cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+                if (control is WireV2ParseStatus.LegacyV1 or WireV2ParseStatus.UnsupportedVersion)
+                {
+                    // 仅完整合法声明才形成本地版本诊断；不伪造 Challenge1，不启动认证或 Video。
+                    Rejection = control == WireV2ParseStatus.LegacyV1
+                        ? ControlPreAuthSession.RejectUpgradeRequired
+                        : ControlPreAuthSession.RejectUnsupportedVersion;
                     return;
                 }
 

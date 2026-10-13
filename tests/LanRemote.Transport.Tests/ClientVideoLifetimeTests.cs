@@ -1880,7 +1880,7 @@ public sealed class ClientVideoLifetimeTests
             Parent = new AuthenticatedControlSession(Control.Connection, SessionPermission.Control,
                 new Guid("00112233-4455-6677-8899-aabbccddeeff"), "ABCDEF",
                 Convert.FromHexString("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"),
-                hint, 0, Clock);
+                hint, 0, Clock, V2AgreementFixture.Create(new Guid("00112233-4455-6677-8899-aabbccddeeff")));
             if (delivered) Parent.CommitDelivery();
         }
 

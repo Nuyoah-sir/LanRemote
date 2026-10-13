@@ -154,15 +154,16 @@ public sealed class ControlClientConnector
         Action<AuthenticatedControlSession>? sessionConstructed)
     {
         string timeoutRejection = "client-hello-timeout";
-        byte[]? clientTranscript = null;
+        AuthTranscriptV2? clientTranscript = null;
+        DisplayCatalogAgreementBinding? agreement = null;
         AuthSuccessFrame? success = null;
         try
         {
             long helloSentAt;
             using (ClientAuthWindow hello = new(clock, timeouts.HelloTimeout, cancellationToken, timeoutRejection))
             {
-                await FrameWriter.WriteHelloAsync(connection.Stream, timeouts.HelloTimeout, hello.Token)
-                    .ConfigureAwait(false);
+                await FrameWriter.WriteFrameAsync(connection.Stream, ControlHelloV2.Serialize(),
+                    ControlHelloV2.MaxPayloadByteLength, hello.Token).ConfigureAwait(false);
                 helloSentAt = clock.GetTimestamp();
                 _ = hello.GetRemaining();
             }
@@ -176,8 +177,8 @@ public sealed class ControlClientConnector
             using (ClientAuthWindow machine = new(
                 clock, options.MachineWindow, cancellationToken, timeoutRejection, helloSentAt))
             {
-                (AuthChallengeFrame challenge, long receivedAt) = await ReadChallengeAsync(
-                    reader, connection.Identity, target, machine, timeouts).ConfigureAwait(false);
+                (AuthChallengeV2 challenge, long receivedAt) = await ReadChallengeAsync(
+                    reader, connection.Identity, machine, timeouts).ConfigureAwait(false);
                 sessionId = challenge.SessionId;
 
                 // 从收齐 challenge 起算；解析耗时已经消耗提示预算，父机器窗口从不重置。
@@ -186,12 +187,24 @@ public sealed class ControlClientConnector
                     timeoutRejection, receivedAt, machine);
                 _ = challengeWindow.GetRemaining();
 
+                agreement = await NegotiateCatalogAsync(
+                    connection, reader, sessionId, challengeWindow, timeouts).ConfigureAwait(false);
+                _ = challengeWindow.GetRemaining();
                 byte[] clientNonce = RandomNumberGenerator.GetBytes(AuthProtocol.NonceByteLength);
-                clientTranscript = AuthTranscriptBuilder.BuildClientTranscript(
-                    sessionId, target.DeviceId, clientDeviceId, challenge.ServerNonce.Span,
-                    clientNonce, connection.Identity.PresentedCertSha256.Span, requestedPermission);
+                byte[] serverNonce = challenge.CopyServerNonce();
+                try
+                {
+                    clientTranscript = AuthTranscriptV2.CreateClient(
+                        sessionId, target.DeviceId, clientDeviceId, serverNonce,
+                        clientNonce, connection.Identity.PresentedCertSha256.Span, requestedPermission, agreement);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(serverNonce);
+                }
                 shortCode = LocalApprovalRequest.ComputeShortCode(sessionId, clientNonce);
-                byte[] clientProof = AuthTranscriptBuilder.ComputeClientProof(key, clientTranscript);
+                _ = challengeWindow.GetRemaining();
+                byte[] clientProof = clientTranscript.ComputeClientProof(key);
                 try
                 {
                     byte[] response = new AuthResponseFrame(
@@ -221,7 +234,7 @@ public sealed class ControlClientConnector
                 {
                     return VerifyAndCreateSession(
                         connection, success, clientTranscript, key, requestedPermission,
-                        sessionId, shortCode, successReceivedAt, challengeWindow, sessionConstructed);
+                        sessionId, shortCode, successReceivedAt, challengeWindow, agreement, sessionConstructed);
                 }
             }
 
@@ -247,7 +260,7 @@ public sealed class ControlClientConnector
                 reader, approvalWindow, timeouts, allowPending: false, approval: true).ConfigureAwait(false);
             return VerifyAndCreateSession(
                 connection, success!, clientTranscript, key, requestedPermission,
-                sessionId, shortCode, successReceivedAt, approvalWindow, sessionConstructed);
+                sessionId, shortCode, successReceivedAt, approvalWindow, agreement!, sessionConstructed);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -268,17 +281,13 @@ public sealed class ControlClientConnector
         finally
         {
             success?.ClearSessionToken();
-            if (clientTranscript is not null)
-            {
-                CryptographicOperations.ZeroMemory(clientTranscript);
-            }
+            clientTranscript?.Clear();
         }
     }
 
-    private static async Task<(AuthChallengeFrame Frame, long ReceivedAt)> ReadChallengeAsync(
+    private static async Task<(AuthChallengeV2 Frame, long ReceivedAt)> ReadChallengeAsync(
         FrameReader reader,
         ConnectionIdentity identity,
-        ConnectionTarget target,
         ClientAuthWindow window,
         TransportTimeouts timeouts)
     {
@@ -286,36 +295,53 @@ public sealed class ControlClientConnector
             .ConfigureAwait(false);
         try
         {
-            bool parsed = AuthChallengeFrame.TryParse(payload, out AuthChallengeFrame? challenge, out string? rejection);
-            bool failed = !parsed && AuthenticationFailedFrame.TryParse(payload, out _);
-            _ = window.GetRemaining();
-            if (failed)
+            if (AuthenticationFailedFrame.TryParse(payload, out _))
             {
                 throw RemoteFailure();
             }
-
-            if (!parsed)
-            {
-                throw new ControlClientAuthenticationException(rejection!, "远端认证 challenge 无效或顺序错误。");
-            }
-
-            bool deviceMatches = challenge!.ServerDeviceId == target.DeviceId;
-            bool pinMatches = CryptographicOperations.FixedTimeEquals(
-                challenge.CertificateSha256.Span, identity.PresentedCertSha256.Span);
+            return (AuthChallengeV2.ValidateForConnection(payload, identity), receivedAt);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(payload);
+            // 身份/版本解析的成功或失败均服从原绝对窗口。
             _ = window.GetRemaining();
-            if (!deviceMatches)
-            {
-                throw new ControlClientAuthenticationException(
-                    "client-server-device-mismatch", "远端设备身份与连接目标不一致。");
-            }
+        }
+    }
 
-            if (!pinMatches)
-            {
-                throw new ControlClientAuthenticationException(
-                    "client-challenge-pin-mismatch", "远端认证证书与实际 TLS 连接不一致。");
-            }
+    private static async Task<DisplayCatalogAgreementBinding> NegotiateCatalogAsync(
+        TlsConnection connection, FrameReader reader, Guid sessionId,
+        ClientAuthWindow window, TransportTimeouts timeouts)
+    {
+        (byte[] payload, _) = await ReadBoundedFrameAsync(
+            reader, window, timeouts, approval: false, DisplayCatalogAgreementFrame.MaxPayloadByteLength)
+            .ConfigureAwait(false);
+        try
+        {
+            bool failed = AuthenticationFailedFrame.TryParse(payload, out _);
+            bool parsed = DisplayCatalogAgreementFrame.TryParseOffer(payload, sessionId, out var offer, out var rejection);
+            _ = window.GetRemaining();
+            if (failed) throw RemoteFailure();
+            if (!parsed)
+                throw new ControlClientAuthenticationException(rejection!, "远端目录协商无效或顺序错误。");
 
-            return (challenge, receivedAt);
+            byte[] acceptPayload = DisplayCatalogAgreementFrame.SerializeAccept(sessionId);
+            try
+            {
+                _ = window.GetRemaining();
+                await FrameWriter.WriteFrameAsync(connection.Stream, acceptPayload,
+                    DisplayCatalogAgreementFrame.MaxPayloadByteLength, window.Token).ConfigureAwait(false);
+                _ = window.GetRemaining();
+                if (!DisplayCatalogAgreementFrame.TryParseAccept(acceptPayload, sessionId, out var accept, out _))
+                    throw new InvalidOperationException("本地目录确认载荷无效。");
+                DisplayCatalogAgreementBinding agreement = DisplayCatalogAgreementBinding.Create(sessionId, offer!, accept!);
+                _ = window.GetRemaining();
+                return agreement;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(acceptPayload);
+            }
         }
         finally
         {
@@ -378,13 +404,14 @@ public sealed class ControlClientConnector
     private static AuthenticatedControlSession VerifyAndCreateSession(
         TlsConnection connection,
         AuthSuccessFrame success,
-        byte[] clientTranscript,
+        AuthTranscriptV2 clientTranscript,
         byte[] key,
         SessionPermission requestedPermission,
         Guid sessionId,
         string shortCode,
         long successReceivedAt,
         ClientAuthWindow window,
+        DisplayCatalogAgreementBinding agreement,
         Action<AuthenticatedControlSession>? sessionConstructed)
     {
         bool grantAllowed = success.GrantedPermission == requestedPermission
@@ -396,8 +423,7 @@ public sealed class ControlClientConnector
             throw new ControlClientAuthenticationException("client-overgrant", "远端授予了超出请求的权限。");
         }
 
-        byte[] grantTranscript = AuthTranscriptBuilder.BuildGrantTranscript(clientTranscript, success.GrantedPermission);
-        byte[] expectedProof = AuthTranscriptBuilder.ComputeServerProof(key, grantTranscript);
+        byte[] expectedProof = clientTranscript.ComputeServerProof(key, success.GrantedPermission);
         try
         {
             bool proofMatches = CryptographicOperations.FixedTimeEquals(expectedProof, success.ServerProof.Span);
@@ -411,7 +437,7 @@ public sealed class ControlClientConnector
 
             AuthenticatedControlSession session = new(
                 connection, success.GrantedPermission, sessionId, shortCode,
-                success.SessionToken.Span, success.VideoAttachExpiresInMs, successReceivedAt, window.Clock);
+                success.SessionToken.Span, success.VideoAttachExpiresInMs, successReceivedAt, window.Clock, agreement);
             try
             {
                 sessionConstructed?.Invoke(session);
@@ -428,12 +454,15 @@ public sealed class ControlClientConnector
         finally
         {
             CryptographicOperations.ZeroMemory(expectedProof);
-            CryptographicOperations.ZeroMemory(grantTranscript);
         }
     }
 
-    private static async Task<(byte[] Payload, long ReceivedAt)> ReadFrameAsync(
-        FrameReader reader, ClientAuthWindow window, TransportTimeouts timeouts, bool approval)
+    private static Task<(byte[] Payload, long ReceivedAt)> ReadFrameAsync(
+        FrameReader reader, ClientAuthWindow window, TransportTimeouts timeouts, bool approval) =>
+        ReadBoundedFrameAsync(reader, window, timeouts, approval, TransportConstants.MaxPreAuthMessageBytes);
+
+    private static async Task<(byte[] Payload, long ReceivedAt)> ReadBoundedFrameAsync(
+        FrameReader reader, ClientAuthWindow window, TransportTimeouts timeouts, bool approval, int maxBytes)
     {
         try
         {
@@ -449,7 +478,7 @@ public sealed class ControlClientConnector
             }
 
             if (!FrameReader.TryValidateLength(
-                length, TransportConstants.MaxPreAuthMessageBytes, out int lengthBytes, out string? rejection))
+                length, maxBytes, out int lengthBytes, out string? rejection))
             {
                 throw new FrameProtocolException(rejection!);
             }

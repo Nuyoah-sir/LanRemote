@@ -374,7 +374,7 @@ public sealed class ControlClientConnectorOwnershipTests
             // 用 Assert.All 保留所有独立调用的诊断差异，不因第一条错误提前漏掉后面的核对。
             Assert.All(Enumerable.Range(0, fixtures.Length), i =>
                 AssertRealRejection(originals[i], i == 0 ? first : observed[i - 1],
-                    i == 3 ? AuthChallengeFrame.RejectMalformedJson : RemoteRejection, fixtures[i].Errors));
+                    i == 3 ? "client-challenge-invalid" : RemoteRejection, fixtures[i].Errors));
             for (int i = 1; i < fixtures.Length; i++)
                 Assert.Same(observed[i - 1], await ObserveAsync(originals[i]).WaitAsync(Guard));
         }
@@ -388,7 +388,7 @@ public sealed class ControlClientConnectorOwnershipTests
     private static string RejectionFor(string wire) => wire switch
     {
         "rejected" or "reply-rejected" => RemoteRejection,
-        "malformed" => AuthChallengeFrame.RejectMalformedJson,
+        "malformed" => "client-challenge-invalid",
         "zero-length" => FrameReader.RejectZeroLength,
         "truncated" => "client-connection-closed",
         _ => throw new ArgumentOutOfRangeException(nameof(wire)),
@@ -535,6 +535,7 @@ public sealed class ControlClientConnectorOwnershipTests
         };
         private readonly TimeProvider _clock = TimeProvider.System;
         private readonly Guid _clientId = Guid.NewGuid();
+        private readonly Guid _sessionId = Guid.NewGuid();
         private readonly ProbeTcpClient _tcp;
         private Thread? _thread;
         private int _connectCalls;
@@ -572,8 +573,9 @@ public sealed class ControlClientConnectorOwnershipTests
             byte[] input = wire switch
             {
                 "rejected" => Frame(rejection),
-                "reply-rejected" => [.. Frame(new AuthChallengeFrame(Guid.NewGuid(), Target.DeviceId,
-                    new byte[AuthProtocol.NonceByteLength], pin, 86_400_000).Serialize()), .. Frame(rejection)],
+                "reply-rejected" => [.. Frame(new AuthChallengeV2(_sessionId, Target.DeviceId,
+                    new byte[AuthProtocol.NonceByteLength], pin, 86_400_000).Serialize()),
+                    .. Frame(DisplayCatalogAgreementFrame.SerializeOffer(_sessionId)), .. Frame(rejection)],
                 "malformed" => Frame("{"u8.ToArray()),
                 "zero-length" => new byte[TransportConstants.LengthPrefixBytes],
                 "truncated" => Frame(rejection)[..^1],
@@ -652,14 +654,19 @@ public sealed class ControlClientConnectorOwnershipTests
         internal void AssertWireConsumed()
         {
             Assert.Equal(Ssl.InputLength, Ssl.BytesRead);
-            Assert.Equal(_wire == "reply-rejected" ? 4 : _wire == "zero-length" ? 1
+            Assert.Equal(_wire == "reply-rejected" ? 6 : _wire == "zero-length" ? 1
                 : _wire == "truncated" ? 3 : 2, Ssl.ReadCalls);
-            Assert.Equal(_wire == "reply-rejected" ? 2 : 1, Ssl.Writes.Count);
+            Assert.Equal(_wire == "reply-rejected" ? 3 : 1, Ssl.Writes.Count);
             Assert.Equal(Ssl.Writes.Count, Ssl.FlushCalls);
             AssertHello(Ssl.Writes[0]);
             if (_wire == "reply-rejected")
             {
-                byte[] response = Ssl.Writes[1];
+                byte[] accept = Ssl.Writes[1];
+                Assert.Equal((uint)(accept.Length - TransportConstants.LengthPrefixBytes),
+                    BinaryPrimitives.ReadUInt32BigEndian(accept));
+                Assert.True(DisplayCatalogAgreementFrame.TryParseAccept(
+                    accept.AsSpan(TransportConstants.LengthPrefixBytes), _sessionId, out _, out _));
+                byte[] response = Ssl.Writes[2];
                 Assert.Equal((uint)(response.Length - TransportConstants.LengthPrefixBytes),
                     BinaryPrimitives.ReadUInt32BigEndian(response));
                 Assert.True(AuthResponseFrame.TryParse(response.AsSpan(TransportConstants.LengthPrefixBytes),
@@ -673,7 +680,8 @@ public sealed class ControlClientConnectorOwnershipTests
         {
             Assert.Equal((uint)(frame.Length - TransportConstants.LengthPrefixBytes),
                 BinaryPrimitives.ReadUInt32BigEndian(frame));
-            Assert.True(HelloFrame.TryParse(frame.AsSpan(TransportConstants.LengthPrefixBytes), out _));
+            Assert.Equal(WireV2ParseStatus.AcceptedV2,
+                ControlHelloV2.Parse(frame.AsSpan(TransportConstants.LengthPrefixBytes)));
         }
 
         internal void ReleaseAll()

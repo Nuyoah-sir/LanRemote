@@ -6,6 +6,7 @@ using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Text;
 using LanRemote.Core.Models;
+using LanRemote.Transport.Auth;
 
 namespace LanRemote.Transport.Tests;
 
@@ -14,6 +15,41 @@ public sealed class VideoAttachRegistryTests
     private static readonly Guid SessionId = Guid.Parse("00112233-4455-6677-8899-aabbccddeeff");
     private static readonly IPAddress RemoteAddress = IPAddress.Parse("192.168.10.20");
     private static readonly IPAddress LocalAddress = IPAddress.Parse("192.168.10.10");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Register_Rejects_Missing_Or_Mismatched_Agreement_Without_Eligibility_Or_Input_Changes(bool missing)
+    {
+        ManualDeadlineClock clock = new();
+        SessionRegistry registry = new();
+        byte[] token = Token();
+        byte[] pin = Pin();
+        byte[] originalToken = token.ToArray();
+        byte[] originalPin = pin.ToArray();
+        byte[] nonce = Nonce();
+        DisplayCatalogAgreementBinding? agreement = missing ? null
+            : V2AgreementFixture.Create(new Guid("11111111-2222-3333-4444-555555555555"));
+
+        Exception? error = Record.Exception(() =>
+        {
+            using var registration = registry.Register(SessionId, Guid.NewGuid(), Guid.NewGuid(),
+                "目录约定拒绝测试", SessionPermission.ViewOnly, RemoteAddress, 12345, token,
+                new VideoAttachWindow(clock, 15_000), pin, CancellationToken.None, agreement!);
+        });
+        ArgumentException rejection = missing
+            ? Assert.IsType<ArgumentNullException>(error)
+            : Assert.IsType<ArgumentException>(error);
+        Assert.Equal("agreement", rejection.ParamName);
+        Assert.Equal(0, registry.ActiveSessionCount);
+        Assert.Empty(registry.Snapshot());
+        Assert.Equal(VideoAttachStatus.NotRegistered, registry.TryAttachVideo(
+            SessionId, Security(pin), nonce, IndependentProof(token, SessionId, nonce, pin), default, out var lease));
+        Assert.Null(lease);
+        Assert.Equal(originalToken, token);
+        Assert.Equal(originalPin, pin);
+        Assert.Equal(0, clock.TimerCount);
+    }
 
     [Fact]
     public void First_Valid_Proof_Attaches_Only_The_Requested_Video_Connection()
@@ -1196,11 +1232,16 @@ public sealed class VideoAttachRegistryTests
             methods.Where(method => method.IsAssembly).Select(method => method.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         MethodInfo register = Assert.Single(methods, method => method.Name == "Register");
         ParameterInfo[] parameters = register.GetParameters();
-        Assert.Equal(11, parameters.Length);
+        Assert.Equal(12, parameters.Length);
         Assert.Equal(typeof(ReadOnlySpan<byte>), parameters[7].ParameterType);
         Assert.Equal(typeof(VideoAttachWindow), parameters[8].ParameterType);
         Assert.Equal(typeof(ReadOnlySpan<byte>), parameters[9].ParameterType);
         Assert.Equal(typeof(CancellationToken), parameters[10].ParameterType);
+        Assert.Equal(typeof(DisplayCatalogAgreementBinding), parameters[11].ParameterType);
+        Assert.Equal("agreement", parameters[11].Name);
+        Assert.False(parameters[11].IsOptional);
+        Assert.False(parameters[11].HasDefaultValue);
+        Assert.False(typeof(DisplayCatalogAgreementBinding).IsVisible);
         Assert.False(typeof(VideoAttachWindow).IsVisible);
         Assert.False(typeof(VideoAttachStatus).IsVisible);
         Assert.False(typeof(VideoAttachLease).IsVisible);
@@ -1243,7 +1284,8 @@ public sealed class VideoAttachRegistryTests
         CancellationToken controlCancellationToken = default,
         Guid? connectionId = null) => registry.Register(
             SessionId, connectionId ?? Guid.NewGuid(), Guid.NewGuid(), "video-registry-test",
-            SessionPermission.ViewOnly, RemoteAddress, 12345, token, window, pin, controlCancellationToken);
+            SessionPermission.ViewOnly, RemoteAddress, 12345, token, window, pin, controlCancellationToken,
+            V2AgreementFixture.Create(SessionId));
 
     private static ConnectionSecurityContext Security(byte[] pin, IPAddress? remoteAddress = null) =>
         new(LocalAddress, remoteAddress ?? RemoteAddress, 23456, SslProtocols.Tls13, pin);

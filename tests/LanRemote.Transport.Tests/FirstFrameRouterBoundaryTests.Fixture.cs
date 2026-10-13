@@ -112,7 +112,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
                 SessionId, connectionId ?? Guid.NewGuid(),
                 Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"), "首帧路由边界测试",
                 SessionPermission.ViewOnly, RemoteAddress, 12345, Token,
-                new VideoAttachWindow(windowClock ?? Clock.Manual, expiresInMs), Pin, controlToken);
+                new VideoAttachWindow(windowClock ?? Clock.Manual, expiresInMs), Pin, controlToken,
+                V2AgreementFixture.Create(SessionId));
             _registrations.Add(registration);
             return registration;
         }

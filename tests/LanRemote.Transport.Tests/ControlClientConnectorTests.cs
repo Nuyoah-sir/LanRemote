@@ -232,6 +232,7 @@ public sealed partial class ControlClientConnectorTests
             await peer.SendChallengeAsync(ct);
             byte[] transcript = await peer.ReadAndVerifyResponseAsync(requested, ct);
             await peer.SendAsync(peer.Success(transcript, granted), ct);
+            peer.Frames.Add("S:auth_success");
             await peer.AssertClosedWithoutDataAsync(ct);
         });
         scenario.Start();
@@ -247,11 +248,15 @@ public sealed partial class ControlClientConnectorTests
         session.Dispose();
         Assert.All(tokenView.ToArray(), value => Assert.Equal((byte)0, value));
         await scenario.AssertServerFinishedAsync();
+        Assert.Equal(new[] { "C:channel_hello:2", "S:auth_challenge:2", "S:display_catalog_offer",
+            "C:display_catalog_accept", "C:auth_response", "S:auth_success" }, peer.Frames);
     }
 
     [Theory(Timeout = 30_000)]
     [InlineData("proof", false, "client-server-proof-mismatch", ProofFailureMessage)]
     [InlineData("proof", true, "client-server-proof-mismatch", ProofFailureMessage)]
+    [InlineData("v1-proof", false, "client-server-proof-mismatch", ProofFailureMessage)]
+    [InlineData("v1-proof", true, "client-server-proof-mismatch", ProofFailureMessage)]
     [InlineData("grant", false, "client-server-proof-mismatch", ProofFailureMessage)]
     [InlineData("grant", true, "client-server-proof-mismatch", ProofFailureMessage)]
     [InlineData("overgrant", false, "client-overgrant", "远端授予了超出请求的权限。")]
@@ -275,6 +280,15 @@ public sealed partial class ControlClientConnectorTests
             if (mutation == "proof")
             {
                 proof[0] ^= 0x80;
+            }
+            if (mutation == "v1-proof")
+            {
+                string[] fields = Encoding.ASCII.GetString(transcript).Split('\0');
+                fields[0] = "LANREMOTE-AUTH-V1";
+                byte[] legacy = Encoding.ASCII.GetBytes(string.Join('\0', fields.Take(8)));
+                byte[] grant = Encoding.ASCII.GetBytes(string.Join('\0', "server", "LANREMOTE-GRANT-V1",
+                    Convert.ToHexString(SHA256.HashData(legacy)), "control"));
+                proof = HMACSHA256.HashData(GoodKey, grant);
             }
             await peer.SendAsync(peer.SuccessWithProof(wireGrant, proof), ct);
             await peer.AssertClosedWithoutDataAsync(ct);
@@ -304,10 +318,105 @@ public sealed partial class ControlClientConnectorTests
     }
 
     [Theory(Timeout = 30_000)]
-    [InlineData("success", "challenge-wrong-type")]
-    [InlineData("pending", "challenge-wrong-type")]
-    [InlineData("unknown", "challenge-wrong-type")]
-    [InlineData("malformed", "challenge-malformed-json")]
+    [InlineData(1, "none", "client-upgrade-required")]
+    [InlineData(3, "none", "client-protocol-unsupported")]
+    [InlineData(1, "device", "client-server-device-mismatch")]
+    [InlineData(3, "device", "client-server-device-mismatch")]
+    [InlineData(1, "pin", "client-challenge-pin-mismatch")]
+    [InlineData(3, "pin", "client-challenge-pin-mismatch")]
+    public async Task Explicit_Version_Is_Rejected_Before_Accept_And_Proof_With_Identity_Priority(
+        int protocol, string mismatch, string rejection)
+    {
+        await using TlsScenario scenario = TlsScenario.Scripted(async (peer, ct) =>
+        {
+            byte[] pin = peer.ActualPin.ToArray();
+            if (mismatch == "pin") pin[0] ^= 0x80;
+            await peer.SendAsync(peer.Challenge(
+                deviceId: mismatch == "device" ? Guid.NewGuid() : ServerDeviceId, pin: pin, protocol: protocol), ct);
+            await peer.AssertClosedWithoutDataAsync(ct);
+        });
+        scenario.Start();
+        ControlClientAuthenticationException error = await Assert.ThrowsAsync<ControlClientAuthenticationException>(
+            () => scenario.ConnectAsync().WaitAsync(Guard));
+        Assert.Equal(rejection, error.Rejection);
+        await scenario.AssertServerFinishedAsync();
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData("malformed")]
+    [InlineData("session")]
+    [InlineData("reverse")]
+    [InlineData("profile")]
+    [InlineData("schema")]
+    [InlineData("duplicate")]
+    [InlineData("unknown")]
+    [InlineData("pending")]
+    [InlineData("success")]
+    public async Task Invalid_Offer_Is_Rejected_Without_Accept_Or_Proof(string mutation)
+    {
+        await using TlsScenario scenario = TlsScenario.Scripted(async (peer, ct) =>
+        {
+            await peer.SendChallengeAsync(ct);
+            string offer = Encoding.UTF8.GetString(peer.Offer());
+            byte[] payload = mutation switch
+            {
+                "malformed" => "{"u8.ToArray(),
+                "session" => peer.Offer(Guid.NewGuid()),
+                "reverse" => Encoding.UTF8.GetBytes(offer.Replace("display_catalog_offer", "display_catalog_accept")),
+                "profile" => Encoding.UTF8.GetBytes(offer.Replace("\"applicationProfile\":2", "\"applicationProfile\":1")),
+                "schema" => Encoding.UTF8.GetBytes(offer.Replace("\"catalogSchema\":1", "\"catalogSchema\":2")),
+                "duplicate" => Encoding.UTF8.GetBytes(offer.Replace("{", "{\"catalogSchema\":1,")),
+                "unknown" => Encoding.UTF8.GetBytes(offer.Replace("{", "{\"extra\":1,")),
+                "pending" => "{\"type\":\"approval_pending\"}"u8.ToArray(),
+                "success" => peer.SuccessWithProof(SessionPermission.Control, new byte[32]),
+                _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
+            };
+            await peer.SendAsync(payload, ct);
+            await peer.AssertClosedWithoutDataAsync(ct);
+        });
+        scenario.Start();
+        await AssertRejectedAsync(scenario, scenario.ConnectAsync(),
+            "catalog-agreement-invalid-payload", "远端目录协商无效或顺序错误。");
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task Oversized_Offer_Prefix_Is_Rejected_Without_Reading_Payload()
+    {
+        await using TlsScenario scenario = TlsScenario.Scripted(async (peer, ct) =>
+        {
+            await peer.SendChallengeAsync(ct);
+            byte[] prefix = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(prefix, 4097);
+            await peer.Stream.WriteAsync(prefix, ct);
+            await peer.AssertClosedWithoutDataAsync(ct);
+        });
+        scenario.Start();
+        await AssertRejectedAsync(scenario, scenario.ConnectAsync(), "length-exceeds-limit", "远端认证数据格式错误。");
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Eof_Before_Challenge_Or_Offer_Does_Not_Claim_Legacy_Peer(bool afterChallenge)
+    {
+        await using TlsScenario scenario = TlsScenario.Scripted(async (peer, ct) =>
+        {
+            if (afterChallenge) await peer.SendChallengeAsync(ct);
+        });
+        scenario.Start();
+        ControlClientAuthenticationException error = await Assert.ThrowsAsync<ControlClientAuthenticationException>(
+            () => scenario.ConnectAsync().WaitAsync(Guard));
+        Assert.Equal("client-connection-closed", error.Rejection);
+        Assert.DoesNotContain("upgrade", error.Rejection, StringComparison.Ordinal);
+        Assert.DoesNotContain("protocol-unsupported", error.Rejection, StringComparison.Ordinal);
+        await scenario.AssertServerFinishedAsync();
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData("success", "client-challenge-invalid")]
+    [InlineData("pending", "client-challenge-invalid")]
+    [InlineData("unknown", "client-challenge-invalid")]
+    [InlineData("malformed", "client-challenge-invalid")]
     public async Task Frames_Before_Challenge_Fail_Closed_Without_Response(string frame, string rejection)
     {
         await using TlsScenario scenario = TlsScenario.Scripted(async (peer, ct) =>
@@ -330,6 +439,8 @@ public sealed partial class ControlClientConnectorTests
     [Theory(Timeout = 30_000)]
     [InlineData("challenge", false, "client-unexpected-auth-frame")]
     [InlineData("challenge", true, "client-unexpected-auth-frame")]
+    [InlineData("offer", false, "client-unexpected-auth-frame")]
+    [InlineData("offer", true, "client-unexpected-auth-frame")]
     [InlineData("unknown", false, "client-unexpected-auth-frame")]
     [InlineData("unknown", true, "client-unexpected-auth-frame")]
     [InlineData("malformed", false, "success-malformed-json")]
@@ -352,6 +463,7 @@ public sealed partial class ControlClientConnectorTests
             byte[] payload = frame switch
             {
                 "challenge" => peer.Challenge(),
+                "offer" => peer.Offer(),
                 "unknown" => "{\"type\":\"unknown_frame\"}"u8.ToArray(),
                 "malformed" => "{"u8.ToArray(),
                 "incomplete-success" => "{\"type\":\"auth_success\"}"u8.ToArray(),
@@ -663,7 +775,10 @@ public sealed partial class ControlClientConnectorTests
         {
             ScriptedPeer peer = new(connection);
             byte[] hello = await peer.ReadAsync(ct);
-            Assert.True(HelloFrame.TryParse(hello, out string? rejection), rejection);
+            using JsonDocument document = JsonDocument.Parse(hello);
+            Assert.Equal("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":2}",
+                document.RootElement.GetRawText());
+            peer.Frames.Add("C:channel_hello:2");
             await script(peer, ct);
         });
 
@@ -770,6 +885,7 @@ public sealed partial class ControlClientConnectorTests
         public byte[] ActualPin { get; }
         public Guid SessionId { get; } = Guid.NewGuid();
         public byte[] Token { get; } = RandomNumberGenerator.GetBytes(32);
+        public List<string> Frames { get; } = [];
 
         public Task<byte[]> ReadAsync(CancellationToken ct) => new FrameReader(Stream).ReadFrameAsync(
             TransportConstants.MaxPreAuthMessageBytes, Guard, Guard, ct);
@@ -777,14 +893,40 @@ public sealed partial class ControlClientConnectorTests
         public Task SendAsync(byte[] payload, CancellationToken ct) => FrameWriter.WriteFrameAsync(
             Stream, payload, TransportConstants.MaxPreAuthMessageBytes, Guard, ct);
 
-        public Task SendChallengeAsync(CancellationToken ct) => SendAsync(Challenge(), ct);
+        public async Task SendChallengeAsync(CancellationToken ct)
+        {
+            await SendAsync(Challenge(), ct);
+            Frames.Add("S:auth_challenge:2");
+        }
+
+        public byte[] Offer(Guid? sessionId = null) => JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            type = "display_catalog_offer", applicationProfile = 2, catalogSchema = 1,
+            sessionId = (sessionId ?? SessionId).ToString("D"),
+        });
+
+        public async Task NegotiateAsync(CancellationToken ct)
+        {
+            await SendAsync(Offer(), ct);
+            Frames.Add("S:display_catalog_offer");
+            byte[] accept = await ReadAsync(ct);
+            using JsonDocument document = JsonDocument.Parse(accept);
+            JsonElement root = document.RootElement;
+            Assert.Equal("display_catalog_accept", root.GetProperty("type").GetString());
+            Assert.Equal(2, root.GetProperty("applicationProfile").GetInt32());
+            Assert.Equal(1, root.GetProperty("catalogSchema").GetInt32());
+            Assert.Equal(SessionId.ToString("D"), root.GetProperty("sessionId").GetString());
+            Assert.Equal(new[] { "applicationProfile", "catalogSchema", "sessionId", "type" },
+                root.EnumerateObject().Select(property => property.Name).Order().ToArray());
+            Frames.Add("C:display_catalog_accept");
+        }
         public Task SendPendingAsync(CancellationToken ct) => SendAsync("{\"type\":\"approval_pending\"}"u8.ToArray(), ct);
 
-        public byte[] Challenge(Guid? deviceId = null, byte[]? pin = null, int expiresMs = 15_000) =>
+        public byte[] Challenge(Guid? deviceId = null, byte[]? pin = null, int expiresMs = 15_000, int protocol = 2) =>
             JsonSerializer.SerializeToUtf8Bytes(new
             {
                 type = "auth_challenge",
-                protocol = 1,
+                protocol,
                 sessionId = SessionId.ToString("D"),
                 serverDeviceId = (deviceId ?? ServerDeviceId).ToString("D"),
                 serverNonce = Convert.ToBase64String(_serverNonce),
@@ -794,7 +936,9 @@ public sealed partial class ControlClientConnectorTests
 
         public async Task<byte[]> ReadAndVerifyResponseAsync(SessionPermission requested, CancellationToken ct)
         {
+            await NegotiateAsync(ct);
             byte[] payload = await ReadAsync(ct);
+            Frames.Add("C:auth_response");
             using JsonDocument document = JsonDocument.Parse(payload);
             JsonElement root = document.RootElement;
             Assert.Equal("auth_response", root.GetProperty("type").GetString());
@@ -820,17 +964,23 @@ public sealed partial class ControlClientConnectorTests
             return transcript;
         }
 
-        // ADR-038 §1 的独立字节 oracle：NUL 分隔、无尾 NUL、UUID 小写 D、指纹大写 HEX。
-        // 不调用产品 transcript/proof helper，避免客户端与伪服务端共享同一个错误。
-        private byte[] ClientTranscript(string clientNonce, SessionPermission requested, byte[] pin) =>
-            Encoding.UTF8.GetBytes(string.Join('\0',
-                "LANREMOTE-AUTH-V1", SessionId.ToString("D"), ServerDeviceId.ToString("D"),
+        // 独立 V2 oracle：16 个 ASCII 字段、15 个 NUL、无尾 NUL，禁止共享产品 helper。
+        private byte[] ClientTranscript(string clientNonce, SessionPermission requested, byte[] pin)
+        {
+            byte[] bytes = Encoding.ASCII.GetBytes(string.Join('\0',
+                "LANREMOTE-AUTH-V2", SessionId.ToString("D"), ServerDeviceId.ToString("D"),
                 ClientDeviceId.ToString("D"), Convert.ToBase64String(_serverNonce),
-                clientNonce, Convert.ToHexString(pin), Permission(requested)));
+                clientNonce, Convert.ToHexString(pin), Permission(requested),
+                "display_catalog_offer", "2", "1", SessionId.ToString("D"),
+                "display_catalog_accept", "2", "1", SessionId.ToString("D")));
+            Assert.Equal(15, bytes.Count(value => value == 0));
+            Assert.NotEqual((byte)0, bytes[^1]);
+            return bytes;
+        }
 
         public static byte[] ServerProof(byte[] clientTranscript, SessionPermission granted)
         {
-            string grant = string.Join('\0', "server", "LANREMOTE-GRANT-V1",
+            string grant = string.Join('\0', "server", "LANREMOTE-GRANT-V2",
                 Convert.ToHexString(SHA256.HashData(clientTranscript)), Permission(granted));
             using HMACSHA256 hmac = new(GoodKey);
             return hmac.ComputeHash(Encoding.UTF8.GetBytes(grant));

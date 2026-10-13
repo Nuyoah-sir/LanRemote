@@ -57,6 +57,22 @@ public sealed class TransportHost : IAsyncDisposable
     private bool _disposed;
     private Task? _stopCancellationTask;
     private Task? _disposeTask;
+    private string? _lastProtocolRejection;
+
+    /// <summary>本轮最近一次完整 Control 版本声明的拒绝短码；有界单槽，未认证，不含远端文本或凭据。</summary>
+    public string? LastProtocolRejection => Volatile.Read(ref _lastProtocolRejection);
+
+    private async Task RunRouterAsync(FirstFrameRouter router, AcceptedConnection connection,
+        CancellationToken cancellationToken)
+    {
+        try { await router.RunAsync(connection, cancellationToken).ConfigureAwait(false); }
+        finally
+        {
+            if (router.Rejection is ControlPreAuthSession.RejectUpgradeRequired or
+                ControlPreAuthSession.RejectUnsupportedVersion)
+                Volatile.Write(ref _lastProtocolRejection, router.Rejection);
+        }
+    }
 
     /// <summary>构造 Host。</summary>
     /// <param name="localAddresses">要监听的本地 IPv4 地址（每张合格网卡一个）。</param>
@@ -110,10 +126,12 @@ public sealed class TransportHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(authContext);
         ArgumentNullException.ThrowIfNull(videoFrames);
         TransportHostOptions hostOptions = options ?? new TransportHostOptions();
-        return new TransportHost(localAddresses, subnetPolicy, serverCertificate,
-            (connection, token) => new FirstFrameRouter(
-                authContext, hostOptions.Timeouts, videoFrames, videoOptions).RunAsync(connection, token),
+        TransportHost host = null!;
+        host = new TransportHost(localAddresses, subnetPolicy, serverCertificate,
+            (connection, token) => host.RunRouterAsync(new FirstFrameRouter(
+                authContext, hostOptions.Timeouts, videoFrames, videoOptions), connection, token),
             hostOptions);
+        return host;
     }
 
     /// <summary>装配认证后的单会话视频生产者；工厂为借用对象，不接触流或会话凭据。</summary>
@@ -128,10 +146,12 @@ public sealed class TransportHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(authContext);
         ArgumentNullException.ThrowIfNull(videoFactory);
         TransportHostOptions hostOptions = options ?? new TransportHostOptions();
-        return new TransportHost(localAddresses, subnetPolicy, serverCertificate,
-            (connection, token) => new FirstFrameRouter(
-                authContext, hostOptions.Timeouts, videoFactory).RunAsync(connection, token),
+        TransportHost host = null!;
+        host = new TransportHost(localAddresses, subnetPolicy, serverCertificate,
+            (connection, token) => host.RunRouterAsync(new FirstFrameRouter(
+                authContext, hostOptions.Timeouts, videoFactory), connection, token),
             hostOptions);
+        return host;
     }
 
     /// <summary>是否正在运行。</summary>

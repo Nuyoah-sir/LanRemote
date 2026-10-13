@@ -45,7 +45,7 @@ public sealed partial class ControlAuthSessionTests
         Assert.False(scenario.Result.Completed);
         Assert.Equal(ControlAuthSession.RejectKeyUnavailable, scenario.Result.Rejection);
         Assert.Equal(ControlSessionState.Closed, scenario.Session.State);
-        Assert.Equal(new[] { "auth_challenge", "authentication_failed" }, scenario.Probe.Frames);
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "authentication_failed" }, scenario.Probe.Frames);
         Assert.True(scenario.Probe.SawGenericFailure);
         Assert.Null(scenario.Probe.Success);
         Assert.Equal(0, gate.RequestCount);
@@ -107,7 +107,7 @@ public sealed partial class ControlAuthSessionTests
         Assert.Equal(1, gate.RequestCount);
         Assert.True(gateFault.IsFaulted);
         Assert.False(stream.PendingRead.IsCompleted);
-        Assert.Equal(new[] { "auth_challenge", "approval_pending" }, stream.WriteAttempts);
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending" }, stream.WriteAttempts);
         Assert.DoesNotContain("auth_success", stream.AcceptedFrames);
         Assert.Equal(ControlSessionState.Closed, session.State);
         Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
@@ -262,7 +262,7 @@ public sealed partial class ControlAuthSessionTests
             Assert.Equal(ControlAuthSession.RejectApprovalTimeout, scenario.Result.Rejection);
             Assert.Equal(ControlSessionState.Closed, scenario.Session.State);
             Assert.Equal(0, pending.GlobalInUse);
-            Assert.Equal(new[] { "auth_challenge", "approval_pending", "authentication_failed" }, probe.Frames);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "authentication_failed" }, probe.Frames);
 
             LocalApprovalRequest request = Assert.IsType<LocalApprovalRequest>(gate.LastRequest);
             LocalApprovalDecision approved = new(
@@ -289,8 +289,8 @@ public sealed partial class ControlAuthSessionTests
 
     // 受控 SslStream 派生类跳过 TLS 握手/加密，只验证本地 IO 取消的状态机映射。
     [Theory(Timeout = 120_000)]
-    [InlineData(2, ControlAuthSession.RejectApprovalPendingNotDelivered)]
-    [InlineData(3, ControlAuthSession.RejectSuccessNotDelivered)]
+    [InlineData(3, ControlAuthSession.RejectApprovalPendingNotDelivered)]
+    [InlineData(4, ControlAuthSession.RejectSuccessNotDelivered)]
     public async Task Local_Write_Cancellation_Fails_Closed_With_Controlled_Io(
         int cancelOnWrite, string expected)
     {
@@ -322,18 +322,18 @@ public sealed partial class ControlAuthSessionTests
         Assert.Null(lease);
         Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
         Assert.Equal(0, context.FailedAuthLimiter.CountRecentFailures(IPAddress.Loopback));
-        Assert.Equal(cancelOnWrite == 2 ? 0 : 1, gate.RequestCount);
-        Assert.Equal(2, stream.ResponseReadCalls); // response 的长度前缀与载荷，不是审批期一字节读。
+        Assert.Equal(cancelOnWrite == 3 ? 0 : 1, gate.RequestCount);
+        Assert.Equal(4, stream.HandshakeReadCalls); // Accept 和 response 各自的长度前缀与载荷，不是审批期一字节读。
         Assert.True(stream.ResponseFullyRead);
-        Assert.Equal(cancelOnWrite == 2 ? 0 : 1, stream.PendingReadCalls);
+        Assert.Equal(cancelOnWrite == 3 ? 0 : 1, stream.PendingReadCalls);
         Assert.False(stream.PendingRead.IsCompleted);
         Assert.Equal(1, stream.InjectedWriteCancellations);
         Assert.Equal(cancelOnWrite + 1, stream.WriteAttempts.Count);
         Assert.Equal("authentication_failed", stream.AcceptedFrames.Last());
         Assert.DoesNotContain("auth_success", stream.AcceptedFrames);
-        Assert.Equal(cancelOnWrite == 2
-            ? new[] { "auth_challenge", "approval_pending", "authentication_failed" }
-            : new[] { "auth_challenge", "approval_pending", "auth_success", "authentication_failed" },
+        Assert.Equal(cancelOnWrite == 3
+            ? new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "authentication_failed" }
+            : new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success", "authentication_failed" },
             stream.WriteAttempts);
 
         // pending 写失败尚未启动活动读，join 必须立即完成且不能因此新开读者。
@@ -341,14 +341,14 @@ public sealed partial class ControlAuthSessionTests
         Task ownedJoin = session.JoinOwnedOperationsAsync();
         try
         {
-            Assert.Equal(cancelOnWrite == 2, ownedJoin.IsCompletedSuccessfully);
-            Assert.Equal(cancelOnWrite == 2, join.IsCompletedSuccessfully);
-            if (cancelOnWrite == 3)
+            Assert.Equal(cancelOnWrite == 3, ownedJoin.IsCompletedSuccessfully);
+            Assert.Equal(cancelOnWrite == 3, join.IsCompletedSuccessfully);
+            if (cancelOnWrite == 4)
             {
                 Assert.False(join.IsCompleted);
                 Assert.False(ownedJoin.IsCompleted);
             }
-            Assert.Equal(cancelOnWrite == 2 ? 0 : 1, stream.PendingReadCalls);
+            Assert.Equal(cancelOnWrite == 3 ? 0 : 1, stream.PendingReadCalls);
         }
         finally
         {
@@ -358,7 +358,7 @@ public sealed partial class ControlAuthSessionTests
         }
         Assert.True(join.IsCompletedSuccessfully);
         Assert.True(ownedJoin.IsCompletedSuccessfully);
-        Assert.Equal(cancelOnWrite == 2 ? 0 : 1, stream.PendingReadCalls);
+        Assert.Equal(cancelOnWrite == 3 ? 0 : 1, stream.PendingReadCalls);
     }
 
     // 受控 IO 接线测试，不建立 TLS：write 消耗 6 秒、flush 消耗 4 秒，登记不能重置写前的窗口。
@@ -433,10 +433,10 @@ public sealed partial class ControlAuthSessionTests
             await Task.WhenAny(stream.SingleReadStarted.Task, run).WaitAsync(FrameDeadline);
             Assert.True(stream.SingleReadStarted.Task.IsCompletedSuccessfully);
             Assert.Equal(new[] { "write", "flush" }, callbacks);
-            Assert.Equal(new[] { "auth_challenge", "auth_success" }, stream.AcceptedFrames);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "auth_success" }, stream.AcceptedFrames);
             Assert.Equal(0, gate.RequestCount);
             Assert.Equal(1, store.Calls);
-            Assert.Equal(2, stream.ResponseReadCalls);
+            Assert.Equal(4, stream.HandshakeReadCalls);
             Assert.True(stream.ResponseFullyRead);
             Assert.Equal(1, stream.PendingReadCalls);
             Assert.False(stream.PendingRead.IsCompleted);
@@ -573,12 +573,12 @@ public sealed partial class ControlAuthSessionTests
             Assert.Equal(new[] { "write", "flush" }, callbacks);
             Assert.Equal(TimeSpan.FromSeconds(16).Ticks, clock.GetTimestamp());
             Assert.Equal(1, gate.RequestCount);
-            Assert.Equal(new[] { "auth_challenge", "approval_pending", "auth_success" }, stream.AcceptedFrames);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success" }, stream.AcceptedFrames);
             Assert.Equal(ControlSessionState.Authenticated, session.State);
             Assert.Equal(1, context.SessionRegistry.ActiveSessionCount);
             Assert.Equal(session.SessionId, Assert.Single(context.SessionRegistry.Snapshot()).SessionId);
             Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
-            Assert.Equal(2, stream.ResponseReadCalls);
+            Assert.Equal(4, stream.HandshakeReadCalls);
             Assert.True(stream.ResponseFullyRead);
             Assert.Same(approvalRead, stream.PendingRead);
             Assert.Equal(1, stream.PendingReadCalls);
@@ -676,11 +676,11 @@ public sealed partial class ControlAuthSessionTests
             Assert.Equal(ControlSessionState.Closed, result.State);
             Assert.Equal(ControlSessionState.Closed, session.State);
             Assert.Equal(failDuringFlush ? new[] { "write", "flush" } : new[] { "write" }, callbacks);
-            Assert.Equal(new[] { "auth_challenge", "approval_pending", "auth_success", "authentication_failed" },
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success", "authentication_failed" },
                 stream.WriteAttempts);
             Assert.Equal(failDuringFlush
-                ? new[] { "auth_challenge", "approval_pending", "auth_success", "authentication_failed" }
-                : new[] { "auth_challenge", "approval_pending", "authentication_failed" }, stream.AcceptedFrames);
+                ? new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success", "authentication_failed" }
+                : new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "authentication_failed" }, stream.AcceptedFrames);
             AssertNotRegistered();
             Assert.Equal(1, gate.RequestCount);
             Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
@@ -774,7 +774,7 @@ public sealed partial class ControlAuthSessionTests
             Assert.False(run.IsCompleted);
             Assert.False(caller.IsCancellationRequested);
             Assert.Equal(failDuringFlush ? 1 : 0, successFlushCalls);
-            Assert.Equal(new[] { "auth_challenge", "auth_success", "authentication_failed" }, stream.WriteAttempts);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "auth_success", "authentication_failed" }, stream.WriteAttempts);
             Assert.DoesNotContain("authentication_failed", stream.AcceptedFrames);
             Assert.Equal(ControlSessionState.Closed, session.State);
             Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
@@ -836,13 +836,13 @@ public sealed partial class ControlAuthSessionTests
             Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
             Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
             Assert.Equal(1, gate.RequestCount);
-            Assert.Equal(2, stream.ResponseReadCalls);
+            Assert.Equal(4, stream.HandshakeReadCalls);
             Assert.True(stream.ResponseFullyRead);
             Assert.Equal(denyApproval
-                ? new[] { "auth_challenge", "approval_pending", "authentication_failed" }
-                : new[] { "auth_challenge", "approval_pending", "auth_success", "authentication_failed" },
+                ? new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "authentication_failed" }
+                : new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success", "authentication_failed" },
                 stream.WriteAttempts);
-            Assert.Equal(new[] { "auth_challenge", "approval_pending", "authentication_failed" },
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "authentication_failed" },
                 stream.AcceptedFrames);
 
             Task<int> approvalRead = ReadPendingApprovalTask(session);
@@ -1119,7 +1119,7 @@ public sealed partial class ControlAuthSessionTests
             Assert.False(stream.PendingRead.IsCompleted);
             Assert.Equal(1, stream.PendingReadCalls);
             Assert.Equal(0, gate.RequestCount);
-            Assert.Equal(new[] { "auth_challenge", "auth_success" }, stream.AcceptedFrames);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "auth_success" }, stream.AcceptedFrames);
             Assert.Equal(ControlSessionState.Authenticated, session.State);
             Assert.Equal(1, context.SessionRegistry.ActiveSessionCount);
             AssertSuccessLocalsCleared(sessionToken, successPayload, originalSuccessToken);
@@ -1163,6 +1163,309 @@ public sealed partial class ControlAuthSessionTests
         Assert.True(Assert.IsType<VideoAttachLease>(videoLease).Revoked.IsCompleted);
     }
 
+    // 受控 IO：审批挂起时借生产 transcript 原对象；success 写挂起时外层 finally 尚未执行。
+    [Fact(Timeout = 120_000)]
+    public async Task Client_Transcript_Is_Cleared_Before_Success_Write_And_Holding_With_Controlled_Io()
+    {
+        using CleanupIoSslStream stream = new() { SingleReadSentinel = 0x5A };
+        TaskCompletionSource<LocalApprovalDecision> decision = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource successWriteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource resumeSuccessWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        StubApprovalGate gate = new((_, _) => new ValueTask<LocalApprovalDecision>(decision.Task));
+        byte[] returnedKey = GoodKey.ToArray();
+        ScriptedDeadlineStore store = new(_ => Task.FromResult(new AccessSecret(returnedKey)));
+        ControlAuthContext context = NewContext(gate, secretStore: store) with { TimeProvider = new ManualDeadlineClock() };
+        ConnectionSecurityContext security = new(
+            IPAddress.Loopback, IPAddress.Loopback, 0, SslProtocols.None,
+            new byte[CertificatePin.LengthBytes]);
+        ControlAuthSession session = new(stream, security, context, BuildPausedSuccessTimeouts());
+        stream.OnWriteAsync = async type =>
+        {
+            if (type == "auth_success")
+            {
+                successWriteEntered.TrySetResult();
+                await resumeSuccessWrite.Task.ConfigureAwait(false);
+            }
+        };
+
+        Task<ControlAuthResult> run = session.RunAsync(CancellationToken.None);
+        try
+        {
+            await Task.WhenAny(gate.FirstRequest.Task, run).WaitAsync(FrameDeadline);
+            Assert.True(gate.FirstRequest.Task.IsCompletedSuccessfully);
+            LocalApprovalRequest request = await gate.FirstRequest.Task;
+            Assert.False(run.IsCompleted);
+            Assert.False(decision.Task.IsCompleted);
+            var (transcript, originalClient) = ReadSuspendedClientTranscript(run);
+            Assert.Same(returnedKey, ReadSuspendedRunLocal(run, "accessKeyBytes"));
+            Assert.Equal(GoodKey, returnedKey);
+            Task<int> activity = ReadPendingApprovalTask(session);
+            Task<LocalApprovalDecision> approvalDecision = ReadApprovalDecisionTask(session);
+            Assert.NotSame(stream.PendingRead, activity);
+            Assert.NotSame(decision.Task, approvalDecision);
+            Assert.False(activity.IsCompleted);
+            Assert.False(approvalDecision.IsCompleted);
+            Assert.Equal(1, stream.PendingReadCalls);
+            Assert.Equal(1, context.PendingApprovalLimiter.GlobalInUse);
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+
+            decision.SetResult(new LocalApprovalDecision(
+                request.RequestId, LocalApprovalOutcome.Approved, request.RequestedPermission));
+            await Task.WhenAny(successWriteEntered.Task, run).WaitAsync(FrameDeadline);
+            Assert.True(successWriteEntered.Task.IsCompletedSuccessfully);
+            Assert.False(resumeSuccessWrite.Task.IsCompleted);
+            Assert.False(run.IsCompleted);
+            Assert.False(activity.IsCompleted);
+            Assert.True(approvalDecision.IsCompletedSuccessfully);
+            Assert.Equal(ControlSessionState.Authenticating, session.State);
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+            Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
+            Assert.DoesNotContain("auth_success", stream.AcceptedFrames);
+            AssertClientTranscriptCleared(transcript, originalClient);
+            Assert.Null(ReadSuspendedRunLocal(run, "clientTranscript"));
+            Assert.Null(ReadSuspendedRunLocal(run, "accessKeyBytes"));
+            Assert.All(returnedKey, value => Assert.Equal((byte)0, value));
+            var (_, successPayload, _) = ReadSuspendedSuccessLocals(run);
+
+            resumeSuccessWrite.SetResult();
+            // 审批读已启动，不能冒用 SingleReadStarted 作 holding 信号；等待登记与 success 局部清理可见。
+            Assert.True(await WaitUntilAsync(() => context.SessionRegistry.ActiveSessionCount == 1
+                && successPayload.AsSpan().IndexOfAnyExcept((byte)0) < 0));
+            Assert.False(run.IsCompleted);
+            Assert.Equal(ControlSessionState.Authenticated, session.State);
+            Assert.Equal(session.SessionId, Assert.Single(context.SessionRegistry.Snapshot()).SessionId);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success" }, stream.AcceptedFrames);
+            Assert.Same(activity, ReadPendingApprovalTask(session));
+            Assert.Same(approvalDecision, ReadApprovalDecisionTask(session));
+            Assert.False(activity.IsCompleted);
+            Assert.False(stream.PendingRead.IsCompleted);
+            Assert.Equal(1, stream.PendingReadCalls);
+            Assert.Equal(4, stream.HandshakeReadCalls);
+            Assert.True(stream.ResponseFullyRead);
+            Assert.Equal(1, gate.RequestCount);
+            Assert.Equal(1, store.Calls);
+            AssertClientTranscriptCleared(transcript, originalClient);
+            byte[] registryToken = ReadRegistryTokenArray(context.SessionRegistry, session.SessionId);
+            Assert.Contains(registryToken, value => value != 0);
+
+            Task join = session.JoinOwnedOperationsAsync();
+            Assert.False(join.IsCompleted);
+            stream.Dispose();
+            ControlAuthResult result = await run.WaitAsync(FrameDeadline);
+            await join.WaitAsync(FrameDeadline);
+            Assert.True(result.Completed);
+            Assert.Null(result.Rejection);
+            Assert.True(run.IsCompletedSuccessfully);
+            Assert.True(join.IsCompletedSuccessfully);
+            Assert.True(activity.IsCompletedSuccessfully);
+            Assert.Equal(0, await activity);
+            Assert.Equal(0, await stream.PendingRead);
+            Assert.Same(activity, ReadPendingApprovalTask(session));
+            Assert.Equal(1, stream.PendingReadCalls);
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+            Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
+            Assert.Equal(0, context.FailedAuthLimiter.CountRecentFailures(IPAddress.Loopback));
+            Assert.All(registryToken, value => Assert.Equal((byte)0, value));
+            Assert.Equal((byte)0, stream.SingleReadBuffer.Span[0]);
+            AssertClientTranscriptCleared(transcript, originalClient);
+        }
+        finally
+        {
+            // 断言或反射失败也解除不合作的决定、写和读；直接等待原任务，不遗弃超时包装的工作。
+            decision.TrySetCanceled();
+            resumeSuccessWrite.TrySetResult();
+            stream.Dispose();
+            try
+            {
+                await run;
+            }
+            finally
+            {
+                await session.JoinOwnedOperationsAsync();
+            }
+        }
+    }
+
+    // 四种失败都在审批挂起时捕获原引用；调用方取消不合作的 gate 由真实 close 后的 join 收齐。
+    [Theory(Timeout = 120_000)]
+    [InlineData("denied", ControlAuthSession.RejectApprovalDenied)]
+    [InlineData("gate-cancelled", ControlAuthSession.RejectApprovalUnavailable)]
+    [InlineData("gate-fault", ControlAuthSession.RejectApprovalUnavailable)]
+    [InlineData("caller-cancelled", null)]
+    public async Task Client_Transcript_Is_Cleared_By_Finally_After_Approval_Failure_With_Controlled_Io(
+        string outcome, string? expectedRejection)
+    {
+        using CancellationTokenSource caller = new();
+        using CancellationTokenSource gateCancellation = new();
+        using CleanupIoSslStream stream = new() { SingleReadSentinel = 0x5A };
+        TaskCompletionSource<LocalApprovalDecision> decision = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken gateToken = default;
+        StubApprovalGate gate = new((_, token) =>
+        {
+            gateToken = token;
+            return new ValueTask<LocalApprovalDecision>(decision.Task);
+        });
+        InvalidOperationException gateFailure = new("受控 gate 故障，join 必须保留原异常。");
+        byte[] returnedKey = GoodKey.ToArray();
+        ScriptedDeadlineStore store = new(_ => Task.FromResult(new AccessSecret(returnedKey)));
+        ControlAuthContext context = NewContext(gate, secretStore: store) with { TimeProvider = new ManualDeadlineClock() };
+        ConnectionSecurityContext security = new(
+            IPAddress.Loopback, IPAddress.Loopback, 0, SslProtocols.None,
+            new byte[CertificatePin.LengthBytes]);
+        ControlAuthSession session = new(stream, security, context, BuildPausedSuccessTimeouts());
+
+        Task<ControlAuthResult> run = session.RunAsync(caller.Token);
+        try
+        {
+            await Task.WhenAny(gate.FirstRequest.Task, run).WaitAsync(FrameDeadline);
+            Assert.True(gate.FirstRequest.Task.IsCompletedSuccessfully);
+            LocalApprovalRequest request = await gate.FirstRequest.Task;
+            Assert.False(run.IsCompleted);
+            Assert.False(decision.Task.IsCompleted);
+            Assert.False(gateToken.IsCancellationRequested);
+            var (transcript, originalClient) = ReadSuspendedClientTranscript(run);
+            Assert.Same(returnedKey, ReadSuspendedRunLocal(run, "accessKeyBytes"));
+            Assert.Equal(GoodKey, returnedKey);
+            Task<int> activity = ReadPendingApprovalTask(session);
+            Task<LocalApprovalDecision> approvalDecision = ReadApprovalDecisionTask(session);
+            Assert.NotSame(stream.PendingRead, activity);
+            Assert.NotSame(decision.Task, approvalDecision);
+            Assert.False(activity.IsCompleted);
+            Assert.False(approvalDecision.IsCompleted);
+            Assert.Equal(1, stream.PendingReadCalls);
+            Assert.Equal(1, context.PendingApprovalLimiter.GlobalInUse);
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+
+            switch (outcome)
+            {
+                case "denied":
+                    decision.SetResult(new LocalApprovalDecision(request.RequestId, LocalApprovalOutcome.Denied));
+                    break;
+                case "gate-cancelled":
+                    gateCancellation.Cancel();
+                    decision.SetCanceled(gateCancellation.Token);
+                    break;
+                case "gate-fault":
+                    decision.SetException(gateFailure);
+                    break;
+                case "caller-cancelled":
+                    caller.Cancel();
+                    break;
+                default:
+                    throw new InvalidOperationException("未知审批失败分支。");
+            }
+
+            if (outcome == "caller-cancelled")
+            {
+                OperationCanceledException cancelled = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => run.WaitAsync(FrameDeadline));
+                Assert.Equal(caller.Token, cancelled.CancellationToken);
+                Assert.True(run.IsCanceled);
+                Assert.False(decision.Task.IsCompleted);
+                Assert.False(approvalDecision.IsCompleted);
+            }
+            else
+            {
+                ControlAuthResult result = await run.WaitAsync(FrameDeadline);
+                Assert.False(result.Completed);
+                Assert.Equal(expectedRejection, result.Rejection);
+                Assert.Equal(ControlSessionState.Closed, result.State);
+                Assert.Equal(session.SessionId, result.SessionId);
+                Assert.True(run.IsCompletedSuccessfully);
+                Assert.False(caller.IsCancellationRequested);
+            }
+            if (outcome == "gate-cancelled")
+            {
+                OperationCanceledException cancelled = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => approvalDecision.WaitAsync(FrameDeadline));
+                Assert.Equal(gateCancellation.Token, cancelled.CancellationToken);
+            }
+            if (outcome == "gate-fault")
+            {
+                Assert.Same(gateFailure, await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => approvalDecision.WaitAsync(FrameDeadline)));
+            }
+            Assert.True(gateToken.IsCancellationRequested);
+            Assert.Equal(ControlSessionState.Closed, session.State);
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+            Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
+            Assert.False(activity.IsCompleted);
+            Assert.False(stream.PendingRead.IsCompleted);
+            Assert.Equal(outcome == "caller-cancelled"
+                ? new[] { "auth_challenge", "display_catalog_offer", "approval_pending" }
+                : new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "authentication_failed" }, stream.WriteAttempts);
+            Assert.Equal(stream.WriteAttempts, stream.AcceptedFrames);
+            Assert.DoesNotContain("auth_success", stream.WriteAttempts);
+
+            Task join = session.JoinOwnedOperationsAsync();
+            Assert.False(join.IsCompleted);
+            stream.Dispose();
+            await session.JoinPendingReadAsync().WaitAsync(FrameDeadline);
+            Assert.True(activity.IsCompletedSuccessfully);
+            if (outcome == "caller-cancelled")
+            {
+                Assert.False(join.IsCompleted);
+                Assert.False(approvalDecision.IsCompleted);
+                decision.SetCanceled(gateToken);
+            }
+            if (outcome == "gate-fault")
+            {
+                Assert.Same(gateFailure, await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => join.WaitAsync(FrameDeadline)));
+                Assert.Same(gateFailure, Assert.Single(join.Exception!.Flatten().InnerExceptions));
+            }
+            else
+            {
+                await join.WaitAsync(FrameDeadline);
+                Assert.True(join.IsCompletedSuccessfully);
+            }
+            Assert.True(approvalDecision.IsCompleted);
+            Assert.Equal(outcome is "gate-cancelled" or "caller-cancelled", approvalDecision.IsCanceled);
+            Assert.Equal(outcome == "gate-fault", approvalDecision.IsFaulted);
+            Assert.Same(approvalDecision, ReadApprovalDecisionTask(session));
+            Assert.Same(activity, ReadPendingApprovalTask(session));
+            Assert.Equal(0, await activity);
+            Assert.Equal(0, await stream.PendingRead);
+            Assert.Equal((byte)0, stream.SingleReadBuffer.Span[0]);
+            Assert.Equal(1, stream.PendingReadCalls);
+            Assert.Equal(4, stream.HandshakeReadCalls);
+            Assert.True(stream.ResponseFullyRead);
+            Assert.Equal(1, gate.RequestCount);
+            Assert.Equal(1, store.Calls);
+            Assert.Equal(0, context.FailedAuthLimiter.CountRecentFailures(IPAddress.Loopback));
+            Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+            Assert.Equal(0, context.PendingApprovalLimiter.GlobalInUse);
+            AssertClientTranscriptCleared(transcript, originalClient);
+            Assert.All(returnedKey, value => Assert.Equal((byte)0, value));
+        }
+        finally
+        {
+            decision.TrySetCanceled();
+            stream.Dispose();
+            try
+            {
+                await run;
+            }
+            catch (OperationCanceledException ex) when (caller.IsCancellationRequested
+                && ex.CancellationToken == caller.Token)
+            {
+            }
+            finally
+            {
+                Task cleanup = session.JoinOwnedOperationsAsync();
+                try
+                {
+                    await cleanup;
+                }
+                catch (InvalidOperationException ex) when (ReferenceEquals(ex, gateFailure))
+                {
+                    // 仅豁免本行注入的同一异常；若 WhenAll 还有其他故障，不能顺手吞掉。
+                    Assert.Same(gateFailure, Assert.Single(cleanup.Exception!.Flatten().InnerExceptions));
+                }
+            }
+        }
+    }
+
     // 兼容旧 Task 字段和新的读 owner；仍只观察生产保存的 Activity，不以替身底层 TCS 冒充包装任务。
     private static Task<int> ReadPendingApprovalTask(ControlAuthSession session)
     {
@@ -1192,8 +1495,7 @@ public sealed partial class ControlAuthSessionTests
         helloTimeout: FrameDeadline,
         preAuthEnvelopeTimeout: FrameDeadline);
 
-    private static (byte[] SessionToken, byte[] SuccessPayload, AuthSuccessFrame Success)
-        ReadSuspendedSuccessLocals(Task<ControlAuthResult> run)
+    private static object? ReadSuspendedRunLocal(Task<ControlAuthResult> run, string name)
     {
         Assert.False(run.IsCompleted);
         const BindingFlags fields = BindingFlags.Instance | BindingFlags.Public
@@ -1216,24 +1518,49 @@ public sealed partial class ControlAuthSessionTests
         object? stateMachine = stateMachineField.GetValue(run);
         Assert.NotNull(stateMachine);
         // Debug 的 class / Release 的 struct 均由方法元数据确定实际类型，不硬编码 d__ 序号。
-        // struct 的 GetValue 仅装箱状态机；下面取出的 byte[]/AuthSuccessFrame 仍是生产原引用。
+        // struct 的 GetValue 仅装箱当前状态机；每次重新读取，局部对象和 byte[] 仍是生产原引用。
         Type? expectedStateMachine = typeof(ControlAuthSession).GetMethod(nameof(ControlAuthSession.RunAsync))!
             .GetCustomAttribute<AsyncStateMachineAttribute>()?.StateMachineType;
         Assert.True(expectedStateMachine is not null && stateMachine.GetType() == expectedStateMachine,
             $"RunAsync 状态机类型不匹配：预期 {expectedStateMachine}，实际 {stateMachine.GetType()}；Task：{run.GetType()}。");
 
-        object? ReadLocal(string name)
-        {
-            FieldInfo[] matches = stateMachine.GetType().GetFields(fields)
-                .Where(field => field.Name.StartsWith($"<{name}>5__", StringComparison.Ordinal)).ToArray();
-            Assert.True(matches.Length == 1,
-                $"状态机 {stateMachine.GetType()} 的 <{name}>5__* 字段数量为 {matches.Length}；不能验证原秘密。");
-            return matches[0].GetValue(stateMachine);
-        }
+        FieldInfo[] matches = stateMachine.GetType().GetFields(fields)
+            .Where(field => field.Name.StartsWith($"<{name}>5__", StringComparison.Ordinal)).ToArray();
+        Assert.True(matches.Length == 1,
+            $"状态机 {stateMachine.GetType()} 的 <{name}>5__* 字段数量为 {matches.Length}；不能验证原秘密。");
+        return matches[0].GetValue(stateMachine);
+    }
 
-        byte[] sessionToken = Assert.IsType<byte[]>(ReadLocal("sessionToken"));
-        byte[] successPayload = Assert.IsType<byte[]>(ReadLocal("successPayload"));
-        AuthSuccessFrame success = Assert.IsType<AuthSuccessFrame>(ReadLocal("success"));
+    private static (AuthTranscriptV2 Transcript, byte[] Client) ReadSuspendedClientTranscript(
+        Task<ControlAuthResult> run)
+    {
+        AuthTranscriptV2 transcript = Assert.IsType<AuthTranscriptV2>(ReadSuspendedRunLocal(run, "clientTranscript"));
+        byte[] client = ReadClientTranscriptArray(transcript);
+        Assert.NotEmpty(client);
+        Assert.Contains(client, value => value != 0);
+        Assert.True(client.AsSpan().StartsWith("LANREMOTE-AUTH-V2\0"u8));
+        return (transcript, client);
+    }
+
+    private static byte[] ReadClientTranscriptArray(AuthTranscriptV2 transcript) =>
+        Assert.IsType<byte[]>(typeof(AuthTranscriptV2)
+            .GetField("_client", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(transcript));
+
+    private static void AssertClientTranscriptCleared(AuthTranscriptV2 transcript, byte[] originalClient)
+    {
+        Assert.Same(originalClient, ReadClientTranscriptArray(transcript));
+        Assert.True(originalClient.AsSpan().IndexOfAnyExcept((byte)0) < 0, "Assert.True: 生产 _client 原数组尚未清零。");
+        // 仅调用终态守卫，不 Export 副本或主动 Clear；全零但可继续计算不算不可逆终态。
+        Assert.Throws<ObjectDisposedException>(() => transcript.ComputeClientProof(GoodKey));
+        Assert.Throws<ObjectDisposedException>(() => transcript.ComputeServerProof(GoodKey, SessionPermission.ViewOnly));
+    }
+
+    private static (byte[] SessionToken, byte[] SuccessPayload, AuthSuccessFrame Success)
+        ReadSuspendedSuccessLocals(Task<ControlAuthResult> run)
+    {
+        byte[] sessionToken = Assert.IsType<byte[]>(ReadSuspendedRunLocal(run, "sessionToken"));
+        byte[] successPayload = Assert.IsType<byte[]>(ReadSuspendedRunLocal(run, "successPayload"));
+        AuthSuccessFrame success = Assert.IsType<AuthSuccessFrame>(ReadSuspendedRunLocal(run, "success"));
         Assert.Equal(AuthProtocol.SessionTokenByteLength, sessionToken.Length);
         Assert.Equal(AuthProtocol.SessionTokenByteLength, success.SessionToken.Length);
         Assert.Contains(sessionToken, value => value != 0);
@@ -1285,6 +1612,7 @@ public sealed partial class ControlAuthSessionTests
     {
         private readonly int _cancelOnWrite;
         private readonly TaskCompletionSource<int> _pendingRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private AuthChallengeV2? _challenge;
         private byte[]? _response;
         private int _responseOffset;
 
@@ -1294,7 +1622,8 @@ public sealed partial class ControlAuthSessionTests
         public List<string> WriteAttempts { get; } = new();
         public List<string> AcceptedFrames { get; } = new();
         public int InjectedWriteCancellations { get; private set; }
-        public int ResponseReadCalls { get; private set; }
+        public int HandshakeReadCalls { get; private set; }
+        public Action<int>? OnHandshakeReadCompleted { get; set; }
         public int PendingReadCalls { get; private set; }
         public bool ResponseFullyRead => _response is not null && _responseOffset == _response.Length;
         public Task<int> PendingRead => _pendingRead.Task;
@@ -1326,24 +1655,31 @@ public sealed partial class ControlAuthSessionTests
             if (WriteAttempts.Count == 1)
             {
                 Assert.Equal("auth_challenge", type);
-                Assert.True(AuthChallengeFrame.TryParse(payload.Span, out AuthChallengeFrame? challenge, out _));
+                Assert.Equal(WireV2ParseStatus.AcceptedV2, AuthChallengeV2.Parse(payload.Span, out _challenge));
+            }
+            else if (WriteAttempts.Count == 2)
+            {
+                AuthChallengeV2 challenge = Assert.IsType<AuthChallengeV2>(_challenge);
+                AssertOffer(payload.ToArray(), challenge.SessionId);
                 byte[] nonce = new byte[AuthProtocol.NonceByteLength];
-                byte[] transcript = AuthTranscriptBuilder.BuildClientTranscript(
-                    challenge!.SessionId, challenge.ServerDeviceId, TestClientDeviceId,
-                    challenge.ServerNonce.Span, nonce, challenge.CertificateSha256.Span,
-                    SessionPermission.ViewOnly);
-                byte[] proof = AuthTranscriptBuilder.ComputeClientProof(GoodKey, transcript);
+                byte[] transcript = IndependentClientTranscript(challenge, TestClientDeviceId,
+                    nonce, challenge.CopyCertificateSha256(), SessionPermission.ViewOnly);
+                byte[] proof = HMACSHA256.HashData(GoodKey, transcript);
+                byte[] accept = IndependentAccept(challenge.SessionId);
                 byte[] response = new AuthResponseFrame(
                     TestClientDeviceId, TestClientName, nonce, SessionPermission.ViewOnly, proof).Serialize();
-                _response = new byte[TransportConstants.LengthPrefixBytes + response.Length];
-                BinaryPrimitives.WriteUInt32BigEndian(_response, (uint)response.Length);
-                response.CopyTo(_response.AsSpan(TransportConstants.LengthPrefixBytes));
+                _response = new byte[2 * TransportConstants.LengthPrefixBytes + accept.Length + response.Length];
+                BinaryPrimitives.WriteUInt32BigEndian(_response, (uint)accept.Length);
+                accept.CopyTo(_response.AsSpan(TransportConstants.LengthPrefixBytes));
+                int responseStart = TransportConstants.LengthPrefixBytes + accept.Length;
+                BinaryPrimitives.WriteUInt32BigEndian(_response.AsSpan(responseStart), (uint)response.Length);
+                response.CopyTo(_response.AsSpan(responseStart + TransportConstants.LengthPrefixBytes));
             }
 
-            // 只在精确的第二/三次写抛一次；随后 generic failure 帧不能再次触发注入。
+            // Challenge、Offer 后，只在精确的第三/四次写抛一次；generic failure 不重复触发。
             if (WriteAttempts.Count == _cancelOnWrite)
             {
-                Assert.Equal(_cancelOnWrite == 2 ? "approval_pending" : "auth_success", type);
+                Assert.Equal(_cancelOnWrite == 3 ? "approval_pending" : "auth_success", type);
                 InjectedWriteCancellations++;
                 throw new OperationCanceledException("替身 IO 的本地写出取消，非调用方取消。");
             }
@@ -1382,7 +1718,8 @@ public sealed partial class ControlAuthSessionTests
                 int count = Math.Min(buffer.Length, _response.Length - _responseOffset);
                 _response.AsMemory(_responseOffset, count).CopyTo(buffer);
                 _responseOffset += count;
-                ResponseReadCalls++;
+                HandshakeReadCalls++;
+                OnHandshakeReadCompleted?.Invoke(HandshakeReadCalls);
                 return ValueTask.FromResult(count);
             }
 

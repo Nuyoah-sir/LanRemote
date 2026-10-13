@@ -400,13 +400,37 @@ public sealed class MainWindowAuthenticationTlsTests
                 Assert.Equal(connection.Security.ServerCertificateSha256.ToArray(), pin);
                 Assert.Equal(Target.ExpectedCertSha256.ToArray(), pin);
                 byte[] hello = await ReadAsync(stream, ct);
-                Assert.True(HelloFrame.TryParse(hello, out string? rejection), rejection);
+                using (JsonDocument helloDocument = JsonDocument.Parse(hello))
+                {
+                    JsonElement declaration = helloDocument.RootElement;
+                    Assert.Equal(new[] { "channel", "protocol", "type" },
+                        declaration.EnumerateObject().Select(property => property.Name).Order().ToArray());
+                    Assert.Equal("channel_hello", declaration.GetProperty("type").GetString());
+                    Assert.Equal("control", declaration.GetProperty("channel").GetString());
+                    Assert.Equal(2, declaration.GetProperty("protocol").GetInt32());
+                }
                 await SendAsync(stream, JsonSerializer.SerializeToUtf8Bytes(new
                 {
-                    type = "auth_challenge", protocol = 1, sessionId = SessionId.ToString("D"),
+                    type = "auth_challenge", protocol = 2, sessionId = SessionId.ToString("D"),
                     serverDeviceId = ServerDeviceId.ToString("D"), serverNonce = Convert.ToBase64String(_serverNonce),
                     certSha256 = Convert.ToHexString(pin), expiresInMs = 15_000,
                 }), ct);
+                await SendAsync(stream, JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    type = "display_catalog_offer", applicationProfile = 2, catalogSchema = 1,
+                    sessionId = SessionId.ToString("D"),
+                }), ct);
+                byte[] accept = await ReadAsync(stream, ct);
+                using (JsonDocument acceptDocument = JsonDocument.Parse(accept))
+                {
+                    JsonElement agreement = acceptDocument.RootElement;
+                    Assert.Equal(new[] { "applicationProfile", "catalogSchema", "sessionId", "type" },
+                        agreement.EnumerateObject().Select(property => property.Name).Order().ToArray());
+                    Assert.Equal("display_catalog_accept", agreement.GetProperty("type").GetString());
+                    Assert.Equal(2, agreement.GetProperty("applicationProfile").GetInt32());
+                    Assert.Equal(1, agreement.GetProperty("catalogSchema").GetInt32());
+                    Assert.Equal(SessionId.ToString("D"), agreement.GetProperty("sessionId").GetString());
+                }
                 byte[] response = await ReadAsync(stream, ct);
                 _secrets.Add(response);
                 using JsonDocument document = JsonDocument.Parse(response);
@@ -425,14 +449,16 @@ public sealed class MainWindowAuthenticationTlsTests
                 Assert.Equal(Convert.ToBase64String(clientNonce), nonceText);
                 Assert.Equal(32, clientProof.Length);
                 byte[] transcript = Encoding.UTF8.GetBytes(string.Join('\0',
-                    "LANREMOTE-AUTH-V1", SessionId.ToString("D"), ServerDeviceId.ToString("D"),
+                    "LANREMOTE-AUTH-V2", SessionId.ToString("D"), ServerDeviceId.ToString("D"),
                     ClientIdentity.DeviceId.ToString("D"), Convert.ToBase64String(_serverNonce),
-                    nonceText, Convert.ToHexString(pin), "control"));
+                    nonceText, Convert.ToHexString(pin), "control",
+                    "display_catalog_offer", "2", "1", SessionId.ToString("D"),
+                    "display_catalog_accept", "2", "1", SessionId.ToString("D")));
                 _secrets.Add(transcript);
                 using HMACSHA256 hmac = new(Key);
                 Assert.Equal(hmac.ComputeHash(transcript), clientProof);
                 byte[] proof = hmac.ComputeHash(Encoding.UTF8.GetBytes(string.Join('\0',
-                    "server", "LANREMOTE-GRANT-V1", Convert.ToHexString(SHA256.HashData(transcript)), "control")));
+                    "server", "LANREMOTE-GRANT-V2", Convert.ToHexString(SHA256.HashData(transcript)), "control")));
                 _secrets.Add(proof.ToArray());
                 if (_corruptProof) { proof[0] ^= 0x80; }
                 _secrets.Add(proof);

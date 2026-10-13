@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     private const int ClipboardClearDelaySeconds = 30;
 
     private DispatcherTimer? _clipboardClearTimer;
+    private DispatcherTimer? _hostProtocolTimer;
+    private bool _closed;
     private readonly ClientConnectService _client;
     private readonly ILogger<MainWindow> _logger;
     private readonly CancellationTokenSource _loadStop = new();
@@ -69,11 +71,23 @@ public partial class MainWindow : Window
     /// <summary>原始首次加载任务由主窗持有，关闭必须先取消、再等待它真正退出。</summary>
     private void MainWindow_OnContentRendered(object? sender, EventArgs e)
     {
-        if (_stopLoadingTask is null && !_loadStop.IsCancellationRequested)
+        if (!_closed && _stopLoadingTask is null && !_loadStop.IsCancellationRequested)
         {
+            if (_hostProtocolTimer is null)
+            {
+                _hostProtocolTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+                {
+                    Interval = TimeSpan.FromSeconds(1),
+                };
+                _hostProtocolTimer.Tick += OnHostProtocolTick;
+                _hostProtocolTimer.Start();
+                ViewModel.RefreshHostProtocolStatus();
+            }
             _loadTask ??= LoadAndReportAsync();
         }
     }
+
+    private void OnHostProtocolTick(object? sender, EventArgs e) => ViewModel.RefreshHostProtocolStatus();
 
     private async Task LoadAndReportAsync()
     {
@@ -129,6 +143,13 @@ public partial class MainWindow : Window
 
     private void MainWindow_OnClosed(object? sender, EventArgs e)
     {
+        _closed = true;
+        if (_hostProtocolTimer is not null)
+        {
+            _hostProtocolTimer.Stop();
+            _hostProtocolTimer.Tick -= OnHostProtocolTick;
+            _hostProtocolTimer = null;
+        }
         if (_clipboardClearTimer is not null)
         {
             _clipboardClearTimer.Stop();

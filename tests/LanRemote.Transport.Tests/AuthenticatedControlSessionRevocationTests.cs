@@ -356,7 +356,8 @@ public sealed class AuthenticatedControlSessionRevocationTests
             Ssl = new ProbeSslStream(onSslDispose);
             Connection = new TlsConnection(identity!, Client, Ssl);
             Session = new AuthenticatedControlSession(Connection, SessionPermission.Control,
-                SessionId, "ABCDEF", CallerToken, 15_000, TimeProvider.System.GetTimestamp(), TimeProvider.System);
+                SessionId, "ABCDEF", CallerToken, 15_000, TimeProvider.System.GetTimestamp(), TimeProvider.System,
+                V2AgreementFixture.Create(SessionId));
             OwnedToken = GetOwnedToken(Session);
             Assert.NotSame(CallerToken, OwnedToken);
             AssertOriginalTokenUnchanged();

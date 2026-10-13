@@ -101,7 +101,7 @@ public sealed class FirstFrameRouterFailureTests
         scenario.Stream.ReleaseSuccessWrite();
 
         await AssertClosedButStillJoiningAsync(scenario, run);
-        Assert.Equal(new[] { "auth_challenge", "approval_pending", "auth_success" },
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success" },
             scenario.Stream.WriteAttempts);
         // 只在物理关闭已完成后放行 E2；它不能在 success 写失败前抢占认证终态。
         scenario.Stream.ReleaseRead(readFailure);
@@ -145,7 +145,7 @@ public sealed class FirstFrameRouterFailureTests
         await scenario.Stream.CloseObserved.Task.WaitAsync(Guard);
         await scenario.Connection.CloseAsync().WaitAsync(Guard);
         Assert.False(run.IsCompleted);
-        Assert.Equal(new[] { "auth_challenge", "approval_pending", "authentication_failed" },
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "authentication_failed" },
             scenario.Stream.WriteAttempts);
         AssertControlReleased(scenario);
         if (gateFaultFirst)
@@ -189,7 +189,7 @@ public sealed class FirstFrameRouterFailureTests
     private static void AssertControlPending(Scenario scenario, Task run)
     {
         Assert.True(scenario.Connection.HasCloseAuthority);
-        Assert.Equal(4, scenario.Stream.FramedReadCalls); // hello 与 auth_response 各有前缀、载荷两次读。
+        Assert.Equal(6, scenario.Stream.FramedReadCalls); // Hello2、Accept 与 auth_response 各有前缀、载荷两次读。
         Assert.Equal(1, scenario.Stream.PendingReadCalls);
         Assert.False(scenario.Stream.PendingReadOperation!.IsCompleted);
         Assert.Equal(1, scenario.Approval.Calls);
@@ -285,7 +285,7 @@ public sealed class FirstFrameRouterFailureTests
                 Options = new ControlAuthOptions { FailureDelayMin = TimeSpan.Zero, FailureDelayMax = TimeSpan.Zero },
             };
             ConnectionSecurityContext security = Security();
-            byte[] hello = HelloFrame.Serialize();
+            byte[] hello = ControlHelloV2.Serialize();
             if (video)
             {
                 byte[] token = Enumerable.Range(1, 32).Select(value => (byte)value).ToArray();
@@ -298,7 +298,8 @@ public sealed class FirstFrameRouterFailureTests
                 _registration = Context.SessionRegistry.Register(VideoSessionId, Security().ConnectionId,
                     ClientDeviceId, "受控视频客户端", SessionPermission.ViewOnly, IPAddress.Loopback, 12344,
                     token, new VideoAttachWindow(Context.TimeProvider, 15_000),
-                    security.ServerCertificateSha256.Span, CancellationToken.None);
+                    security.ServerCertificateSha256.Span, CancellationToken.None,
+                    V2AgreementFixture.Create(VideoSessionId));
                 CryptographicOperations.ZeroMemory(token);
                 hello = new VideoHelloFrame(VideoSessionId, nonce, proof).Serialize();
             }
@@ -416,6 +417,7 @@ public sealed class FirstFrameRouterFailureTests
         private int _offset;
         private int _disposeCalls;
         private string? _lastType;
+        private AuthChallengeV2? _challenge;
         private readonly TaskCompletionSource<Exception?> _readRelease = NewGate();
         private readonly TaskCompletionSource _successRelease = NewSignal();
         internal TaskCompletionSource CloseObserved { get; } = NewSignal();
@@ -474,15 +476,31 @@ public sealed class FirstFrameRouterFailureTests
             if (_lastType == "auth_challenge")
             {
                 Assert.Equal(_input.Length, _offset);
-                Assert.True(AuthChallengeFrame.TryParse(payload.Span, out var challenge, out _));
+                Assert.Null(_challenge);
+                Assert.Equal(WireV2ParseStatus.AcceptedV2, AuthChallengeV2.Parse(payload.Span, out _challenge));
+                Assert.NotNull(_challenge);
+            }
+            else if (_lastType == DisplayCatalogAgreementFrame.OfferType)
+            {
+                Assert.Equal(_input.Length, _offset);
+                AuthChallengeV2 challenge = Assert.IsType<AuthChallengeV2>(_challenge);
+                Assert.True(DisplayCatalogAgreementFrame.TryParseOffer(
+                    payload.Span, challenge.SessionId, out var offer, out _));
+                byte[] acceptPayload = DisplayCatalogAgreementFrame.SerializeAccept(challenge.SessionId);
+                Assert.True(DisplayCatalogAgreementFrame.TryParseAccept(
+                    acceptPayload, challenge.SessionId, out var accept, out _));
+                DisplayCatalogAgreementBinding agreement = DisplayCatalogAgreementBinding.Create(
+                    challenge.SessionId, offer!, accept!);
                 byte[] nonce = new byte[AuthProtocol.NonceByteLength];
-                byte[] transcript = AuthTranscriptBuilder.BuildClientTranscript(challenge!.SessionId,
-                    challenge.ServerDeviceId, ClientDeviceId, challenge.ServerNonce.Span, nonce,
-                    challenge.CertificateSha256.Span, SessionPermission.ViewOnly);
-                byte[] proof = AuthTranscriptBuilder.ComputeClientProof(AccessKey, transcript);
-                _input = Wire(new AuthResponseFrame(ClientDeviceId, "受控认证客户端", nonce,
-                    SessionPermission.ViewOnly, proof).Serialize());
+                AuthTranscriptV2 transcript = AuthTranscriptV2.CreateClient(challenge.SessionId,
+                    challenge.ServerDeviceId, ClientDeviceId, challenge.CopyServerNonce(), nonce,
+                    challenge.CopyCertificateSha256(), SessionPermission.ViewOnly, agreement);
+                byte[] proof = transcript.ComputeClientProof(AccessKey);
+                _input = [.. Wire(acceptPayload), .. Wire(new AuthResponseFrame(ClientDeviceId, "受控认证客户端", nonce,
+                    SessionPermission.ViewOnly, proof).Serialize())];
                 _offset = 0;
+                transcript.Clear();
+                CryptographicOperations.ZeroMemory(proof);
             }
             else if (_lastType == "video_attach_ack")
             {

@@ -87,6 +87,13 @@ public sealed class ControlPreAuthSession
     /// </remarks>
     public const string RejectTimeout = "pre-auth-timeout";
 
+    /// <summary>完整旧版 Control 声明；未认证，不允许降级。</summary>
+    public const string RejectUpgradeRequired = "control-upgrade-required";
+    /// <summary>完整但不支持的 Control 版本声明。</summary>
+    public const string RejectUnsupportedVersion = "control-protocol-unsupported";
+    /// <summary>首帧不符合完整严格合同；不作为版本证据。</summary>
+    public const string RejectHelloInvalid = "channel-hello-invalid";
+
     private int _started;
 
     /// <summary>当前状态。</summary>
@@ -139,11 +146,12 @@ public sealed class ControlPreAuthSession
             // pre-auth 外层信封：自进入本方法（= 进入 pre-auth）起算的硬上限，永不重置。
             // 「分段各自绝对」不蕴含「总量有界」——前缀 5 s 与 payload 10 s 顺序执行即可加和；
             // 信封把「对端可拖占的总时间」封顶（HANDOFF §17 教训 #25）。
-            // 它只约束本方法内对端可控的等待（读取）；hello 读取完成后的收尾是本机
-            // 非阻塞的 best-effort 写，不在信封的可中断范围内（见 TransportTimeouts 说明）。
+            // 信封覆盖读取、严格解析及交接构造后的接受末检；取消只唤醒等待，
+            // 同步解析不能被硬中断，最终由单调elapsed拒绝迟到结果。
             using CancellationTokenSource envelope =
                 CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
+            long enteredAt = System.Diagnostics.Stopwatch.GetTimestamp();
             envelope.CancelAfter(timeouts.PreAuthEnvelopeTimeout);
 
             byte[] payload;
@@ -178,19 +186,30 @@ public sealed class ControlPreAuthSession
                 return Fail(RejectTimeout);
             }
 
-            if (!HelloFrame.TryParse(payload, out string? rejection))
-            {
-                return Fail(rejection!);
-            }
-
-            State = ControlSessionState.PreAuthenticated;
+            WireV2ParseStatus status = ControlHelloV2.Parse(payload);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (envelope.IsCancellationRequested ||
+                System.Diagnostics.Stopwatch.GetElapsedTime(enteredAt) >= timeouts.PreAuthEnvelopeTimeout)
+                return Fail(RejectTimeout);
+            if (status != WireV2ParseStatus.AcceptedV2)
+                return Fail(status switch
+                {
+                    WireV2ParseStatus.LegacyV1 => RejectUpgradeRequired,
+                    WireV2ParseStatus.UnsupportedVersion => RejectUnsupportedVersion,
+                    _ => RejectHelloInvalid,
+                });
 
             // ADR-037 第 1 条：成功路径不再关闭连接——「活着的流 + 冻结的安全上下文」交给
             // 一次性交接对象（线性所有权 + exactly-once）。关闭时机随所有权一并移交：
             // 认证成功 → 连接保持（承载 session）；认证失败/停机 → 由持有方与 Host 收尾。
             // 本方法此后不再触碰流；对端可能早走了这种「收尾写」也不复存在（这是有意的：
             // 交接对象不做 IO，只有拿它的 BeginAuthentication 才会再次用到流）。
-            ControlPreAuthHandoff handoff = new(connection.Stream, connection.Security);
+            ControlPreAuthHandoff handoff = new(connection.Stream, connection.Security, payload);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (envelope.IsCancellationRequested ||
+                System.Diagnostics.Stopwatch.GetElapsedTime(enteredAt) >= timeouts.PreAuthEnvelopeTimeout)
+                return Fail(RejectTimeout);
+            State = ControlSessionState.PreAuthenticated;
 
             return new ControlPreAuthResult(
                 true, ControlSessionState.PreAuthenticated, null, handoff);

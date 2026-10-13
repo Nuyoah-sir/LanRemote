@@ -20,7 +20,7 @@ public sealed record ControlAuthResult(
     Guid SessionId);
 
 /// <summary>
-/// Host 侧的认证会话（M4 阶段 3，步骤 13–17）：challenge → response 验证 → 本机审批 →
+/// Host 侧 V2-only 认证会话：Challenge2 → Offer/Accept → clientProofV2 验证 → 本机审批 →
 /// <c>auth_success</c> + 会话登记；认证成功后保持连接，直到客户端断开或停机。
 /// </summary>
 /// <remarks>
@@ -95,7 +95,7 @@ public sealed class ControlAuthSession
     private readonly SslStream _stream;
     private readonly TransportTimeouts _timeouts;
     private readonly byte[] _serverNonce;
-    private readonly AuthChallengeFrame _challenge;
+    private readonly AuthChallengeV2 _challenge;
     private OwnedControlActivityRead? _pendingRead;
     private Task<LocalApprovalDecision>? _approvalDecision;
     private int _started;
@@ -129,7 +129,7 @@ public sealed class ControlAuthSession
 
         // challenge 在构造期定稿：sessionId / nonce 此后不再变化（重放面 = 0）。
         // certSha256 只从本连接冻结的上下文派生（评审 A11）——绝不"再去查一次"。
-        _challenge = new AuthChallengeFrame(
+        _challenge = new AuthChallengeV2(
             SessionId,
             context.ServerDeviceId,
             _serverNonce,
@@ -170,6 +170,7 @@ public sealed class ControlAuthSession
         }
 
         byte[]? accessKeyBytes = null;
+        AuthTranscriptV2? clientTranscript = null;
         try
         {
             // ① 限流前置：被罚 IP 连 challenge 都不发（ADR-038 第 2 条的计数口径在别处——
@@ -181,7 +182,7 @@ public sealed class ControlAuthSession
 
             // ② 安全接受窗口覆盖至 proof verdict；timer 只负责唤醒，单调后置检查负责裁决。
             AuthResponseFrame response;
-            byte[] clientTranscript;
+            DisplayCatalogAgreementBinding agreement;
             bool proofMatches;
             using (AuthenticationDeadline machine = new(
                 Context.TimeProvider, Context.Options.MachineWindow, cancellationToken))
@@ -196,7 +197,37 @@ public sealed class ControlAuthSession
                         _timeouts.LengthPrefixTimeout,
                         machine.Token).ConfigureAwait(false);
 
+                    CheckDeadline(machine, cancellationToken);
+                    byte[] offerPayload = DisplayCatalogAgreementFrame.SerializeOffer(SessionId);
+                    CheckDeadline(machine, cancellationToken);
+                    await FrameWriter.WriteFrameAsync(
+                        _stream,
+                        offerPayload,
+                        TransportConstants.MaxPreAuthMessageBytes,
+                        _timeouts.LengthPrefixTimeout,
+                        machine.Token).ConfigureAwait(false);
+                    CheckDeadline(machine, cancellationToken);
+
                     FrameReader reader = new(_stream);
+                    byte[] acceptPayload = await reader.ReadFrameAsync(
+                        TransportConstants.MaxPreAuthMessageBytes,
+                        _timeouts.LengthPrefixTimeout,
+                        _timeouts.PayloadTimeout,
+                        machine.Token).ConfigureAwait(false);
+                    CheckDeadline(machine, cancellationToken);
+                    bool accepted = DisplayCatalogAgreementFrame.TryParseAccept(
+                        acceptPayload, SessionId, out DisplayCatalogAgreementFrame? accept, out string? agreementRejection);
+                    CheckDeadline(machine, cancellationToken);
+                    if (!accepted || accept is null)
+                    {
+                        return await FailAsync(
+                            $"{RejectFrameViolation}:{agreementRejection}", cancellationToken).ConfigureAwait(false);
+                    }
+                    DisplayCatalogAgreementFrame.TryParseOffer(
+                        offerPayload, SessionId, out DisplayCatalogAgreementFrame? offer, out _);
+                    agreement = DisplayCatalogAgreementBinding.Create(SessionId, offer!, accept);
+                    CheckDeadline(machine, cancellationToken);
+
                     byte[] responsePayload = await reader.ReadFrameAsync(
                         TransportConstants.MaxPreAuthMessageBytes,
                         _timeouts.LengthPrefixTimeout,
@@ -212,6 +243,11 @@ public sealed class ControlAuthSession
                     {
                         return await FailAsync(
                             $"{RejectFrameViolation}:{parseRejection}", cancellationToken).ConfigureAwait(false);
+                    }
+                    if (candidate.ClientDeviceId == Guid.Empty)
+                    {
+                        return await FailAsync(
+                            $"{RejectFrameViolation}:client-device-empty", cancellationToken).ConfigureAwait(false);
                     }
                     response = candidate;
 
@@ -230,16 +266,16 @@ public sealed class ControlAuthSession
                     CheckDeadline(machine, cancellationToken);
 
                     // ⑤ 同步 HMAC/比较也在窗口内：最终检查之前不得写 limiter 或进入审批。
-                    clientTranscript = AuthTranscriptBuilder.BuildClientTranscript(
+                    clientTranscript = AuthTranscriptV2.CreateClient(
                         SessionId,
                         Context.ServerDeviceId,
                         response.ClientDeviceId,
                         _serverNonce,
                         response.ClientNonce.Span,
                         Security.ServerCertificateSha256.Span,
-                        response.RequestedPermission);
-                    byte[] expectedProof =
-                        AuthTranscriptBuilder.ComputeClientProof(accessKeyBytes, clientTranscript);
+                        response.RequestedPermission,
+                        agreement);
+                    byte[] expectedProof = clientTranscript.ComputeClientProof(accessKeyBytes);
                     try
                     {
                         proofMatches = CryptographicOperations.FixedTimeEquals(
@@ -283,7 +319,7 @@ public sealed class ControlAuthSession
                 return await FailAsync(RejectProofMismatch, cancellationToken).ConfigureAwait(false);
             }
 
-            // ⑥ 本机审批（v1：每个新控制连接都要批；ADR-038 第 3 条）。
+            // ⑥ 保留原本机审批策略和读所有权；新版协商不替代审批（ADR-038 第 3 条）。
             SessionPermission grantedPermission = response.RequestedPermission;
             OwnedControlActivityRead? pendingRead = null;
             if (Context.Options.RequireLocalApproval)
@@ -306,9 +342,9 @@ public sealed class ControlAuthSession
 
             // ⑦ serverProof（绑 grant 档）+ sessionToken + auth_success。
             //    DoD「raw key 绝不上网」：这一帧里只有 proof / token，没有 key。
-            byte[] grantTranscript =
-                AuthTranscriptBuilder.BuildGrantTranscript(clientTranscript, grantedPermission);
-            byte[] serverProof = AuthTranscriptBuilder.ComputeServerProof(accessKeyBytes, grantTranscript);
+            byte[] serverProof = clientTranscript.ComputeServerProof(accessKeyBytes, grantedPermission);
+            clientTranscript.Clear();
+            clientTranscript = null;
             // proof 已生成，保持连接不再需要访问密钥；不要把它留到 holding 结束。
             CryptographicOperations.ZeroMemory(accessKeyBytes);
             accessKeyBytes = null;
@@ -358,7 +394,8 @@ public sealed class ControlAuthSession
                         sessionToken,
                         attachWindow,
                         Security.ServerCertificateSha256.Span,
-                        cancellationToken);
+                        cancellationToken,
+                        agreement);
                 }
             }
             finally
@@ -395,6 +432,7 @@ public sealed class ControlAuthSession
         }
         finally
         {
+            clientTranscript?.Clear();
             if (accessKeyBytes is not null)
             {
                 CryptographicOperations.ZeroMemory(accessKeyBytes);

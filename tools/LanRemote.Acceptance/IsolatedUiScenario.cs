@@ -438,7 +438,14 @@ internal static class IsolatedUiScenario
                 {
                     helloWindow.CancelAfter(AcceptanceProfile.Timeouts.PreAuthEnvelopeTimeout);
                     byte[] hello = Keep(await ReadFrameAsync(stream, helloWindow.Token).ConfigureAwait(false), secret: false);
-                    Require(HelloFrame.TryParse(hello, out _), "隔离 hello 非法。");
+                    using JsonDocument helloDocument = JsonDocument.Parse(hello);
+                    JsonElement declaration = helloDocument.RootElement;
+                    Require(declaration.ValueKind == JsonValueKind.Object &&
+                        declaration.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).SequenceEqual(
+                            new[] { "channel", "protocol", "type" }), "隔离 Hello2 字段不符合协议。");
+                    Require(declaration.GetProperty("type").GetString() == "channel_hello" &&
+                        declaration.GetProperty("channel").GetString() == "control" &&
+                        declaration.GetProperty("protocol").GetInt32() == 2, "隔离 Hello2 声明非法。");
                 }
                 Guid sessionId = Guid.NewGuid();
                 byte[] serverNonce = Keep(RandomNumberGenerator.GetBytes(32));
@@ -449,10 +456,29 @@ internal static class IsolatedUiScenario
                     machine.CancelAfter(AuthProtocol.AuthenticationWindowMilliseconds);
                     await SendFrameAsync(stream, JsonSerializer.SerializeToUtf8Bytes(new
                     {
-                        type = "auth_challenge", protocol = 1, sessionId = sessionId.ToString("D"),
+                        type = "auth_challenge", protocol = 2, sessionId = sessionId.ToString("D"),
                         serverDeviceId = resources.Target.DeviceId.ToString("D"), serverNonce = Convert.ToBase64String(serverNonce),
                         certSha256 = Convert.ToHexString(pin), expiresInMs = AuthProtocol.ChallengeExpiresInMs,
                     }), machine.Token).ConfigureAwait(false);
+                    await SendFrameAsync(stream, Keep(JsonSerializer.SerializeToUtf8Bytes(new
+                    {
+                        type = "display_catalog_offer", applicationProfile = 2, catalogSchema = 1,
+                        sessionId = sessionId.ToString("D"),
+                    }), secret: false), machine.Token).ConfigureAwait(false);
+                    byte[] accept = Keep(await ReadFrameAsync(stream, machine.Token).ConfigureAwait(false), secret: false);
+                    using (JsonDocument acceptDocument = JsonDocument.Parse(accept))
+                    {
+                        JsonElement agreement = acceptDocument.RootElement;
+                        Require(agreement.ValueKind == JsonValueKind.Object &&
+                            agreement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).SequenceEqual(
+                                new[] { "applicationProfile", "catalogSchema", "sessionId", "type" }),
+                            "隔离 Accept 字段不符合协议。");
+                        Require(agreement.GetProperty("type").GetString() == "display_catalog_accept" &&
+                            agreement.GetProperty("applicationProfile").GetInt32() == 2 &&
+                            agreement.GetProperty("catalogSchema").GetInt32() == 1 &&
+                            agreement.GetProperty("sessionId").GetString() == sessionId.ToString("D"),
+                            "隔离 Accept 约定或会话不匹配。");
+                    }
                     byte[] response = Keep(await ReadFrameAsync(stream, machine.Token).ConfigureAwait(false));
                     using JsonDocument document = JsonDocument.Parse(response);
                     JsonElement root = document.RootElement;
@@ -470,11 +496,13 @@ internal static class IsolatedUiScenario
                     Require(clientNonce.Length == 32 && clientProof.Length == 32 &&
                         Convert.ToBase64String(clientNonce) == nonceText && Convert.ToBase64String(clientProof) == proofText,
                         "隔离响应编码非法。");
-                    // 独立构造 transcript，不调用产品的 proof/transcript 构造器来验证自身。
+                    // 独立构造16字段、15个NUL且无尾NUL的V2 transcript，不调用产品构造器验证自身。
                     transcript = Keep(Encoding.UTF8.GetBytes(string.Join('\0',
-                        "LANREMOTE-AUTH-V1", sessionId.ToString("D"), resources.Target.DeviceId.ToString("D"),
+                        "LANREMOTE-AUTH-V2", sessionId.ToString("D"), resources.Target.DeviceId.ToString("D"),
                         resources.ClientIdentity.DeviceId.ToString("D"), Convert.ToBase64String(serverNonce),
-                        nonceText, Convert.ToHexString(pin), "control")));
+                        nonceText, Convert.ToHexString(pin), "control",
+                        "display_catalog_offer", "2", "1", sessionId.ToString("D"),
+                        "display_catalog_accept", "2", "1", sessionId.ToString("D"))));
                     using HMACSHA256 hmac = new(resources.AccessKey);
                     byte[] expected = Keep(hmac.ComputeHash(transcript));
                     Require(CryptographicOperations.FixedTimeEquals(expected, clientProof), "隔离客户端证明未通过。");
@@ -522,7 +550,7 @@ internal static class IsolatedUiScenario
                     };
                     byte[] hash = Keep(SHA256.HashData(transcript));
                     byte[] grantTranscript = Keep(Encoding.UTF8.GetBytes(string.Join('\0',
-                        "server", "LANREMOTE-GRANT-V1", Convert.ToHexString(hash), grant)));
+                        "server", "LANREMOTE-GRANT-V2", Convert.ToHexString(hash), grant)));
                     using HMACSHA256 hmac = new(resources.AccessKey);
                     byte[] proof = Keep(hmac.ComputeHash(grantTranscript));
                     proof[0] ^= 0x80;

@@ -3,7 +3,7 @@ using LanRemote.Transport.Auth;
 
 namespace LanRemote.Transport;
 
-/// <summary>独立 Control Hello2 纯载荷，不改现行 V1 首帧入口或共享版本常量。</summary>
+/// <summary>Control-only 与双通道路由共同消费的严格 Hello2 载荷；不改变 Video 版本常量。</summary>
 /// <remarks>只在整份严格合同通过后分类版本。LegacyV1 不意味着认证或降级许可。</remarks>
 internal static class ControlHelloV2
 {

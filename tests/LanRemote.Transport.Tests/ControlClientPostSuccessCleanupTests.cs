@@ -566,7 +566,10 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
             object awaiter = Assert.Single(owner.GetType().GetFields(Fields), field =>
                 field.FieldType == typeof(ConfiguredTaskAwaitable<AuthenticatedControlSession>.ConfiguredTaskAwaiter)).GetValue(owner)!;
             _authentication = Assert.IsAssignableFrom<Task>(awaiter.GetType().GetField("m_task", Fields)!.GetValue(awaiter));
-            Transcript = ReadLocal<byte[]>(ReadStateMachine(_authentication, "AuthenticateConnectedAsync"), "clientTranscript");
+            AuthTranscriptV2 transcript = ReadLocal<AuthTranscriptV2>(
+                ReadStateMachine(_authentication, "AuthenticateConnectedAsync"), "clientTranscript");
+            // 保存生产对象拥有的原数组，不能用导出副本冒充退出时清零证据。
+            Transcript = Assert.IsType<byte[]>(typeof(AuthTranscriptV2).GetField("_client", Fields)!.GetValue(transcript));
         }
 
         internal void CaptureParsedSuccess()
@@ -580,7 +583,7 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
             Assert.Contains(ParsedToken, value => value != 0);
         }
 
-        // expectedProof、grantTranscript 仍是 Verify 的同步栈局部，不能取得原数组，
+        // expectedProof 和 V2 grant 仍是同步验证/HMAC 路径的局部，不能取得原数组，
         // 不拿接收的 serverProof 或测试副本假证它们清零。session 则另由真实构造观察器捕获。
     }
 
@@ -937,9 +940,14 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
             _close = close;
             Enqueue("challenge", JsonSerializer.SerializeToUtf8Bytes(new
             {
-                type = "auth_challenge", protocol = 1, sessionId = _sessionId.ToString("D"),
+                type = "auth_challenge", protocol = 2, sessionId = _sessionId.ToString("D"),
                 serverDeviceId = _serverId.ToString("D"), serverNonce = Convert.ToBase64String(_serverNonce),
                 certSha256 = Convert.ToHexString(pin), expiresInMs = 15_000,
+            }));
+            Enqueue("offer", JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                type = "display_catalog_offer", applicationProfile = 2, catalogSchema = 1,
+                sessionId = _sessionId.ToString("D"),
             }));
         }
 
@@ -951,11 +959,22 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
             _writes++;
             if (_writes == 1)
             {
-                Assert.True(HelloFrame.TryParse(payload.Span, out _));
+                Assert.Equal("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":2}", Encoding.UTF8.GetString(payload.Span));
+            }
+            else if (_writes == 2)
+            {
+                Assert.Equal(new[] { "challenge", "offer" }, _consumed);
+                using JsonDocument document = JsonDocument.Parse(payload);
+                JsonElement root = document.RootElement;
+                Assert.Equal("display_catalog_accept", root.GetProperty("type").GetString());
+                Assert.Equal(2, root.GetProperty("applicationProfile").GetInt32());
+                Assert.Equal(1, root.GetProperty("catalogSchema").GetInt32());
+                Assert.Equal(_sessionId.ToString("D"), root.GetProperty("sessionId").GetString());
+                Assert.Equal(4, root.EnumerateObject().Count());
             }
             else
             {
-                Assert.Equal(2, _writes);
+                Assert.Equal(3, _writes);
                 byte[] proof = VerifyResponseAndComputeServerProof(payload);
                 if (_wrongProof) proof[0] ^= 0x80;
                 if (_pending) Enqueue("pending", "{\"type\":\"approval_pending\"}"u8.ToArray());
@@ -985,12 +1004,16 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
             Assert.Equal(Convert.ToBase64String(nonceBytes), nonce);
             // 独立 oracle：读取实际随机 nonce，NUL 分隔、无尾 NUL、小写 D UUID、大写 HEX。
             // 不调用生产 AuthTranscriptBuilder/Compute*Proof，也不硬编码客户端随机数。
-            byte[] transcript = Encoding.UTF8.GetBytes(string.Join('\0', "LANREMOTE-AUTH-V1",
+            byte[] transcript = Encoding.ASCII.GetBytes(string.Join('\0', "LANREMOTE-AUTH-V2",
                 _sessionId.ToString("D"), _serverId.ToString("D"), ClientId.ToString("D"),
-                Convert.ToBase64String(_serverNonce), nonce, Convert.ToHexString(_pin), "control"));
+                Convert.ToBase64String(_serverNonce), nonce, Convert.ToHexString(_pin), "control",
+                "display_catalog_offer", "2", "1", _sessionId.ToString("D"),
+                "display_catalog_accept", "2", "1", _sessionId.ToString("D")));
+            Assert.Equal(15, transcript.Count(value => value == 0));
+            Assert.NotEqual((byte)0, transcript[^1]);
             using HMACSHA256 hmac = new(_oracleKey);
             Assert.Equal(hmac.ComputeHash(transcript), Convert.FromBase64String(root.GetProperty("clientProof").GetString()!));
-            byte[] grant = Encoding.UTF8.GetBytes(string.Join('\0', "server", "LANREMOTE-GRANT-V1",
+            byte[] grant = Encoding.UTF8.GetBytes(string.Join('\0', "server", "LANREMOTE-GRANT-V2",
                 Convert.ToHexString(SHA256.HashData(transcript)), "control"));
             return hmac.ComputeHash(grant);
         }
@@ -1042,10 +1065,10 @@ public sealed class ControlClientPostSuccessCleanupTests(ITestOutputHelper outpu
 
         internal void AssertWireConsumed(bool pending)
         {
-            Assert.Equal(2, _writes);
-            Assert.Equal(2, _flushes);
-            Assert.Equal(pending ? 6 : 4, _reads);
-            Assert.Equal(pending ? new[] { "challenge", "pending", "success" } : new[] { "challenge", "success" }, _consumed);
+            Assert.Equal(3, _writes);
+            Assert.Equal(3, _flushes);
+            Assert.Equal(pending ? 8 : 6, _reads);
+            Assert.Equal(pending ? new[] { "challenge", "offer", "pending", "success" } : new[] { "challenge", "offer", "success" }, _consumed);
             Assert.Empty(_input);
         }
         internal void ReleasePayload() => _payloadRelease.TrySetResult();

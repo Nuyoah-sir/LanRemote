@@ -286,13 +286,81 @@ public sealed class AuthTranscriptV2Tests
     }
 
     [Fact]
+    public void Clear_zeroes_owned_buffer_is_idempotent_and_does_not_claim_export_cleanup()
+    {
+        AuthTranscriptV2 value = Create();
+        byte[] owned = Assert.IsType<byte[]>(typeof(AuthTranscriptV2)
+            .GetField("_client", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(value));
+        byte[] exported = value.ExportClientTranscript();
+        byte[] expected = Encoding.ASCII.GetBytes(string.Join('\0', ExpectedFields()));
+        Assert.Equal(expected, owned);
+        Assert.NotSame(owned, exported);
+
+        value.Clear();
+        value.Clear();
+
+        Assert.All(owned, b => Assert.Equal((byte)0, b));
+        Assert.Equal(expected, exported); // 既有导出归调用者所有，本类不能声称清零它。
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)]
+    public void Clear_is_terminal_for_every_export_and_proof(int operation)
+    {
+        AuthTranscriptV2 value = Create();
+        Assert.NotEmpty(Use(value, operation));
+        Assert.Equal(Use(value, operation), Use(value, operation));
+        value.Clear();
+        Assert.Throws<ObjectDisposedException>(() => Use(value, operation));
+        value.Clear();
+        Assert.Throws<ObjectDisposedException>(() => Use(value, operation));
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)]
+    public async Task Concurrent_clear_and_use_returns_only_original_bytes_or_terminal_failure(int operation)
+    {
+        AuthTranscriptV2 value = Create();
+        byte[] expected = Use(value, operation);
+        TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task[] users = Enumerable.Range(0, 32).Select(async _ =>
+        {
+            await start.Task;
+            try { Assert.Equal(expected, Use(value, operation)); }
+            catch (ObjectDisposedException) { }
+        }).ToArray();
+        Task clearer = Task.Run(async () => { await start.Task; value.Clear(); });
+        start.SetResult();
+        await Task.WhenAll(users.Append(clearer)).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Throws<ObjectDisposedException>(() => Use(value, operation));
+    }
+
+    private static byte[] Use(AuthTranscriptV2 value, int operation) => operation switch
+    {
+        0 => value.ExportClientTranscript(),
+        1 => value.ExportGrantTranscript(SessionPermission.ViewOnly),
+        2 => value.ComputeClientProof(Bytes(0, 16)),
+        3 => value.ComputeServerProof(Bytes(0, 16), SessionPermission.ViewOnly),
+        _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+    };
+
+    [Fact]
     public void Api_has_no_raw_transcript_import_or_public_constructor()
     {
         foreach (Type type in new[] { typeof(AuthTranscriptV2), typeof(DisplayCatalogAgreementBinding) })
         {
             Assert.True(type.IsSealed);
             Assert.DoesNotContain(type.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic), c => !c.IsPrivate);
-            Assert.All(type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic), field => Assert.True(field.IsInitOnly));
+            FieldInfo[] fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            // transcript 载荷引用保持只读；唯一可变字段是显式清理终态，不是授权位。
+            Assert.All(fields.Where(field => type != typeof(AuthTranscriptV2) || field.Name != "_cleared"),
+                field => Assert.True(field.IsInitOnly));
+            if (type == typeof(AuthTranscriptV2))
+            {
+                FieldInfo terminal = Assert.Single(fields, field => field.Name == "_cleared");
+                Assert.True(terminal.IsPrivate);
+                Assert.Equal(typeof(bool), terminal.FieldType);
+            }
         }
         MethodInfo factory = Assert.Single(typeof(AuthTranscriptV2).GetMethods(BindingFlags.Static | BindingFlags.NonPublic),
             m => m.ReturnType == typeof(AuthTranscriptV2));

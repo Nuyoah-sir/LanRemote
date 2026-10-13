@@ -7,6 +7,92 @@ namespace LanRemote.Transport.Tests;
 
 public sealed partial class ControlAuthSessionTests
 {
+    [Fact(Timeout = 120_000)]
+    public async Task Missing_Accept_On_Real_Tls_Uses_Original_Machine_Deadline()
+    {
+        ScriptedDeadlineStore store = new(_ => Task.FromResult(new AccessSecret(GoodKey.ToArray())));
+        AuthScenario scenario = await RunScenarioAsync(async (connection, p, ct) =>
+        {
+            await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
+            await p.ReadChallengeAsync(connection.Stream, ct, sendAccept: false);
+            byte[] terminal = await ReadFramePayloadAsync(connection.Stream, ct);
+            Assert.True(AuthenticationFailedFrame.TryParse(terminal, out _));
+            p.Frames.Add("authentication_failed");
+            p.TerminalSeen.TrySetResult();
+        }, StubApprovalGate.Approve(), secretStore: store,
+            options: FastOptions with { MachineWindow = TimeSpan.FromMilliseconds(700) });
+
+        Assert.False(scenario.Result.Completed);
+        Assert.Equal(ControlAuthSession.RejectTimeout, scenario.Result.Rejection);
+        Assert.InRange(scenario.Elapsed, TimeSpan.FromMilliseconds(400), TimeSpan.FromSeconds(2));
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "authentication_failed" }, scenario.Probe.Frames);
+        Assert.Equal(0, store.Calls);
+        Assert.Equal(0, scenario.Gate.RequestCount);
+        Assert.Equal(0, scenario.Registry.ActiveSessionCount);
+        Assert.Equal(0, scenario.Limiter.CountRecentFailures(IPAddress.Loopback));
+    }
+
+    // 受控 IO，不是 TLS；每次只在指定边界推进单调时钟，timer 故意不触发。
+    [Theory(Timeout = 120_000)]
+    [InlineData("offer-write", 0, 0)]
+    [InlineData("accept-read", 2, 0)]
+    [InlineData("accept-parse-final", 2, 0)]
+    [InlineData("cumulative-proof", 4, 1)]
+    public async Task V2_Agreement_Shares_Machine_Budget_And_Checks_Final_Boundaries_With_Controlled_Io(
+        string boundary, int expectedReads, int expectedKeyLoads)
+    {
+        ManualDeadlineClock manual = new();
+        BoundaryObservationClock clock = new(manual);
+        using CleanupIoSslStream stream = new();
+        stream.OnWriteAsync = type =>
+        {
+            if (type == "display_catalog_offer")
+            {
+                if (boundary == "offer-write")
+                    manual.Advance(FastOptions.MachineWindow, fireTimers: false);
+                else if (boundary == "cumulative-proof")
+                    manual.Advance(TimeSpan.FromSeconds(3), fireTimers: false);
+            }
+            return Task.CompletedTask;
+        };
+        stream.OnHandshakeReadCompleted = count =>
+        {
+            if (count != 2) return; // Accept payload 已读完，但调用方尚未做返回后检查。
+            if (boundary == "accept-read")
+                manual.Advance(FastOptions.MachineWindow, fireTimers: false);
+            else if (boundary == "accept-parse-final")
+                clock.AfterNextTimestamp = () => manual.Advance(FastOptions.MachineWindow, fireTimers: false);
+            else if (boundary == "cumulative-proof")
+                manual.Advance(TimeSpan.FromSeconds(1), fireTimers: false);
+        };
+        byte[] returnedKey = GoodKey.ToArray();
+        ScriptedDeadlineStore store = new(_ =>
+        {
+            manual.Advance(TimeSpan.FromSeconds(1), fireTimers: false);
+            return Task.FromResult(new AccessSecret(returnedKey));
+        });
+        StubApprovalGate gate = StubApprovalGate.WithOutcome(LocalApprovalOutcome.Denied);
+        FailedAuthLimiter limiter = new();
+        limiter.RecordFailure(IPAddress.Loopback);
+        ControlAuthContext context = NewContext(gate, secretStore: store, limiter: limiter) with { TimeProvider = clock };
+        ConnectionSecurityContext security = new(IPAddress.Loopback, IPAddress.Loopback, 0,
+            System.Security.Authentication.SslProtocols.None, new byte[CertificatePin.LengthBytes]);
+        ControlAuthSession session = new(stream, security, context, BuildAuthTimeouts());
+        ControlAuthResult result = await session.RunAsync(CancellationToken.None);
+
+        Assert.False(result.Completed);
+        Assert.Equal(ControlAuthSession.RejectTimeout, result.Rejection);
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "authentication_failed" }, stream.AcceptedFrames);
+        Assert.Equal(expectedReads, stream.HandshakeReadCalls);
+        Assert.Equal(expectedKeyLoads, store.Calls);
+        Assert.Equal(0, stream.PendingReadCalls);
+        Assert.Equal(0, gate.RequestCount);
+        Assert.Equal(0, context.SessionRegistry.ActiveSessionCount);
+        Assert.Equal(1, limiter.CountRecentFailures(IPAddress.Loopback));
+        if (expectedKeyLoads == 1) Assert.All(returnedKey, value => Assert.Equal((byte)0, value));
+        await session.JoinOwnedOperationsAsync().WaitAsync(FrameDeadline);
+    }
+
     // 真实 TLS + TransportHost；只在明确的本机依赖边界推进单调时间，不依赖 timer 恰好调度。
     [Theory(Timeout = 120_000)]
     [InlineData(false, false)]
@@ -215,7 +301,7 @@ public sealed partial class ControlAuthSessionTests
         StubApprovalGate gate = StubApprovalGate.WaitOn(decision);
         AuthScenario scenario = await RunScenarioAsync(async (connection, probe, ct) =>
         {
-            await FrameWriter.WriteHelloAsync(connection.Stream, FrameDeadline, ct);
+            await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
             await probe.ReadChallengeAsync(connection.Stream, ct);
             await probe.SendResponseAsync(connection.Stream, ct);
             byte[] pending = await ReadFramePayloadAsync(connection.Stream, ct);

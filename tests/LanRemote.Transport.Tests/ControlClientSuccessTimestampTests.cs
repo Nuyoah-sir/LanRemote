@@ -547,9 +547,14 @@ public sealed class ControlClientSuccessTimestampTests
             _beforeConstruction = beforeConstruction;
             Enqueue("challenge", JsonSerializer.SerializeToUtf8Bytes(new
             {
-                type = "auth_challenge", protocol = 1, sessionId = SessionId.ToString("D"),
+                type = "auth_challenge", protocol = 2, sessionId = SessionId.ToString("D"),
                 serverDeviceId = _serverId.ToString("D"), serverNonce = Convert.ToBase64String(_serverNonce),
                 certSha256 = Convert.ToHexString(Pin), expiresInMs = 15_000,
+            }));
+            Enqueue("offer", JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                type = "display_catalog_offer", applicationProfile = 2, catalogSchema = 1,
+                sessionId = SessionId.ToString("D"),
             }));
         }
 
@@ -560,11 +565,22 @@ public sealed class ControlClientSuccessTimestampTests
             ReadOnlyMemory<byte> payload = buffer[4..];
             if (++_writes == 1)
             {
-                Assert.True(HelloFrame.TryParse(payload.Span, out _));
+                Assert.Equal("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":2}", Encoding.UTF8.GetString(payload.Span));
+            }
+            else if (_writes == 2)
+            {
+                Assert.Equal(new[] { "challenge", "offer" }, _consumed);
+                using JsonDocument document = JsonDocument.Parse(payload);
+                JsonElement root = document.RootElement;
+                Assert.Equal("display_catalog_accept", root.GetProperty("type").GetString());
+                Assert.Equal(2, root.GetProperty("applicationProfile").GetInt32());
+                Assert.Equal(1, root.GetProperty("catalogSchema").GetInt32());
+                Assert.Equal(SessionId.ToString("D"), root.GetProperty("sessionId").GetString());
+                Assert.Equal(4, root.EnumerateObject().Count());
             }
             else
             {
-                Assert.Equal(2, _writes);
+                Assert.Equal(3, _writes);
                 byte[] proof = VerifyResponseAndComputeServerProof(payload);
                 try
                 {
@@ -596,10 +612,14 @@ public sealed class ControlClientSuccessTimestampTests
             Assert.Equal(32, decodedNonce.Length);
             Assert.Equal(Convert.ToBase64String(decodedNonce), nonce);
             // 独立 HMAC oracle 读取真实随机 clientNonce；不调用生产 transcript/proof helper。
-            byte[] transcript = Encoding.UTF8.GetBytes(string.Join('\0', "LANREMOTE-AUTH-V1",
+            byte[] transcript = Encoding.ASCII.GetBytes(string.Join('\0', "LANREMOTE-AUTH-V2",
                 SessionId.ToString("D"), _serverId.ToString("D"), ClientId.ToString("D"),
-                Convert.ToBase64String(_serverNonce), nonce, Convert.ToHexString(Pin), "control"));
-            byte[] grant = Encoding.UTF8.GetBytes(string.Join('\0', "server", "LANREMOTE-GRANT-V1",
+                Convert.ToBase64String(_serverNonce), nonce, Convert.ToHexString(Pin), "control",
+                "display_catalog_offer", "2", "1", SessionId.ToString("D"),
+                "display_catalog_accept", "2", "1", SessionId.ToString("D")));
+            Assert.Equal(15, transcript.Count(value => value == 0));
+            Assert.NotEqual((byte)0, transcript[^1]);
+            byte[] grant = Encoding.UTF8.GetBytes(string.Join('\0', "server", "LANREMOTE-GRANT-V2",
                 Convert.ToHexString(SHA256.HashData(transcript)), "control"));
             using HMACSHA256 hmac = new(_oracleKey);
             try
@@ -681,10 +701,10 @@ public sealed class ControlClientSuccessTimestampTests
 
         internal void AssertConsumed(bool pending)
         {
-            Assert.Equal(2, _writes);
-            Assert.Equal(2, _flushes);
+            Assert.Equal(3, _writes);
+            Assert.Equal(3, _flushes);
             Assert.Equal(2, _successPayloadReads);
-            Assert.Equal(pending ? new[] { "challenge", "pending", "success" } : new[] { "challenge", "success" }, _consumed);
+            Assert.Equal(pending ? new[] { "challenge", "offer", "pending", "success" } : new[] { "challenge", "offer", "success" }, _consumed);
             Assert.Empty(_input);
             Assert.True(OriginalRead.IsCompletedSuccessfully);
         }

@@ -1521,7 +1521,7 @@ public sealed class ClientVideoAttachDeadlineTests
             Parent = new AuthenticatedControlSession(Control.Connection, SessionPermission.Control,
                 new Guid("00112233-4455-6677-8899-aabbccddeeff"), "ABCDEF",
                 Convert.FromHexString("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"),
-                hint, SuccessAt, Clock);
+                hint, SuccessAt, Clock, V2AgreementFixture.Create(new Guid("00112233-4455-6677-8899-aabbccddeeff")));
             Parent.CommitDelivery();
         }
         internal Pause NewPause(bool open = false)

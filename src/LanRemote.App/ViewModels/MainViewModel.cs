@@ -59,6 +59,7 @@ public sealed class MainViewModel : ViewModelBase
     private bool _useManualVideoQuality;
     private bool _isExiting;
     private string _hostStatusText = "主机未监听：正在验证配置与身份。";
+    private string _hostProtocolStatusText = string.Empty;
 
     private CancellationTokenSource? _watchCts;
     private CancellationTokenSource? _cleanupCts;
@@ -158,6 +159,21 @@ public sealed class MainViewModel : ViewModelBase
         get => _hostStatusText;
         private set => SetProperty(ref _hostStatusText, value);
     }
+
+    /// <summary>与停止、排空状态分开显示，不把版本声明当作已验证的远端身份。</summary>
+    public string HostProtocolStatusText
+    {
+        get => _hostProtocolStatusText;
+        private set => SetProperty(ref _hostProtocolStatusText, value);
+    }
+
+    public void RefreshHostProtocolStatus() =>
+        HostProtocolStatusText = _hostRuntime.LastProtocolRejection switch
+        {
+            "control-upgrade-required" => "已拒绝旧版协议声明（未经身份认证）。请将两端升级到兼容版本；不会回退到旧协议。",
+            "control-protocol-unsupported" => "已拒绝不支持的协议版本声明（未经身份认证）。请将两端升级到兼容版本；不会回退到旧协议。",
+            _ => string.Empty,
+        };
 
     public bool HostSettingsReady
     {
@@ -811,6 +827,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             _hostRuntime.BlockListening();
             _hostRuntime.BlockApprovals();
+            RefreshHostProtocolStatus();
             HostStatusText = notReady;
             PublishDiscoveryCapabilities();
             Task stopTask = _hostRuntime.StopAndDisposeAsync();
@@ -908,6 +925,7 @@ public sealed class MainViewModel : ViewModelBase
                 {
                     _hostRuntime.BlockListening();
                     _hostRuntime.BlockApprovals();
+                    RefreshHostProtocolStatus();
                     try
                     {
                         Task cleanupTask = _hostRuntime.StopAndDisposeAsync();
@@ -943,6 +961,7 @@ public sealed class MainViewModel : ViewModelBase
         long intent = ++_sharingIntentVersion;
         _hostRuntime.BlockListening();
         _hostRuntime.BlockApprovals();
+        RefreshHostProtocolStatus();
         PublishDiscoveryCapabilities();
         if (!_isExiting)
         {
@@ -984,6 +1003,7 @@ public sealed class MainViewModel : ViewModelBase
         HostSettingsReady = false;
         OnPropertyChanged(nameof(NeedsLocalApprovalRepair));
         _hostRuntime.BeginShutdown();
+        RefreshHostProtocolStatus();
         PublishDiscoveryCapabilities();
         HostStatusText = "正在退出：仅查看共享已撤销，等待连接排空…";
     }
@@ -1020,6 +1040,7 @@ public sealed class MainViewModel : ViewModelBase
     private async Task<bool> StartHostAsync(CancellationToken cancellationToken, long intent,
         VideoQualitySettings? previewSettings)
     {
+        RefreshHostProtocolStatus();
         try
         {
             TransportHostStartResult result = await _hostRuntime.StartAsync(cancellationToken, previewSettings)
@@ -1089,6 +1110,7 @@ public sealed class MainViewModel : ViewModelBase
             ++_sharingIntentVersion;
             _hostRuntime.BlockListening();
             _hostRuntime.BlockApprovals();
+            RefreshHostProtocolStatus();
             immediateStop = _hostRuntime.StopAndDisposeAsync();
             _hostStopTask = immediateStop;
             HostStatusText = "正在停止仅查看主机并排空连接…";

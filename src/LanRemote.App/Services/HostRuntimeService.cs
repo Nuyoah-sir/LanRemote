@@ -51,6 +51,19 @@ public sealed class HostRuntimeService
     public bool IsListening => Volatile.Read(ref _stopRequested) == 0 &&
         ApprovalsAvailable && Volatile.Read(ref _host)?.IsRunning == true;
 
+    /// <summary>仅当前监听轮次的未认证协议声明拒绝；停止意图生效后立即隐藏旧值。</summary>
+    public string? LastProtocolRejection
+    {
+        get
+        {
+            lock (_intentGate)
+            {
+                return _stopRequested == 0 && _shutdown == 0 && ApprovalsAvailable &&
+                    _host is { IsRunning: true } host ? host.LastProtocolRejection : null;
+            }
+        }
+    }
+
     /// <summary>本轮已发布 Host 的只读档位；停止后保留报告直到下一轮发布，不授予监听资格。</summary>
     public VideoQualitySettings? ActivePreviewSettings => Volatile.Read(ref _activePreviewSettings);
 

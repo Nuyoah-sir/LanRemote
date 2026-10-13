@@ -1,3 +1,5 @@
+using System.Net.Sockets;
+using System.Text;
 using LanRemote.Core.Models;
 using LanRemote.Transport.Auth;
 
@@ -365,10 +367,121 @@ public sealed partial class VideoAttachTlsTests
         scenario.AssertControlAlive(control);
     }
 
-    [Fact(Timeout = 60_000)]
-    public async Task Legacy_ControlPreAuth_Rejects_Complete_Valid_Video_Hello_Over_Real_Tls()
+    [Theory(Timeout = 60_000)]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":1}", "control-upgrade-required")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":3}", "control-protocol-unsupported")]
+    [InlineData("{\"channel\":\"control\",\"protocol\":1}", "channel-hello-invalid")]
+    [InlineData("{\"type\":\"channel_hello\",\"protocol\":1}", "channel-hello-invalid")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\"}", "channel-hello-invalid")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":1,\"protocol\":1}", "channel-hello-invalid")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":3,\"protocol\":3}", "channel-hello-invalid")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":1}{}", "channel-hello-invalid")]
+    [InlineData("{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":3}{}", "channel-hello-invalid")]
+    public async Task Router_Rejects_Old_Unsupported_And_Malformed_Control_Hellos_Over_Real_Tls(
+        string payload, string expectedRejection)
     {
-        await using TlsScenario scenario = new(legacyVideo: true);
+        // 观测入口检查 Router 精确拒绝码；生产 factory 入口检查 Host 的真实诊断写入路径。
+        foreach (bool productionRouter in new[] { false, true })
+        {
+            await using TlsScenario scenario = new(maxConnectionsPerAddress: 1, useProductionRouter: productionRouter);
+            scenario.Start();
+            Assert.Null(scenario.Host.LastProtocolRejection);
+            VideoPeer? peer = productionRouter ? null : await scenario.OpenVideoAsync();
+            TlsConnection client = peer?.Client ?? await scenario.OpenRawTlsAsync();
+            await scenario.WaitForConnectionCountAsync(1);
+            using CancellationTokenSource guard = new(Guard);
+            await FrameWriter.WriteFrameAsync(client.Stream, Encoding.UTF8.GetBytes(payload),
+                TransportConstants.MaxPreAuthMessageBytes, guard.Token);
+
+            // 客户端主动释放前仅接受有序 EOF 或已识别的 RST/abort，任何 Challenge/认证终帧/Video ACK 字节都失败。
+            await AssertStrictClosedWithoutDataAsync(client.Stream);
+            if (peer is not null)
+            {
+                Assert.Null(await peer.Server.Finished.Task.WaitAsync(Guard));
+                Assert.Null(peer.Server.ControlOnlyResult);
+                Assert.Equal(expectedRejection, peer.Server.Router.Rejection);
+                Assert.Equal(0, peer.Server.Router.AttachAttempts);
+                Assert.Null(peer.Server.Router.AttachStatus);
+            }
+            await scenario.WaitForConnectionCountAsync(0);
+            string? expectedDiagnostic = productionRouter && expectedRejection != "channel-hello-invalid"
+                ? expectedRejection : null;
+            Assert.Equal(expectedDiagnostic, scenario.Host.LastProtocolRejection);
+            scenario.AssertNoControlOrVideoActivity();
+            Assert.True(scenario.Host.IsRunning);
+            Assert.Empty(scenario.Host.LifecycleErrors.Snapshot);
+        }
+    }
+
+    [Theory(Timeout = 60_000)]
+    [InlineData(1, "control-upgrade-required")]
+    [InlineData(3, "control-protocol-unsupported")]
+    public async Task Production_Router_Diagnostic_Ignores_Malformed_Version_Claims_Over_Real_Tls(
+        int protocol, string expectedDiagnostic)
+    {
+        await using TlsScenario scenario = new(maxConnectionsPerAddress: 1, useProductionRouter: true);
+        scenario.Start();
+        Assert.Null(scenario.Host.LastProtocolRejection);
+        string[] hellos =
+        [
+            $"{{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":{protocol}}}",
+            "{\"channel\":\"control\",\"protocol\":1}",
+            "{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":1,\"protocol\":3}",
+            "{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":3}{}",
+        ];
+        foreach (string payload in hellos)
+        {
+            TlsConnection client = await scenario.OpenRawTlsAsync();
+            await scenario.WaitForConnectionCountAsync(1);
+            using CancellationTokenSource guard = new(Guard);
+            await FrameWriter.WriteFrameAsync(client.Stream, Encoding.UTF8.GetBytes(payload),
+                TransportConstants.MaxPreAuthMessageBytes, guard.Token);
+            await AssertStrictClosedWithoutDataAsync(client.Stream);
+            await scenario.WaitForConnectionCountAsync(0);
+            // 同一个 Host 的单名额可再次使用；畸形输入不能清除或伪造此前的固定版本诊断。
+            Assert.Equal(expectedDiagnostic, scenario.Host.LastProtocolRejection);
+            scenario.AssertNoControlOrVideoActivity();
+            Assert.True(scenario.Host.IsRunning);
+            Assert.Empty(scenario.Host.LifecycleErrors.Snapshot);
+        }
+    }
+
+    [Theory]
+    [InlineData("reset", true)]
+    [InlineData("aborted", true)]
+    [InlineData("shutdown", true)]
+    [InlineData("nested-reset", true)]
+    [InlineData("socket-timeout", false)]
+    [InlineData("timeout", false)]
+    [InlineData("plain-io", false)]
+    [InlineData("nested-unknown", false)]
+    [InlineData("nested-io", false)]
+    public void Strict_Close_Classifier_Accepts_Only_Recognized_Socket_Errors(string kind, bool expected)
+    {
+        // 仅构造异常链，不访问网络；普通 IO、超时和未知嵌套错误不得伪装为连接关闭。
+        IOException error = kind switch
+        {
+            "reset" => new IOException("读取失败", new SocketException((int)SocketError.ConnectionReset)),
+            "aborted" => new IOException("读取失败", new SocketException((int)SocketError.ConnectionAborted)),
+            "shutdown" => new IOException("读取失败", new SocketException((int)SocketError.Shutdown)),
+            "nested-reset" => new IOException("外层读取失败",
+                new IOException("内层读取失败", new SocketException((int)SocketError.ConnectionReset))),
+            "socket-timeout" => new IOException("读取失败", new SocketException((int)SocketError.TimedOut)),
+            "timeout" => new IOException("读取失败", new TimeoutException("读取超时")),
+            "plain-io" => new IOException("普通读取失败"),
+            "nested-unknown" => new IOException("外层读取失败",
+                new IOException("内层读取失败", new SocketException((int)SocketError.AccessDenied))),
+            "nested-io" => new IOException("外层读取失败", new IOException("未知内层读取失败")),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+        };
+
+        Assert.Equal(expected, IsRecognizedSocketClose(error));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task ControlOnly_PreAuth_Rejects_Complete_Valid_Video_Hello_Over_Real_Tls()
+    {
+        await using TlsScenario scenario = new(controlOnlyVideo: true);
         scenario.Start();
         AuthenticatedControlSession control = await scenario.OpenControlAsync();
         VideoPeer video = await scenario.OpenVideoAsync();
@@ -377,11 +490,11 @@ public sealed partial class VideoAttachTlsTests
         await SendHelloAsync(control, video);
 
         Assert.Null(await video.Server.Finished.Task.WaitAsync(Guard));
-        ControlPreAuthResult result = Assert.IsType<ControlPreAuthResult>(video.Server.LegacyResult);
+        ControlPreAuthResult result = Assert.IsType<ControlPreAuthResult>(video.Server.ControlOnlyResult);
         Assert.False(result.Completed);
         Assert.Equal(ControlSessionState.Closed, result.State);
-        // 旧 parser 先因 sessionId/nonce/proof 这些未知字段拒绝，不会走到 channel 值检查。
-        Assert.Equal(HelloFrame.RejectMalformedJson, result.Rejection);
+        // Control-only 入口只接受严格 Hello2；完整合法的 Video Hello 也不能进入控制认证。
+        Assert.Equal(ControlPreAuthSession.RejectHelloInvalid, result.Rejection);
         Assert.Null(result.Handoff);
         await AssertClosedWithoutDataAsync(video.Client.Stream);
         await scenario.WaitForConnectionCountAsync(1);

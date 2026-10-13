@@ -487,7 +487,7 @@ public sealed partial class ControlAuthSessionTests
             ControlAuthResult result = await run.WaitAsync(FrameDeadline);
             Assert.True(result.Completed);
             Assert.Null(result.Rejection);
-            Assert.Equal(new[] { "auth_challenge", "approval_pending", "auth_success" }, stream.AcceptedFrames);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success" }, stream.AcceptedFrames);
             Assert.Equal(0, session.Context.SessionRegistry.ActiveSessionCount);
             Assert.Same(activity, ReadPendingApprovalTask(session));
             Assert.Equal(1, stream.PendingReadCalls);
@@ -560,7 +560,7 @@ public sealed partial class ControlAuthSessionTests
             Assert.Same(activity, ReadPendingApprovalTask(session));
             Assert.Equal(1, stream.PendingReadCalls);
             Assert.Equal(1, source.Registrations);
-            Assert.Equal(new[] { "auth_challenge", "approval_pending", "auth_success" }, stream.AcceptedFrames);
+            Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success" }, stream.AcceptedFrames);
         }
         finally
         {

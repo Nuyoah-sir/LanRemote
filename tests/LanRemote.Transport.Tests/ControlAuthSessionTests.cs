@@ -19,10 +19,9 @@ namespace LanRemote.Transport.Tests;
 /// <remarks>
 /// <para>走的是<b>真实回环 TLS + 真实 <see cref="TransportHost"/></b>：认证的判据全在
 /// 「两端各自算出什么、谁先说什么」上，替身流很容易测出一个只在替身里成立的行为。</para>
-/// <para>客户端侧在本层是<b>测试脚本</b>（真实产品客户端在 M4 阶段 4）：它独立使用
-/// <see cref="AuthTranscriptBuilder"/> 重算 proof（不经过服务端任何路径），成功路径上
-/// 还按客户端语义验证 serverProof；双方复用协议核心，这不是独立密码学 oracle。
-/// 独立字节级 oracle 由 Python 黄金向量测试提供。</para>
+/// <para>客户端侧是<b>测试脚本</b>：显式发送 Hello2、读取 Challenge2 和 Offer、发送 Accept，
+/// 按固定 ASCII/NUL 合同独立构造 V2 transcript 并计算 HMAC，不复用生产 transcript/binding 核。
+/// 成功路径还独立验证 serverProof；审批 gate 仍是替身，不代表真实本机人工审批。</para>
 /// <para><b>限流计数的判据</b>（ADR-038 第 2 条）只在这条唯一入口被观测：
 /// 密码学校验失败 = +1；格式违规 / 超时 / 断连 / 审批结果 = 不计。</para>
 /// </remarks>
@@ -122,7 +121,7 @@ public sealed partial class ControlAuthSessionTests
                     Assert.True(p.ServerProofValid == true, "客户端按 grant transcript 重算 serverProof 验证失败。");
                     Assert.True(p.SawApprovalPending);
                     Assert.Equal(
-                        new[] { "auth_challenge", "approval_pending", "auth_success" },
+                        new[] { "auth_challenge", "display_catalog_offer", "approval_pending", "auth_success" },
                         p.Frames);
 
                     // 登记表：认证成立的另一半证据（DoD「auth success 才能有 session」的正例）。
@@ -147,7 +146,7 @@ public sealed partial class ControlAuthSessionTests
                     // 控制链路是真实 TLS；这是同 IP/pin、不同 ConnectionId 的合成第二视频上下文，不是第二条 TLS 测试。
                     Assert.NotNull(connection.Stream.RemoteCertificate);
                     byte[] videoPin = SHA256.HashData(connection.Stream.RemoteCertificate.GetRawCertData());
-                    Assert.Equal(p.Challenge.CertificateSha256.ToArray(), videoPin);
+                    Assert.Equal(p.Challenge.CopyCertificateSha256(), videoPin);
                     syntheticVideo = new ConnectionSecurityContext(
                         IPAddress.Loopback, summary.RemoteAddress, 0, SslProtocols.None, videoPin);
                     Assert.NotEqual(summary.ConnectionId, syntheticVideo.ConnectionId);
@@ -305,6 +304,159 @@ public sealed partial class ControlAuthSessionTests
         Assert.Equal(1, scenario.Limiter.CountRecentFailures(IPAddress.Loopback));
     }
 
+    [Theory(Timeout = 120_000)]
+    [InlineData("malformed")]
+    [InlineData("missing-field")]
+    [InlineData("wrong-session")]
+    [InlineData("reverse-offer")]
+    [InlineData("wrong-profile")]
+    [InlineData("wrong-schema")]
+    [InlineData("duplicate-field")]
+    [InlineData("response-before-accept")]
+    public async Task Invalid_Accept_On_Real_Tls_Never_Loads_Key_Approves_Or_Registers(string variant)
+    {
+        ScriptedDeadlineStore store = new(_ => Task.FromResult(new AccessSecret(GoodKey.ToArray())));
+        FailedAuthLimiter limiter = new();
+        limiter.RecordFailure(IPAddress.Loopback);
+        AuthScenario scenario = await RunScenarioAsync(async (connection, p, ct) =>
+        {
+            await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
+            AuthChallengeV2 challenge = await p.ReadChallengeAsync(connection.Stream, ct, sendAccept: false);
+            if (variant == "response-before-accept")
+            {
+                await p.SendResponseAsync(connection.Stream, ct);
+            }
+            else
+            {
+                string accept = System.Text.Encoding.ASCII.GetString(IndependentAccept(challenge.SessionId));
+                string invalid = variant switch
+                {
+                    "malformed" => "{",
+                    "missing-field" => accept.Replace("\"catalogSchema\":1,", ""),
+                    "wrong-session" => accept.Replace(challenge.SessionId.ToString("D"), Guid.NewGuid().ToString("D")),
+                    "reverse-offer" => accept.Replace("display_catalog_accept", "display_catalog_offer"),
+                    "wrong-profile" => accept.Replace("\"applicationProfile\":2", "\"applicationProfile\":1"),
+                    "wrong-schema" => accept.Replace("\"catalogSchema\":1", "\"catalogSchema\":2"),
+                    "duplicate-field" => accept.Replace("\"catalogSchema\":1", "\"catalogSchema\":1,\"catalogSchema\":1"),
+                    _ => throw new InvalidOperationException("未知负例。"),
+                };
+                await FrameWriter.WriteFrameAsync(connection.Stream, System.Text.Encoding.ASCII.GetBytes(invalid),
+                    TransportConstants.MaxPreAuthMessageBytes, FrameDeadline, ct);
+            }
+            byte[] terminal = await ReadFramePayloadAsync(connection.Stream, ct);
+            Assert.True(AuthenticationFailedFrame.TryParse(terminal, out _));
+            p.Frames.Add("authentication_failed");
+            p.TerminalSeen.TrySetResult();
+        }, StubApprovalGate.Approve(), secretStore: store, limiter: limiter);
+
+        Assert.False(scenario.Result.Completed);
+        Assert.Equal($"{ControlAuthSession.RejectFrameViolation}:catalog-agreement-invalid-payload", scenario.Result.Rejection);
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "authentication_failed" }, scenario.Probe.Frames);
+        Assert.Equal(0, store.Calls);
+        Assert.Equal(0, scenario.Gate.RequestCount);
+        Assert.Equal(0, scenario.Registry.ActiveSessionCount);
+        Assert.Equal(1, limiter.CountRecentFailures(IPAddress.Loopback));
+    }
+
+    // 真实 TLS：第二个完整 Accept 占据 response 帧位置，不是首个 Accept 的重复 JSON 字段。
+    [Fact(Timeout = 120_000)]
+    public async Task Second_Accept_In_Response_Position_On_Real_Tls_Is_Rejected_Before_Key_Load()
+    {
+        ScriptedDeadlineStore store = new(_ => Task.FromResult(new AccessSecret(GoodKey.ToArray())));
+        FailedAuthLimiter limiter = new();
+        limiter.RecordFailure(IPAddress.Loopback);
+        AuthScenario scenario = await RunScenarioAsync(async (connection, p, ct) =>
+        {
+            await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
+            // 默认先发送合法 Accept；随后再发送同一 session 的另一完整帧。
+            AuthChallengeV2 challenge = await p.ReadChallengeAsync(connection.Stream, ct);
+            await FrameWriter.WriteFrameAsync(connection.Stream, IndependentAccept(challenge.SessionId),
+                TransportConstants.MaxPreAuthMessageBytes, FrameDeadline, ct);
+            byte[] terminal = await ReadFramePayloadAsync(connection.Stream, ct);
+            p.SawGenericFailure = AuthenticationFailedFrame.TryParse(terminal, out _);
+            Assert.True(p.SawGenericFailure);
+            p.Frames.Add("authentication_failed");
+            p.TerminalSeen.TrySetResult();
+        }, StubApprovalGate.Approve(), secretStore: store, limiter: limiter);
+
+        Assert.False(scenario.Result.Completed);
+        Assert.Equal($"{ControlAuthSession.RejectFrameViolation}:{AuthResponseFrame.RejectWrongType}",
+            scenario.Result.Rejection);
+        Assert.Equal(ControlSessionState.Closed, scenario.Result.State);
+        Assert.Equal(ControlSessionState.Closed, scenario.Session.State);
+        Assert.Null(scenario.Probe.ClientFault);
+        Assert.True(scenario.Probe.SawGenericFailure);
+        Assert.Null(scenario.Probe.Success);
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "authentication_failed" }, scenario.Probe.Frames);
+        Assert.Equal(0, store.Calls);
+        Assert.Equal(0, scenario.Gate.RequestCount);
+        Assert.Equal(0, scenario.Registry.ActiveSessionCount);
+        Assert.Equal(0, scenario.Session.Context.PendingApprovalLimiter.GlobalInUse);
+        Assert.Equal(1, limiter.CountRecentFailures(IPAddress.Loopback));
+        await scenario.Session.JoinOwnedOperationsAsync().WaitAsync(FrameDeadline);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task V1_Proof_After_Valid_V2_Agreement_Never_Reaches_Approval()
+    {
+        AuthScenario scenario = await RunScenarioAsync(
+            (connection, p, ct) => p.SpeakAuthAsync(connection, ct), StubApprovalGate.Approve(),
+            probe: new AuthClientProbe { UseLegacyProof = true });
+
+        Assert.False(scenario.Result.Completed);
+        Assert.Equal(ControlAuthSession.RejectProofMismatch, scenario.Result.Rejection);
+        Assert.Equal(new[] { "auth_challenge", "display_catalog_offer", "authentication_failed" }, scenario.Probe.Frames);
+        Assert.Equal(0, scenario.Gate.RequestCount);
+        Assert.Equal(0, scenario.Registry.ActiveSessionCount);
+        Assert.Equal(1, scenario.Limiter.CountRecentFailures(IPAddress.Loopback));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task Empty_Client_Device_Is_A_Protocol_Error_Before_Key_Load()
+    {
+        ScriptedDeadlineStore store = new(_ => Task.FromResult(new AccessSecret(GoodKey.ToArray())));
+        AuthScenario scenario = await RunScenarioAsync(
+            (connection, p, ct) => p.SpeakAuthAsync(connection, ct), StubApprovalGate.Approve(),
+            probe: new AuthClientProbe { ClientDeviceId = Guid.Empty }, secretStore: store);
+
+        Assert.False(scenario.Result.Completed);
+        Assert.Equal($"{ControlAuthSession.RejectFrameViolation}:client-device-empty", scenario.Result.Rejection);
+        Assert.True(scenario.Probe.SawGenericFailure);
+        Assert.Equal(0, store.Calls);
+        Assert.Equal(0, scenario.Gate.RequestCount);
+        Assert.Equal(0, scenario.Registry.ActiveSessionCount);
+        Assert.Equal(0, scenario.Limiter.CountRecentFailures(IPAddress.Loopback));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task Valid_V2_Proof_Has_No_Parent_Registration_Until_Approval_And_Success()
+    {
+        TaskCompletionSource<LocalApprovalDecision> decision = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        StubApprovalGate gate = StubApprovalGate.WaitOn(decision);
+        SessionRegistry registry = new();
+        AuthScenario scenario = await RunScenarioAsync(
+            (connection, p, ct) => p.SpeakAuthAsync(connection, ct), gate, registry: registry,
+            midflight: async (_, p) =>
+            {
+                LocalApprovalRequest request = await gate.FirstRequest.Task.WaitAsync(FrameDeadline);
+                Assert.Equal(0, registry.ActiveSessionCount);
+                Assert.Empty(registry.Snapshot());
+                Assert.Null(p.Success);
+                ConnectionSecurityContext video = new(IPAddress.Loopback, IPAddress.Loopback, 0,
+                    SslProtocols.None, p.Challenge!.CopyCertificateSha256());
+                Assert.Equal(VideoAttachStatus.NotRegistered, registry.TryAttachVideo(
+                    p.Challenge.SessionId, video, new byte[16], new byte[32], default, out VideoAttachLease? lease));
+                Assert.Null(lease);
+                decision.SetResult(new LocalApprovalDecision(request.RequestId,
+                    LocalApprovalOutcome.Approved, request.RequestedPermission));
+                await p.TerminalSeen.Task.WaitAsync(FrameDeadline);
+                Assert.True(p.ServerProofValid);
+                Assert.True(await WaitUntilAsync(() => registry.ActiveSessionCount == 1));
+            });
+        Assert.True(scenario.Result.Completed, scenario.Result.Rejection);
+        Assert.Equal(0, registry.ActiveSessionCount);
+    }
+
     /// <summary>帧格式违规（长度 0）：断开 + generic 失败，但<b>不计</b>入限流（防垃圾帧刷封禁）。</summary>
     [Fact(Timeout = 120_000)]
     public async Task Frame_Violation_Sends_Generic_Failure_And_Does_Not_Count()
@@ -312,7 +464,7 @@ public sealed partial class ControlAuthSessionTests
         AuthScenario scenario = await RunScenarioAsync(
             async (connection, p, ct) =>
             {
-                await FrameWriter.WriteHelloAsync(connection.Stream, FrameDeadline, ct);
+                await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
                 await p.ReadChallengeAsync(connection.Stream, ct);
 
                 // 长度前缀全 0 = 声称 0 字节 payload（协议违规）。
@@ -342,7 +494,7 @@ public sealed partial class ControlAuthSessionTests
         AuthScenario scenario = await RunScenarioAsync(
             async (connection, p, ct) =>
             {
-                await FrameWriter.WriteHelloAsync(connection.Stream, FrameDeadline, ct);
+                await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
                 await p.ReadChallengeAsync(connection.Stream, ct);
                 connection.Dispose();
                 p.TerminalSeen.TrySetResult();
@@ -383,7 +535,7 @@ public sealed partial class ControlAuthSessionTests
         AuthScenario scenario = await RunScenarioAsync(
             async (connection, p, ct) =>
             {
-                await FrameWriter.WriteHelloAsync(connection.Stream, FrameDeadline, ct);
+                await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
                 await p.ReadChallengeAsync(connection.Stream, ct);
                 await Task.Delay(Timeout.Infinite, ct);
             },
@@ -417,11 +569,11 @@ public sealed partial class ControlAuthSessionTests
         AuthScenario scenario = await RunScenarioAsync(
             async (connection, p, ct) =>
             {
-                await FrameWriter.WriteHelloAsync(connection.Stream, FrameDeadline, ct);
+                await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
                 try
                 {
                     byte[] payload = await ReadFramePayloadAsync(connection.Stream, ct);
-                    if (AuthChallengeFrame.TryParse(payload, out AuthChallengeFrame? challenge, out _))
+                    if (AuthChallengeV2.Parse(payload, out AuthChallengeV2? challenge) == WireV2ParseStatus.AcceptedV2)
                     {
                         // 能做到这一步就已经是 bug——记录下来，让断言变红。
                         p.RecordChallenge(challenge!, "auth_challenge");
@@ -588,7 +740,7 @@ public sealed partial class ControlAuthSessionTests
         AuthScenario scenario = await RunScenarioAsync(
             async (connection, p, ct) =>
             {
-                await FrameWriter.WriteHelloAsync(connection.Stream, FrameDeadline, ct);
+                await WriteHelloV2Async(connection.Stream, FrameDeadline, ct);
                 await p.ReadChallengeAsync(connection.Stream, ct);
                 await p.SendResponseAsync(connection.Stream, ct);
 
@@ -876,9 +1028,15 @@ public sealed partial class ControlAuthSessionTests
         byte[] token = new byte[AuthProtocol.SessionTokenByteLength];
 
         AssertJsonKeySet(
-            new AuthChallengeFrame(Guid.NewGuid(), Guid.NewGuid(), nonce, nonce, 15_000).Serialize(),
+            new AuthChallengeV2(Guid.NewGuid(), Guid.NewGuid(), nonce, nonce, 15_000).Serialize(),
             "type", "protocol", "sessionId", "serverDeviceId",
             "serverNonce", "certSha256", "expiresInMs");
+
+        Guid sessionId = Guid.NewGuid();
+        AssertJsonKeySet(DisplayCatalogAgreementFrame.SerializeOffer(sessionId),
+            "type", "applicationProfile", "catalogSchema", "sessionId");
+        AssertJsonKeySet(DisplayCatalogAgreementFrame.SerializeAccept(sessionId),
+            "type", "applicationProfile", "catalogSchema", "sessionId");
 
         AssertJsonKeySet(
             new AuthResponseFrame(
@@ -1078,7 +1236,8 @@ public sealed partial class ControlAuthSessionTests
             new byte[CertificatePin.LengthBytes]);
 
         SslStream detached = new(new MemoryStream());
-        return (new ControlPreAuthHandoff(detached, security), security);
+        return (new ControlPreAuthHandoff(detached, security,
+            "{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":2}"u8), security);
     }
 
     private static TransportTimeouts BuildAuthTimeouts() => new(
@@ -1165,6 +1324,49 @@ public sealed partial class ControlAuthSessionTests
         StubApprovalGate Gate,
         AuthClientProbe Probe);
 
+    // 按固定 wire 合同独立编码，不调用生产 transcript/binding/proof helper。
+    private static byte[] IndependentClientTranscript(
+        AuthChallengeV2 challenge, Guid clientDeviceId, byte[] nonce, byte[] pin,
+        SessionPermission permission, bool legacy = false)
+    {
+        string session = challenge.SessionId.ToString("D");
+        List<string> fields = new()
+        {
+            legacy ? "LANREMOTE-AUTH-V1" : "LANREMOTE-AUTH-V2",
+            session, challenge.ServerDeviceId.ToString("D"), clientDeviceId.ToString("D"),
+            Convert.ToBase64String(challenge.CopyServerNonce()), Convert.ToBase64String(nonce),
+            Convert.ToHexString(pin), permission == SessionPermission.Control ? "control" : "view",
+        };
+        if (!legacy)
+        {
+            fields.AddRange(new[]
+            {
+                "display_catalog_offer", "2", "1", session,
+                "display_catalog_accept", "2", "1", session,
+            });
+        }
+        return System.Text.Encoding.ASCII.GetBytes(string.Join('\0', fields));
+    }
+
+    private static byte[] IndependentAccept(Guid sessionId) => System.Text.Encoding.ASCII.GetBytes(
+        $"{{\"type\":\"display_catalog_accept\",\"applicationProfile\":2,\"catalogSchema\":1,\"sessionId\":\"{sessionId:D}\"}}");
+
+    private static void AssertOffer(byte[] payload, Guid sessionId)
+    {
+        AssertJsonKeySet(payload, "type", "applicationProfile", "catalogSchema", "sessionId");
+        using JsonDocument document = JsonDocument.Parse(payload);
+        JsonElement root = document.RootElement;
+        Assert.Equal("display_catalog_offer", root.GetProperty("type").GetString());
+        Assert.Equal("2", root.GetProperty("applicationProfile").GetRawText());
+        Assert.Equal("1", root.GetProperty("catalogSchema").GetRawText());
+        Assert.Equal(sessionId.ToString("D"), root.GetProperty("sessionId").GetString());
+    }
+
+    private static Task WriteHelloV2Async(Stream stream, TimeSpan deadline, CancellationToken token) =>
+        FrameWriter.WriteFrameAsync(stream,
+            "{\"type\":\"channel_hello\",\"channel\":\"control\",\"protocol\":2}"u8.ToArray(),
+            TransportConstants.MaxPreAuthMessageBytes, deadline, token);
+
     /// <summary>
     /// 客户端探针：独立算出 proof / 验证 serverProof / 记录收到的帧序列。
     /// </summary>
@@ -1188,12 +1390,14 @@ public sealed partial class ControlAuthSessionTests
 
         public Guid ClientDeviceId { get; set; } = TestClientDeviceId;
 
+        public bool UseLegacyProof { get; init; }
+
         public byte[] ClientNonce { get; } = RandomNumberGenerator.GetBytes(AuthProtocol.NonceByteLength);
 
         public TaskCompletionSource TerminalSeen { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public AuthChallengeFrame? Challenge { get; private set; }
+        public AuthChallengeV2? Challenge { get; private set; }
 
         public AuthSuccessFrame? Success { get; private set; }
 
@@ -1217,7 +1421,7 @@ public sealed partial class ControlAuthSessionTests
         {
             try
             {
-                await FrameWriter.WriteHelloAsync(connection.Stream, FrameDeadline, cancellationToken);
+                await WriteHelloV2Async(connection.Stream, FrameDeadline, cancellationToken);
                 await ReadChallengeAsync(connection.Stream, cancellationToken);
                 await SendResponseAsync(connection.Stream, cancellationToken);
 
@@ -1262,16 +1466,24 @@ public sealed partial class ControlAuthSessionTests
             }
         }
 
-        public async Task<AuthChallengeFrame> ReadChallengeAsync(Stream stream, CancellationToken cancellationToken)
+        public async Task<AuthChallengeV2> ReadChallengeAsync(
+            Stream stream, CancellationToken cancellationToken, bool sendAccept = true)
         {
             byte[] payload = await ReadFramePayloadAsync(stream, cancellationToken);
-            bool parsed = AuthChallengeFrame.TryParse(payload, out AuthChallengeFrame? challenge, out string? rejection);
-            Assert.True(parsed, $"challenge 解析失败：{rejection}");
+            Assert.Equal(WireV2ParseStatus.AcceptedV2, AuthChallengeV2.Parse(payload, out AuthChallengeV2? challenge));
             RecordChallenge(challenge!, "auth_challenge");
-            return challenge!;
+            byte[] offer = await ReadFramePayloadAsync(stream, cancellationToken);
+            AssertOffer(offer, challenge!.SessionId);
+            Frames.Add("display_catalog_offer");
+            if (sendAccept)
+            {
+                await FrameWriter.WriteFrameAsync(stream, IndependentAccept(challenge.SessionId),
+                    TransportConstants.MaxPreAuthMessageBytes, FrameDeadline, cancellationToken);
+            }
+            return challenge;
         }
 
-        public void RecordChallenge(AuthChallengeFrame challenge, string label)
+        public void RecordChallenge(AuthChallengeV2 challenge, string label)
         {
             Challenge = challenge;
             Frames.Add(label);
@@ -1279,19 +1491,13 @@ public sealed partial class ControlAuthSessionTests
 
         public async Task SendResponseAsync(Stream stream, CancellationToken cancellationToken)
         {
-            AuthChallengeFrame challenge = Challenge
+            AuthChallengeV2 challenge = Challenge
                 ?? throw new InvalidOperationException("先读 challenge 再发 response。");
 
-            byte[] certificateSha256 = SignedCertSha256 ?? challenge.CertificateSha256.ToArray();
-            byte[] transcript = AuthTranscriptBuilder.BuildClientTranscript(
-                challenge.SessionId,
-                challenge.ServerDeviceId,
-                ClientDeviceId,
-                challenge.ServerNonce.Span,
-                ClientNonce,
-                certificateSha256,
-                SignPermission);
-            byte[] proof = AuthTranscriptBuilder.ComputeClientProof(AccessKey, transcript);
+            byte[] certificateSha256 = SignedCertSha256 ?? challenge.CopyCertificateSha256();
+            byte[] transcript = IndependentClientTranscript(
+                challenge, ClientDeviceId, ClientNonce, certificateSha256, SignPermission, UseLegacyProof);
+            byte[] proof = HMACSHA256.HashData(AccessKey, transcript);
 
             AuthResponseFrame response = new(
                 ClientDeviceId, TestClientName, ClientNonce, SendPermission, proof);
@@ -1306,21 +1512,15 @@ public sealed partial class ControlAuthSessionTests
 
         private bool VerifyServerProof(AuthSuccessFrame success)
         {
-            AuthChallengeFrame challenge = Challenge
+            AuthChallengeV2 challenge = Challenge
                 ?? throw new InvalidOperationException("没有 challenge 就无法验证 serverProof。");
 
-            // 客户端语义（规格 04 §9）：用自己那份 transcript + 收到的 grantedPermission 重建 grant 档。
-            byte[] transcript = AuthTranscriptBuilder.BuildClientTranscript(
-                challenge.SessionId,
-                challenge.ServerDeviceId,
-                ClientDeviceId,
-                challenge.ServerNonce.Span,
-                ClientNonce,
-                challenge.CertificateSha256.Span,
-                SignPermission);
-            byte[] grant = AuthTranscriptBuilder.BuildGrantTranscript(
-                transcript, success.GrantedPermission);
-            byte[] expected = AuthTranscriptBuilder.ComputeServerProof(AccessKey, grant);
+            byte[] transcript = IndependentClientTranscript(
+                challenge, ClientDeviceId, ClientNonce, challenge.CopyCertificateSha256(), SignPermission);
+            string permission = success.GrantedPermission == SessionPermission.Control ? "control" : "view";
+            byte[] signedGrant = System.Text.Encoding.ASCII.GetBytes(
+                $"server\0LANREMOTE-GRANT-V2\0{Convert.ToHexString(SHA256.HashData(transcript))}\0{permission}");
+            byte[] expected = HMACSHA256.HashData(AccessKey, signedGrant);
 
             return CryptographicOperations.FixedTimeEquals(expected, success.ServerProof.Span);
         }

@@ -26,8 +26,13 @@ public sealed partial class AuthenticatedControlSession : IDisposable, IAsyncDis
         ReadOnlySpan<byte> sessionToken,
         int videoAttachExpiresInMsHint,
         long successReceivedAt,
-        TimeProvider clock)
+        TimeProvider clock,
+        DisplayCatalogAgreementBinding agreement)
     {
+        ArgumentNullException.ThrowIfNull(agreement);
+        if (agreement.SessionId != sessionId)
+            throw new ArgumentException("目录约定不属于本控制会话。", nameof(agreement));
+        // 约定不授予能力：构造仅位于 serverProof 验证后，最终交付仍由原 CommitDelivery 门禁控制。
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(videoAttachExpiresInMsHint);

@@ -1,4 +1,11 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 using LanRemote.Core.Models;
 using LanRemote.Transport.Auth;
 
@@ -34,7 +41,8 @@ public sealed partial class ControlClientConnectorTests
             else
             {
                 ClientTimer challengePrefix = await clock.WaitForTimerAsync(prefixBudget, cancellationToken: ct);
-                _ = await clock.WaitForTimerAsync(prefixBudget, after: challengePrefix, cancellationToken: ct);
+                ClientTimer offerPrefix = await clock.WaitForTimerAsync(prefixBudget, after: challengePrefix, cancellationToken: ct);
+                _ = await clock.WaitForTimerAsync(prefixBudget, after: offerPrefix, cancellationToken: ct);
             }
 
             // 已进入最终回复的前缀等待，之前的 challenge/pending payload timer 均已释放。
@@ -93,6 +101,171 @@ public sealed partial class ControlClientConnectorTests
         Assert.Equal(finalBudget.Ticks, clock.MonotonicTimestamp);
         Assert.Equal(0, clock.TimerCallbacks);
         Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData(400, 15_000)]
+    [InlineData(5_000, 800)]
+    public async Task Late_Offer_Cannot_Renew_Parent_Or_Challenge_Window_Without_Timer_Dispatch(
+        int machineMs, int challengeMs)
+    {
+        ClientDeadlineClock clock = new();
+        TimeSpan prefixBudget = TimeSpan.FromMilliseconds(170);
+        TimeSpan payloadBudget = TimeSpan.FromMilliseconds(110);
+        TimeSpan deadline = TimeSpan.FromMilliseconds(Math.Min(machineMs, challengeMs));
+        await using TlsScenario scenario = TlsScenario.Scripted(async (peer, ct) =>
+        {
+            await peer.SendAsync(peer.Challenge(expiresMs: challengeMs), ct);
+            ClientTimer challengePrefix = await clock.WaitForTimerAsync(prefixBudget, cancellationToken: ct);
+            ClientTimer offerPrefix = await clock.WaitForTimerAsync(prefixBudget, after: challengePrefix, cancellationToken: ct);
+            byte[] offer = peer.Offer();
+            byte[] prefix = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(prefix, (uint)offer.Length);
+            await peer.Stream.WriteAsync(prefix, ct);
+            _ = await clock.WaitForTimerAsync(payloadBudget, after: offerPrefix, cancellationToken: ct);
+            clock.Advance(deadline, fireTimers: false);
+            await peer.Stream.WriteAsync(offer, ct);
+            await peer.AssertClosedWithoutDataAsync(ct);
+        });
+        scenario.Start();
+        await AssertRejectedAsync(scenario, scenario.ConnectAsync(
+            options: ClientOptions with { MachineWindow = TimeSpan.FromMilliseconds(machineMs) },
+            timeouts: Timeouts(prefixMs: 170, payloadMs: 110), clock: clock),
+            "client-machine-timeout", "远端认证等待超时，请重试。");
+        Assert.Equal(deadline.Ticks, clock.MonotonicTimestamp);
+        Assert.Equal(0, clock.TimerCallbacks);
+        Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData(700, 15_000, false)]
+    [InlineData(700, 15_000, true)]
+    [InlineData(5_000, 800, false)]
+    [InlineData(5_000, 800, true)]
+    public async Task Offer_Parse_Final_Check_Rejects_Expired_Original_Window_After_Timely_Payload(
+        int machineMs, int challengeMs, bool invalidOffer)
+    {
+        CatalogDeadlineScenario scenario = new("offer", machineMs, challengeMs, invalidOffer);
+        try
+        {
+            Task<AuthenticatedControlSession> client = scenario.Start();
+            await scenario.AssertRejectedAsync(client);
+            // payload 的读后窗口/分段检查已通过并释放 timer，才推进时间；不是迟到 payload。
+            Assert.True(scenario.OfferPayloadDisposed);
+            Assert.Equal(TimeSpan.FromMilliseconds(280).Ticks, scenario.OfferPayloadDisposedAt);
+            Assert.Equal(1, scenario.NegotiationChecks);
+            Assert.Equal(new[] { "channel_hello" }, scenario.Stream.WrittenTypes);
+            Assert.Equal(1, scenario.Stream.FlushCalls);
+            // 无效 Offer 校准：只删除解析后检查必须暴露 catalog 错误，不能由写前末检救活。
+        }
+        finally
+        {
+            await scenario.FinishAsync();
+        }
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData(700, 15_000, "write")]
+    [InlineData(700, 15_000, "flush")]
+    [InlineData(5_000, 800, "write")]
+    [InlineData(5_000, 800, "flush")]
+    public async Task Accept_Write_Or_Flush_Completion_Rejects_Expired_Original_Window_Without_Timer_Dispatch(
+        int machineMs, int challengeMs, string boundary)
+    {
+        CatalogDeadlineScenario scenario = new(boundary, machineMs, challengeMs);
+        try
+        {
+            Task<AuthenticatedControlSession> client = scenario.Start();
+            await scenario.Stream.BoundaryEntered.Task.WaitAsync(Guard);
+            Assert.False(client.IsCompleted);
+            Assert.False(scenario.Stream.OriginalBoundary.IsCompleted);
+            Assert.Equal(2, scenario.NegotiationChecks);
+            Assert.Equal(TimeSpan.FromMilliseconds(280).Ticks, scenario.Clock.MonotonicTimestamp);
+            Assert.False(scenario.Connection.IsCloseRequested);
+            Assert.Equal(boundary == "write" ? 1 : 2, scenario.Stream.FlushCalls);
+            Assert.False(scenario.Stream.AcceptToken.IsCancellationRequested);
+
+            // 原写/flush Task 尚未完成；先把客观单调时间推进到原截止，再放行实际 IO。
+            scenario.ExpireWithoutTimerDispatch();
+            Assert.False(scenario.Stream.AcceptToken.IsCancellationRequested);
+            Assert.False(scenario.Stream.OriginalBoundary.IsCompleted);
+            scenario.Stream.ReleaseBoundary();
+            await scenario.AssertRejectedAsync(client);
+            Assert.True(scenario.Stream.OriginalBoundary.IsCompletedSuccessfully);
+            Assert.Equal(scenario.DeadlineAt, scenario.Stream.BoundaryCompletedAt);
+            Assert.Equal(3, scenario.NegotiationChecks);
+            Assert.Equal(new[] { "channel_hello", "display_catalog_accept" }, scenario.Stream.WrittenTypes);
+            Assert.Equal(2, scenario.Stream.FlushCalls);
+            // 自然时间证据不宣称独立覆盖该检查：删 Accept 后检查仍会被 binding 后检查拒绝。
+        }
+        finally
+        {
+            await scenario.FinishAsync();
+        }
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData(700, 15_000, "binding")]
+    [InlineData(5_000, 800, "binding")]
+    [InlineData(700, 15_000, "write")]
+    [InlineData(5_000, 800, "write")]
+    [InlineData(700, 15_000, "flush")]
+    [InlineData(5_000, 800, "flush")]
+    public async Task Isolated_Catalog_Negotiation_Rejects_Expired_Original_Window_Without_Timer_Dispatch(
+        int machineMs, int challengeMs, string boundary)
+    {
+        CatalogDeadlineScenario scenario = new(boundary, machineMs, challengeMs, isolated: true);
+        try
+        {
+            Task<DisplayCatalogAgreementBinding> negotiation = scenario.StartIsolatedNegotiation();
+            if (boundary != "binding")
+            {
+                await scenario.Stream.BoundaryEntered.Task.WaitAsync(Guard);
+                Assert.False(negotiation.IsCompleted);
+                Assert.False(scenario.Stream.OriginalBoundary.IsCompleted);
+                Assert.Equal(2, scenario.NegotiationChecks);
+                Assert.Equal(TimeSpan.FromMilliseconds(280).Ticks, scenario.Clock.MonotonicTimestamp);
+                Assert.Equal(boundary == "write" ? 0 : 1, scenario.Stream.FlushCalls);
+                scenario.ExpireWithoutTimerDispatch();
+                Assert.False(scenario.Stream.AcceptToken.IsCancellationRequested);
+                Assert.False(scenario.Stream.OriginalBoundary.IsCompleted);
+                scenario.Stream.ReleaseBoundary();
+            }
+            ControlClientAuthenticationException error = await Assert.ThrowsAsync<ControlClientAuthenticationException>(
+                () => negotiation.WaitAsync(Guard));
+            Assert.Equal("client-machine-timeout", error.Rejection);
+            Assert.Equal("远端认证等待超时，请重试。", error.DisplayMessage);
+            Assert.Null(error.InnerException);
+            Assert.Equal(TaskStatus.Faulted, negotiation.Status);
+            Assert.Equal(scenario.DeadlineAt, scenario.Clock.MonotonicTimestamp);
+            if (boundary == "binding")
+            {
+                Assert.Equal(4, scenario.NegotiationChecks);
+                Assert.Equal(scenario.DeadlineAt, scenario.BindingCheckSample);
+                Assert.Equal(TimeSpan.FromMilliseconds(280).Ticks, scenario.AcceptCheckSample);
+                Assert.True(scenario.ExpiredBeforeBindingCheck);
+            }
+            else
+            {
+                Assert.Equal(3, scenario.NegotiationChecks);
+                Assert.True(scenario.Stream.OriginalBoundary.IsCompletedSuccessfully);
+                Assert.Equal(scenario.DeadlineAt, scenario.Stream.BoundaryCompletedAt);
+            }
+            Assert.True(scenario.OfferPayloadDisposed);
+            Assert.Equal(new[] { "display_catalog_accept" }, scenario.Stream.WrittenTypes);
+            Assert.Equal(1, scenario.Stream.FlushCalls);
+            Assert.False(scenario.Stream.AcceptToken.IsCancellationRequested);
+            Assert.False(scenario.CallerCancellationRequested);
+            Assert.All(scenario.Stream.IoTokens, token => Assert.False(token.IsCancellationRequested));
+            Assert.Equal(0, scenario.Clock.TimerCallbacks);
+            // 反射直接调用既有协商边界，不声称覆盖完整认证或测得 binding 同步构造耗时。
+            // binding到期发生在第3次有效采样之后；单删第4次末检仍保留到期事件并返回对象。
+            // write/flush单删Accept后检查仍有binding检查；双删才应以过期返回对象触红。
+        }
+        finally
+        {
+            await scenario.FinishAsync();
+        }
     }
 
     [Theory(Timeout = 30_000)]
@@ -320,6 +493,317 @@ public sealed partial class ControlClientConnectorTests
         await scenario.AssertServerFinishedAsync();
     }
 
+    // 公开入口与孤立协商共用夹具；后者打开既有私有协商边界隔离外层末检。
+    private sealed class CatalogDeadlineScenario
+    {
+        private static readonly Type NegotiationStateMachine = typeof(ControlClientConnector)
+            .GetMethod("NegotiateCatalogAsync", BindingFlags.Static | BindingFlags.NonPublic)!
+            .GetCustomAttribute<AsyncStateMachineAttribute>()!.StateMachineType;
+        private readonly string _boundary;
+        private readonly bool _isolated;
+        private readonly TcpClient _tcp = new(AddressFamily.InterNetwork);
+        private readonly CancellationTokenSource _caller = new();
+        private readonly ConnectionTarget _target;
+        private readonly ControlClientAuthOptions _options;
+        private readonly byte[] _key = GoodKey.ToArray();
+        private readonly List<AuthenticatedControlSession> _constructed = new();
+        private Task<AuthenticatedControlSession>? _client;
+        private AuthenticatedControlSession? _returned;
+        private Task<DisplayCatalogAgreementBinding>? _negotiation;
+        private IDisposable? _bindingParent;
+        private IDisposable? _bindingWindow;
+        private readonly int _challengeMs;
+        internal ClientDeadlineClock Clock { get; } = new();
+        internal CatalogDeadlineStream Stream { get; }
+        internal TlsConnection Connection { get; }
+        internal bool OfferPayloadDisposed { get; private set; }
+        internal long OfferPayloadDisposedAt { get; private set; }
+        internal int NegotiationChecks { get; private set; }
+        internal long BindingCheckSample { get; private set; }
+        internal long AcceptCheckSample { get; private set; }
+        internal bool ExpiredBeforeBindingCheck { get; private set; }
+        internal long DeadlineAt { get; }
+        internal bool CallerCancellationRequested => _caller.IsCancellationRequested;
+
+        internal CatalogDeadlineScenario(string boundary, int machineMs, int challengeMs,
+            bool invalidOffer = false, bool isolated = false)
+        {
+            _boundary = boundary;
+            _isolated = isolated;
+            _challengeMs = challengeMs;
+            _options = ClientOptions with { MachineWindow = TimeSpan.FromMilliseconds(machineMs) };
+            // hello 原起点是0，challenge完整载荷在200ms收齐；子窗口不能偷换回父起点或协商结束。
+            DeadlineAt = TimeSpan.FromMilliseconds(Math.Min(machineMs, 200 + challengeMs)).Ticks;
+            byte[] pin = Enumerable.Range(1, 32).Select(value => (byte)value).ToArray();
+            Assert.True(ConnectionTarget.TryCreate(ServerDeviceId, IPAddress.Loopback, 12345,
+                Convert.ToHexString(pin), out ConnectionTarget? target));
+            _target = target!;
+            Assert.True(ConnectionIdentity.TryCreate(_target, pin, out ConnectionIdentity? identity));
+            Stream = new(Clock, boundary, pin, challengeMs, invalidOffer, isolated);
+            Connection = new(identity!, _tcp, Stream);
+            Clock.TimerDisposed = timer =>
+            {
+                if (!Stream.OfferPayloadCompleted || timer.Budget != TimeSpan.FromMilliseconds(450)) return;
+                Assert.False(OfferPayloadDisposed);
+                OfferPayloadDisposed = true;
+                OfferPayloadDisposedAt = Clock.MonotonicTimestamp;
+                Assert.Equal(TimeSpan.FromMilliseconds(280).Ticks, OfferPayloadDisposedAt);
+                if (_boundary == "offer") ExpireWithoutTimerDispatch();
+            };
+            Clock.TimestampSampling = () =>
+            {
+                if (!OfferPayloadDisposed) return;
+                // 取最近的客户端 async 状态机，排除 ReadBoundedFrameAsync 内部和调用方的兜底。
+                // 不依赖源码行号/IL偏移；这里只定位协商方法的4个直属 GetRemaining 调用。
+                Type? nearest = new StackTrace().GetFrames()
+                    .Select(frame => frame.GetMethod()?.DeclaringType)
+                    .FirstOrDefault(type => type?.DeclaringType == typeof(ControlClientConnector)
+                        && type.Name.StartsWith("<", StringComparison.Ordinal));
+                if (nearest != NegotiationStateMachine) return;
+                NegotiationChecks++;
+                if (_boundary == "binding" && NegotiationChecks == 4)
+                {
+                    Assert.True(ExpiredBeforeBindingCheck);
+                    Assert.Equal(DeadlineAt, Clock.MonotonicTimestamp);
+                    BindingCheckSample = Clock.MonotonicTimestamp;
+                }
+            };
+            Clock.TimestampObserved = sampled =>
+            {
+                if (_boundary == "binding" && NegotiationChecks == 3 && !ExpiredBeforeBindingCheck)
+                {
+                    // 第3次检查在线性化采样时仍有效；推进事件独立于待测的第4次检查。
+                    AcceptCheckSample = sampled;
+                    ExpireWithoutTimerDispatch();
+                    ExpiredBeforeBindingCheck = true;
+                }
+                return sampled;
+            };
+        }
+
+        internal Task<AuthenticatedControlSession> Start()
+        {
+            Assert.Null(_client);
+            ControlClientConnector connector = new((target, _, clock, token) =>
+            {
+                Assert.Same(_target, target);
+                Assert.Same(Clock, clock);
+                Assert.Equal(_caller.Token, token);
+                return Task.FromResult(Connection);
+            }, _constructed.Add);
+            _client = connector.ConnectAndAuthenticateAsync(_target, ClientDeviceId, ClientName, _key,
+                SessionPermission.Control, _options, Timeouts(prefixMs: 170, payloadMs: 450), Clock, _caller.Token);
+            return _client;
+        }
+
+        internal Task<DisplayCatalogAgreementBinding> StartIsolatedNegotiation()
+        {
+            Assert.True(_isolated);
+            Assert.Null(_negotiation);
+            Type windowType = typeof(ControlClientConnector).GetNestedType("ClientAuthWindow", BindingFlags.NonPublic)!;
+            // 白盒固定父起点0和已收齐challenge起点200ms；不重新实现GetRemaining或绑定构造。
+            _bindingParent = (IDisposable)Activator.CreateInstance(windowType,
+                Clock, _options.MachineWindow, _caller.Token, "client-machine-timeout", (long?)0, null)!;
+            Clock.Advance(TimeSpan.FromMilliseconds(200), fireTimers: false);
+            _bindingWindow = (IDisposable)Activator.CreateInstance(windowType,
+                Clock, TimeSpan.FromMilliseconds(_challengeMs), _caller.Token, "client-machine-timeout",
+                (long?)Clock.MonotonicTimestamp, _bindingParent)!;
+            MethodInfo negotiate = typeof(ControlClientConnector)
+                .GetMethod("NegotiateCatalogAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
+            _negotiation = (Task<DisplayCatalogAgreementBinding>)negotiate.Invoke(null,
+                [Connection, new FrameReader(Stream), Stream.SessionId, _bindingWindow,
+                    Timeouts(prefixMs: 170, payloadMs: 450)])!;
+            return _negotiation;
+        }
+
+        internal void ExpireWithoutTimerDispatch()
+        {
+            Assert.True(Clock.MonotonicTimestamp < DeadlineAt);
+            Clock.Advance(TimeSpan.FromTicks(DeadlineAt - Clock.MonotonicTimestamp), fireTimers: false);
+            Assert.Equal(0, Clock.TimerCallbacks);
+        }
+
+        internal async Task AssertRejectedAsync(Task<AuthenticatedControlSession> client)
+        {
+            Assert.Same(_client, client);
+            ControlClientAuthenticationException error = await Assert.ThrowsAsync<ControlClientAuthenticationException>(async () =>
+            {
+                _returned = await client.WaitAsync(Guard);
+            });
+            Assert.Equal("client-machine-timeout", error.Rejection);
+            Assert.Equal("远端认证等待超时，请重试。", error.DisplayMessage);
+            Assert.Equal(error.DisplayMessage, error.Message);
+            Assert.Null(error.InnerException);
+            Assert.Equal(TaskStatus.Faulted, client.Status);
+            Assert.Null(_returned);
+            Assert.Empty(_constructed);
+            Assert.DoesNotContain("auth_response", Stream.WrittenTypes);
+            Assert.True(Stream.OfferPayloadCompleted);
+            Assert.True(OfferPayloadDisposed);
+            Assert.Equal(DeadlineAt, Clock.MonotonicTimestamp);
+            Assert.False(_caller.IsCancellationRequested);
+            Assert.All(Stream.IoTokens, token => Assert.False(token.IsCancellationRequested));
+            Assert.Equal(0, Clock.TimerCallbacks);
+            Assert.Equal(0, Clock.ActiveTimerCount);
+            Assert.True(Connection.IsCloseRequested);
+            Assert.Equal(1, Stream.DisposeCalls);
+            Assert.Empty(Connection.CleanupErrors);
+            Assert.Equal(GoodKey, _key);
+        }
+
+        internal async Task FinishAsync()
+        {
+            // 断言失败也先放行原IO任务，再观察公开入口任务，最后关闭并join所有可能交付的会话。
+            Stream.ReleaseBoundary();
+            _caller.Cancel();
+            Clock.TimestampSampling = null;
+            Clock.TimestampObserved = null;
+            Clock.TimerDisposed = null;
+            try
+            {
+                await ObserveCatalogTaskAsync(Stream.OriginalBoundary).WaitAsync(Guard);
+                if (_client is not null) await ObserveCatalogTaskAsync(_client).WaitAsync(Guard);
+                if (_negotiation is not null) await ObserveCatalogTaskAsync(_negotiation).WaitAsync(Guard);
+            }
+            finally
+            {
+                _bindingWindow?.Dispose();
+                _bindingParent?.Dispose();
+                try
+                {
+                    foreach (AuthenticatedControlSession session in _constructed)
+                        await session.CloseAndJoinAsync().WaitAsync(Guard);
+                    if (_client is { IsCompletedSuccessfully: true })
+                        await _client.Result.CloseAndJoinAsync().WaitAsync(Guard);
+                }
+                finally
+                {
+                    try
+                    {
+                        await Connection.CloseAsync().WaitAsync(Guard);
+                        Assert.Equal(0, Clock.ActiveTimerCount);
+                    }
+                    finally { _tcp.Dispose(); _caller.Dispose(); }
+                }
+            }
+        }
+
+        private static async Task ObserveCatalogTaskAsync(Task task)
+        {
+            try { await task.ConfigureAwait(false); }
+            catch (Exception) { /* 只观察生产/原IO故障；WaitAsync 的 Guard 超时由调用方保留。 */ }
+        }
+    }
+
+    private sealed class CatalogDeadlineStream : SslStream
+    {
+        private readonly ClientDeadlineClock _clock;
+        private readonly string _boundary;
+        private readonly Guid _sessionId = Guid.NewGuid();
+        internal Guid SessionId => _sessionId;
+        private readonly Queue<(string Kind, byte[] Wire)> _input = new();
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _offset;
+        internal TaskCompletionSource BoundaryEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task OriginalBoundary { get; private set; } = Task.CompletedTask;
+        internal List<string> WrittenTypes { get; } = new();
+        internal List<CancellationToken> IoTokens { get; } = new();
+        internal CancellationToken AcceptToken { get; private set; }
+        internal bool OfferPayloadCompleted { get; private set; }
+        internal long BoundaryCompletedAt { get; private set; }
+        internal int FlushCalls { get; private set; }
+        internal int DisposeCalls { get; private set; }
+
+        internal CatalogDeadlineStream(ClientDeadlineClock clock, string boundary, byte[] pin,
+            int challengeMs, bool invalidOffer, bool isolated) : base(new MemoryStream(), leaveInnerStreamOpen: false)
+        {
+            _clock = clock;
+            _boundary = boundary;
+            if (!isolated)
+                Enqueue("challenge", new AuthChallengeV2(_sessionId, ServerDeviceId, new byte[32], pin, challengeMs).Serialize());
+            Enqueue("offer", invalidOffer ? "{"u8.ToArray() : DisplayCatalogAgreementFrame.SerializeOffer(_sessionId));
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IoTokens.Add(cancellationToken);
+            if (_input.Count == 0) return ValueTask.FromResult(0);
+            var frame = _input.Peek();
+            int count = Math.Min(buffer.Length, frame.Wire.Length - _offset);
+            frame.Wire.AsMemory(_offset, count).CopyTo(buffer);
+            _offset += count;
+            if (_offset == frame.Wire.Length)
+            {
+                _clock.Advance(TimeSpan.FromMilliseconds(frame.Kind == "challenge" ? 200 : 80), fireTimers: false);
+                if (frame.Kind == "offer") OfferPayloadCompleted = true;
+                _input.Dequeue();
+                _offset = 0;
+            }
+            return ValueTask.FromResult(count);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IoTokens.Add(cancellationToken);
+            Assert.Equal((uint)(buffer.Length - 4), BinaryPrimitives.ReadUInt32BigEndian(buffer.Span));
+            using JsonDocument document = JsonDocument.Parse(buffer[4..]);
+            string type = document.RootElement.GetProperty("type").GetString()!;
+            WrittenTypes.Add(type);
+            if (type == "display_catalog_accept")
+            {
+                Assert.True(OfferPayloadCompleted);
+                Assert.True(DisplayCatalogAgreementFrame.TryParseAccept(buffer.Span[4..], _sessionId, out _, out _));
+                AcceptToken = cancellationToken;
+                if (_boundary == "write") return new ValueTask(PauseBoundary());
+            }
+            return ValueTask.CompletedTask;
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IoTokens.Add(cancellationToken);
+            FlushCalls++;
+            if (WrittenTypes[^1] == "display_catalog_accept" && _boundary == "flush")
+            {
+                Assert.Equal(AcceptToken, cancellationToken);
+                return PauseBoundary();
+            }
+            return Task.CompletedTask;
+        }
+
+        private Task PauseBoundary()
+        {
+            Assert.False(BoundaryEntered.Task.IsCompleted);
+            OriginalBoundary = CompleteBoundaryAsync();
+            BoundaryEntered.TrySetResult();
+            return OriginalBoundary;
+        }
+
+        private async Task CompleteBoundaryAsync()
+        {
+            await _release.Task.ConfigureAwait(false);
+            BoundaryCompletedAt = _clock.MonotonicTimestamp;
+        }
+
+        private void Enqueue(string kind, byte[] payload)
+        {
+            byte[] wire = new byte[4 + payload.Length];
+            BinaryPrimitives.WriteUInt32BigEndian(wire, (uint)payload.Length);
+            payload.CopyTo(wire, 4);
+            _input.Enqueue((kind, wire));
+        }
+
+        internal void ReleaseBoundary() => _release.TrySetResult();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) DisposeCalls++;
+            base.Dispose(disposing);
+        }
+    }
+
     private enum SuccessClockCheckpoint
     {
         SuccessParsed = 1,
@@ -337,10 +821,12 @@ public sealed partial class ControlClientConnectorTests
         private TaskCompletionSource _timerCreated = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Action<ClientTimer>? _timerDisposed;
         private Func<long, long>? _timestampObserved;
+        private Action? _timestampSampling;
         private int _timerCallbacks;
 
         public Action<ClientTimer>? TimerDisposed { set => Volatile.Write(ref _timerDisposed, value); }
         public Func<long, long>? TimestampObserved { set => Volatile.Write(ref _timestampObserved, value); }
+        public Action? TimestampSampling { set => Volatile.Write(ref _timestampSampling, value); }
         public int TimerCallbacks => Volatile.Read(ref _timerCallbacks);
         public int ActiveTimerCount => _inner.TimerCount;
         public long MonotonicTimestamp => _inner.GetTimestamp();
@@ -348,6 +834,7 @@ public sealed partial class ControlClientConnectorTests
         public override DateTimeOffset GetUtcNow() => _inner.GetUtcNow();
         public override long GetTimestamp()
         {
+            Volatile.Read(ref _timestampSampling)?.Invoke();
             long sampled = _inner.GetTimestamp();
             return Volatile.Read(ref _timestampObserved)?.Invoke(sampled) ?? sampled;
         }

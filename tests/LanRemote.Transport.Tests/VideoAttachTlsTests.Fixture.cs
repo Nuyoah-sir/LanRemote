@@ -118,6 +118,24 @@ public sealed partial class VideoAttachTlsTests
         }
     }
 
+    private static async Task AssertStrictClosedWithoutDataAsync(Stream stream)
+    {
+        using CancellationTokenSource guard = new(Guard);
+        try
+        {
+            Assert.Equal(0, await stream.ReadAsync(new byte[1], guard.Token));
+        }
+        catch (IOException error) when (IsRecognizedSocketClose(error))
+        {
+            // 仅接受有序 EOF 或已识别的 RST/abort；其它 IO 故障不能作为关闭证据。
+            guard.Token.ThrowIfCancellationRequested();
+        }
+    }
+
+    private static bool IsRecognizedSocketClose(IOException error) =>
+        error.GetBaseException() is SocketException socket &&
+        socket.SocketErrorCode is SocketError.ConnectionReset or SocketError.ConnectionAborted or SocketError.Shutdown;
+
     private static async Task AssertRejectedAsync(VideoPeer video, VideoAttachStatus status)
     {
         Assert.Null(await video.Server.Finished.Task.WaitAsync(Guard));
@@ -158,7 +176,7 @@ public sealed partial class VideoAttachTlsTests
         internal AcceptedConnection Connection { get; } = connection;
         internal FirstFrameRouter Router { get; } = router;
         internal CancellationToken HandlerToken { get; } = handlerToken;
-        internal ControlPreAuthResult? LegacyResult { get; set; }
+        internal ControlPreAuthResult? ControlOnlyResult { get; set; }
         internal TaskCompletionSource<Exception?> Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -171,16 +189,16 @@ public sealed partial class VideoAttachTlsTests
         private readonly ConcurrentQueue<ObservedConnection> _servers = new();
         private readonly List<Task<TlsConnection>> _videoClients = [];
         private readonly ApproveGate _approval = new();
-        private readonly bool _legacyVideo;
+        private readonly bool _controlOnlyVideo;
         private Task<AuthenticatedControlSession>? _controlClient;
         private int _connectionNumber;
 
         internal TlsScenario(
             int maxConnectionsPerAddress = 2, bool ignoreCancellation = false,
-            bool secondFrame = false, Exception? cancellationFailure = null, bool legacyVideo = false,
-            OperationCanceledException? sourceFailure = null)
+            bool secondFrame = false, Exception? cancellationFailure = null, bool controlOnlyVideo = false,
+            OperationCanceledException? sourceFailure = null, bool useProductionRouter = false)
         {
-            _legacyVideo = legacyVideo;
+            _controlOnlyVideo = controlOnlyVideo;
             Source = new TestFrameSource(ignoreCancellation, secondFrame, cancellationFailure, sourceFailure);
             Context = new ControlAuthContext
             {
@@ -210,13 +228,17 @@ public sealed partial class VideoAttachTlsTests
                 Assert.True(ConnectionTarget.TryCreate(ServerDeviceId, IPAddress.Loopback, port,
                     TestCertificateFactory.Fingerprint(_certificate), out ConnectionTarget? target));
                 Target = target!;
-                Host = new TransportHost(new[] { IPAddress.Loopback }, new LoopbackOnlyPolicy(), _certificate,
-                    HandleAsync, new TransportHostOptions
-                    {
-                        Port = port,
-                        Timeouts = Timeouts,
-                        MaxConnectionsPerAddress = maxConnectionsPerAddress,
-                    });
+                TransportHostOptions hostOptions = new()
+                {
+                    Port = port,
+                    Timeouts = Timeouts,
+                    MaxConnectionsPerAddress = maxConnectionsPerAddress,
+                };
+                Host = useProductionRouter
+                    ? TransportHost.CreateWithChannelRouter(new[] { IPAddress.Loopback },
+                        new LoopbackOnlyPolicy(), _certificate, Context, Source, options: hostOptions)
+                    : new TransportHost(new[] { IPAddress.Loopback }, new LoopbackOnlyPolicy(), _certificate,
+                        HandleAsync, hostOptions);
             }
             catch
             {
@@ -253,8 +275,8 @@ public sealed partial class VideoAttachTlsTests
                 Assert.True(connection.Stream.IsAuthenticated);
                 Assert.True(connection.Stream.IsEncrypted);
                 Assert.True(connection.HasCloseAuthority);
-                if (_legacyVideo && number > 1)
-                    observed.LegacyResult = await new ControlPreAuthSession().RunAsync(connection, Timeouts, ct);
+                if (_controlOnlyVideo && number > 1)
+                    observed.ControlOnlyResult = await new ControlPreAuthSession().RunAsync(connection, Timeouts, ct);
                 else
                     await observed.Router.RunAsync(connection, ct);
             }
@@ -305,18 +327,24 @@ public sealed partial class VideoAttachTlsTests
                 }, Timeouts, cancellationToken: guard.Token);
         }
 
-        internal async Task<VideoPeer> OpenVideoAsync()
+        internal async Task<TlsConnection> OpenRawTlsAsync()
         {
             Task<TlsConnection> connecting = ConnectVideoAsync();
             _videoClients.Add(connecting);
             TlsConnection client = await connecting.WaitAsync(Guard);
-            ObservedConnection server = await NextServerAsync();
-            Assert.NotNull(client.LocalEndPoint);
-            Assert.Equal(client.LocalEndPoint.Port, server.Connection.Security.RemotePort);
             Assert.True(client.Identity.PinsMatch);
             Assert.Equal(Target.ExpectedCertSha256.ToArray(), client.Identity.PresentedCertSha256.ToArray());
             Assert.True(client.Stream.IsAuthenticated);
             Assert.True(client.Stream.IsEncrypted);
+            return client;
+        }
+
+        internal async Task<VideoPeer> OpenVideoAsync()
+        {
+            TlsConnection client = await OpenRawTlsAsync();
+            ObservedConnection server = await NextServerAsync();
+            Assert.NotNull(client.LocalEndPoint);
+            Assert.Equal(client.LocalEndPoint.Port, server.Connection.Security.RemotePort);
             Assert.Equal(client.NegotiatedProtocol, server.Connection.Stream.SslProtocol);
             Assert.NotNull(server.Connection.Stream.LocalCertificate);
             Assert.Equal(client.Identity.PresentedCertSha256.ToArray(),
@@ -378,6 +406,18 @@ public sealed partial class VideoAttachTlsTests
             Assert.Equal(SessionPermission.Control, summary.GrantedPermission);
             Assert.Equal(SessionPermission.Control, control.GrantedPermission);
             Assert.False(ControlServer.Finished.Task.IsCompleted);
+        }
+
+        internal void AssertNoControlOrVideoActivity()
+        {
+            Assert.Equal(0, _approval.RequestCount);
+            Assert.Null(_approval.Request);
+            Assert.Equal(0, Context.PendingApprovalLimiter.GlobalInUse);
+            Assert.Equal(0, Context.SessionRegistry.ActiveSessionCount);
+            Assert.Empty(Context.SessionRegistry.Snapshot());
+            Assert.Equal(0, Source.ReadCount);
+            Assert.Empty(Source.SessionIds);
+            Assert.Empty(Source.Owners);
         }
 
         internal Task WaitForConnectionCountAsync(int count) => WaitForConditionAsync(() =>

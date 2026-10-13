@@ -27,8 +27,14 @@ public sealed class ControlPreAuthHandoff
     private readonly SslStream _stream;
     private int _begun;
 
-    internal ControlPreAuthHandoff(SslStream stream, ConnectionSecurityContext security)
+    internal ControlPreAuthHandoff(SslStream stream, ConnectionSecurityContext security,
+        ReadOnlySpan<byte> helloPayload)
     {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(security);
+        // 显式消费本连接已读首帧；没有默认 V1 构造路径，不把裸布尔值当作接受证据。
+        if (ControlHelloV2.Parse(helloPayload) != WireV2ParseStatus.AcceptedV2)
+            throw new ArgumentException("只有完整有效的 Control Hello2 才能移交认证。", nameof(helloPayload));
         _stream = stream;
         Security = security;
     }

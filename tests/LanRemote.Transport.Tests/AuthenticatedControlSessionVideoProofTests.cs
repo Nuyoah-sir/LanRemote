@@ -339,7 +339,8 @@ public sealed class AuthenticatedControlSessionVideoProofTests
             new SslStream(transport ?? new MemoryStream(), leaveInnerStreamOpen: false));
         return new AuthenticatedControlSession(connection, SessionPermission.Control,
             sessionId ?? SessionId, "ABCDEF", token ?? Convert.FromHexString(TokenHex), 15_000,
-            TimeProvider.System.GetTimestamp(), TimeProvider.System);
+            TimeProvider.System.GetTimestamp(), TimeProvider.System,
+            V2AgreementFixture.Create(sessionId ?? SessionId));
     }
 
     // TEST-ONLY：只用于受控锁边界和 TLS 释放时的锁状态观测。

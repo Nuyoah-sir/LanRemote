@@ -1112,7 +1112,8 @@ public sealed class ClientVideoAttachTests
         {
             Video = new Endpoint(Identity(deviation), [.. Framed(AckJson), .. VideoFrameTestData.Wire()]);
             Parent = new AuthenticatedControlSession(Control.Connection, SessionPermission.Control,
-                new Guid(SessionText), "ABCDEF", Convert.FromHexString(TokenHex), 15_000, 0, Clock);
+                new Guid(SessionText), "ABCDEF", Convert.FromHexString(TokenHex), 15_000, 0, Clock,
+                V2AgreementFixture.Create(new Guid(SessionText)));
             if (delivered) Parent.CommitDelivery();
         }
 

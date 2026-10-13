@@ -4,7 +4,7 @@ using LanRemote.Transport.Auth;
 
 namespace LanRemote.Transport;
 
-/// <summary>新版专用目录 Offer/Accept 的纯载荷合同，尚未接入真实 Control。</summary>
+/// <summary>新版 Control 在 proof 前消费的目录 Offer/Accept 纯载荷合同。</summary>
 /// <remarks>
 /// applicationProfile=2 是新版应用合同，catalogSchema=1 是目录载荷版式；都不是 TLS/LRVF 版本。
 /// B 政策只支持新版双方，不接受旧 profile 或静默降级；现行 hello/auth/monitor 不由此类改动。
