@@ -64,25 +64,50 @@ internal sealed class FirstFrameRouter
         ControlAuthSession? auth = null;
         VideoAttachLease? attachedLease = null;
         List<Exception> errors = new(5);
-        try
+        TaskCompletionSource closeRequired = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // 在进入原主体同步前缀之前发布固定监督；不能等不合作的读/写/审批退出才关线。
+        // 只有监督移到 worker，RunCore/Auth 仍从原调用栈直接进入，不新增 reader。
+        Task closeSupervisor = Task.Run(async () =>
         {
-            // 主体的早退或故障都不能跳过收尾；各项 join 只收集错误，最后统一传播。
-            await JoinAsync(RunCoreAsync(), errors).ConfigureAwait(false);
-            // 关闭请求不是 join；先解堵原流，再等待原审批读和决定，绝不新增 Control reader。
+            await closeRequired.Task.ConfigureAwait(false);
+            Task? original = null;
             try
             {
-                await JoinAsync(connection.CloseAsync(), errors).ConfigureAwait(false);
+                original = connection.CloseAsync();
+                await original.ConfigureAwait(false);
             }
             catch (Exception error)
             {
-                // 若授权关闭在返回任务前同步失败，不可宣称物理关闭已 join。
+                // 保留取得的原关闭任务错误树；同步调用失败不伪称取得或完成物理关闭。
+                ExceptionDispatchInfo.Capture(OriginalFailure(original, error)).Throw();
+            }
+        });
+        CancellationTokenRegistration stopRegistration = default;
+        try
+        {
+            try
+            {
+                // 回调只通知，不执行 close/取消其它令牌/等待任何任务。
+                stopRegistration = cancellationToken.Register(
+                    static state => ((TaskCompletionSource)state!).TrySetResult(), closeRequired);
+                await JoinAsync(RunCoreAsync(), errors).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
                 AddError(errors, error);
             }
+            finally
+            {
+                // 包含正常结束、早退和故障；关闭通知不是原关闭任务的 join。
+                closeRequired.TrySetResult();
+            }
+            await JoinAsync(closeSupervisor, errors).ConfigureAwait(false);
             if (auth is not null)
                 await JoinAsync(auth.JoinOwnedOperationsAsync(), errors).ConfigureAwait(false);
         }
         finally
         {
+            stopRegistration.Dispose();
             // 父 Control 只能在本视频路由和已启动的 Host 原关闭任务收尾后解除子连接预约。
             attachedLease?.Complete();
         }
