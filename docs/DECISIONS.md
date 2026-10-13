@@ -1790,3 +1790,13 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **测试取证合同。** 正常协调阶段是WhenAny，只证明原read被continuation直接await；进入失败收尾后才证明原timer dispose贯穿monitor及父join。Reached通知可能发生在async方法返回/原Task句柄赋值之前，夹具用独立TaskCompletionSource<Task>发布确切原Task，通知不替代join。原红灯保留，不增加Guard或认可WhenAny作为完整等待。真实TLS目录正例由测试侧Host显式写入，不能代表产品Host已发送。
 
 **范围。** 未接产品Host发送、公开目录UI、远端切屏、每会话画质或M7；不出M6产品包、不重复M4/M5人工验收，不改网/防护/权限或旧ZIP。当前片恢复定向125PASS、双配置各5279PASS、四Rebuild零警告错误；四有效变异9/1/3/3断言红后原字节恢复。相对5246身份+35/-2，385源冻结与三份证据核验通过。截止首次Guard失败保留，新观察点在错误发布后由Assert.Null明确裁决；不把Guard超时算有效kill。详HANDOFF§19.44，不继承§19.43的5246冻结。
+
+### ADR-089 — Host单次目录发送底座及原操作关停边界
+
+**2026-10-13，独立internal底座，未live接线。** 只新增`HostDisplayCatalogSendAttempt(Stream, Func<ValueTask<DisplayCatalogFrame>>, TimeProvider, TimeSpan)`及测试，不改Auth/Router/App/GDI/public factory/holding。现有Router先await Auth再close，因此不能把不合作source/write直接await插入Auth而宣称deadline可解堵；产品接线另片建立关闭监督后再消费本底座。
+
+**所有权。** 冷构造；Start锁内发布固定协调Task，worker跨同gate后才调用外部；另一个固定operation worker隔离来源/Write/Flush的同步前缀，复用原ControlFrameBudget worker。不创建CTS、不给source传取消令牌；借用流的Write/Flush均用CancellationToken.None，不read/close/dispose、不重试。AbortRequired仅要求将来外层先请求Host原close并保有原关闭Task；底座仍完整await source/write/flush确切原Task、operation和原预算worker。未知原同步前缀或AsTask未交Task不能伪造已退出；未知写借用不清零。OriginalOperationsFinished与AllOwnedRootsReleased分开，timer创建异常/null未交付、释放未知/失败都不能宣称全部根释放。原Task.Exception保留兄弟、重复引用与嵌套，不Flatten；Stop不吞迟到自发取消或原错误。
+
+**帧及截止。** 唯一顺序writer由外层保证，内部只取得一次已严格验证的不可变DisplayCatalogFrame，序列化为有界256KiB host_status protocol1，四字节BE前缀，一次Write及一次Flush；不授予认证或选屏能力。source之前本地观察锚点计入来源、序列化、IO及原timer释放；每阶段与最终接受均复核固定频率/Int128精确>=截止，不重置预算。sampleGate覆盖完整inner频率前检→GetTimestamp→频率后检→共享高水位发布，不只锁高水位变量；owner gate不嵌套sampleGate，Stop不调用clock/外部回调。坏clock永久阻塞时不能保证及时截止通知或有限join。门禁与锁外调用非物理原子，已越过门禁的调用可能在Stop返回后才进入。Sent仅为历史接受，不证明对端收到、未来权限或物理到达；Rejected无法回滚已写字节。
+
+**本片测试与证据口径。** 受控source/stream/clock/timer，不是新产品Host的回环TLS或双机实屏。新增65例包括原句柄发布、同步前缀/不合作原Task的Stop/截止通知与join、错误树、未知借用、原timer释放、精确截止、跨worker高水位以及独立160字节literal线格式和256条/128名称/最大数字组合。未穷举AsTask阻塞细分、强制双worker同时争锁、timer.Change阻塞/失败和全部错误笛卡尔积。首轮join变异6红但自定义文案无Assert.令固定runner分类exit2，原证据保留；仅补断言文案标识后基线65绿。四项v2变异分别6/1/3/1断言红并原字节恢复，恢复682绿；高水位红是ObservationError归因缺失，既有预算可能仍拒绝，不能称去掉一项即错误Sent。完整回归已实跑四Rebuild零警告错误、双配置各5344/0FAIL/0SKIP、六子命令及外层wait0；387源快照，本片最终独立核验/提交收据以HANDOFF§19.45为准，旧5279不外推；不出M6产品包、不启动M7、不重验M4/M5，不改网/防护/权限或旧ZIP。
