@@ -115,7 +115,8 @@ public sealed partial class AuthenticatedControlSession
                 && (_controlMonitor is null || _controlMonitor.Worker is { IsCompleted: true })
                 && (video?.OriginalOperationsFinished ?? true);
             return new ClientDisposalEvidence(operationsFinished, operationsFinished
-                && _ownedConnection.AllOwnedRootsReleased && (video?.AllOwnedRootsReleased ?? true));
+                && _ownedConnection.AllOwnedRootsReleased && (video?.AllOwnedRootsReleased ?? true)
+                && (_controlMonitor?.AllOwnedCatalogRootsReleased ?? true));
         }
     }
 

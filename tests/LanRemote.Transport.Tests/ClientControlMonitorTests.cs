@@ -15,7 +15,7 @@ using Child = LanRemote.Transport.AuthenticatedControlSession.ClientVideoLifetim
 
 namespace LanRemote.Transport.Tests;
 
-public sealed class ClientControlMonitorTests
+public sealed partial class ClientControlMonitorTests
 {
     private static readonly TimeSpan Guard = TimeSpan.FromSeconds(10);
     private const int TestTimeout = 60_000;
@@ -1457,6 +1457,7 @@ public sealed class ClientControlMonitorTests
     {
         private Action? _timestamp, _frequency;
         private int _reads, _timers;
+        internal Action? LastTimerFire;
         internal long Timestamp;
         internal bool RejectSampling;
         internal Func<Task>? TimerDispose;
@@ -1488,6 +1489,7 @@ public sealed class ClientControlMonitorTests
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             Interlocked.Increment(ref _timers);
+            LastTimerFire = () => callback(state);
             return new InertTimer(TimerDispose);
         }
         private sealed class InertTimer(Func<Task>? dispose) : ITimer

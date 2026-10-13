@@ -106,7 +106,7 @@ public sealed partial class ClientVideoAttachTlsTests
     [Theory]
     [InlineData((byte)0)]
     [InlineData((byte)255)]
-    public async Task Monitored_One_Extra_Control_Byte_Has_Exact_Protocol_Reason(byte value)
+    public async Task Monitored_Invalid_Control_Length_Has_Exact_Protocol_Reason(byte value)
     {
         await using TlsScenario f = new(Reply.Combined);
         await f.OpenControlAsync();
@@ -115,17 +115,26 @@ public sealed partial class ClientVideoAttachTlsTests
         AssertGoldenFrame(frame);
         Task monitor = PendingControlMonitor(f);
 
-        // 只写一个应用字节，不假设 TLS record/TCP 分段；读长与无循环由组件闸门测试裁决。
+        // 0现在是合法目录长度首字节；补齐三字节形成非法零长度，不能把半帧当即时非法。
+        // 0xFF仍可从首字节证明超限。不改变Guard或生产预算，不假设TLS/TCP分段。
         await f.SendServerControlByteAsync(value).WaitAsync(Guard);
+        if (value == 0)
+            for (int i = 0; i < 3; i++) await f.SendServerControlByteAsync(0).WaitAsync(Guard);
         await monitor.WaitAsync(Guard);
-        AssertUnexpectedControlData(f, monitor);
+        if (value != 0) AssertUnexpectedControlData(f, monitor);
+        else
+        {
+            Assert.Equal("Faulted", f.Control.ControlMonitorState!.End.ToString());
+            Assert.Equal("length-zero", Assert.IsType<FrameProtocolException>(f.Control.ControlMonitorState.Error).Reason);
+            Assert.False(f.Control.ControlMonitorState.LocalStopObservedBeforeCompletion);
+        }
         await f.PeerClosed.Task.WaitAsync(Guard);
         await f.JoinServerConnectionsAsync();
         AssertMonitorRevoked(f, child);
         await f.Own(f.Control.CloseAndJoinAsync()).WaitAsync(Guard);
         await f.Own(child.StopAndJoinAsync()).WaitAsync(Guard);
         Assert.Empty(child.LifetimeErrors);
-        Assert.Equal("control-unexpected-data",
+        Assert.Equal(value == 0 ? "length-zero" : "control-unexpected-data",
             Assert.IsType<FrameProtocolException>(Assert.Single(f.Control.LifetimeErrors)).Reason);
         Assert.Equal(0, f.Clock.TimerCount);
     }
@@ -215,6 +224,34 @@ public sealed partial class ClientVideoAttachTlsTests
         AssertMonitorRevoked(f);
         await f.JoinServerConnectionsAsync();
         await f.Own(f.Control.CloseAndJoinAsync()).WaitAsync(Guard);
+    }
+
+    [Fact]
+    public async Task Monitored_Real_Tls_Catalog_Is_Published_While_Independent_Video_Remains_Usable()
+    {
+        await using TlsScenario f = new(Reply.Combined);
+        await f.OpenControlAsync();
+        var child = await f.AttachMonitored().WaitAsync(Guard);
+        Task monitor = PendingControlMonitor(f);
+        byte[] payload = new DisplayCatalogFrame(0, 0,
+            [new DisplayInfo(new DisplayId(3), "远端副屏名称仅纯文本", -1280, 0, 1280, 720, true)]).Serialize();
+        // 明示测试侧Host写入；不是产品Host已接GDI目录发布的证明。
+        await f.SendServerCatalogForTestingAsync(payload).WaitAsync(Guard);
+        await WaitUntilAsync(() => f.Control.LatestDisplayCatalog is not null);
+        var catalog = Assert.IsType<DisplayCatalogFrame>(f.Control.LatestDisplayCatalog);
+        Assert.Equal(3, Assert.Single(catalog.Displays).Id.Value);
+        Assert.Same(monitor, PendingControlMonitor(f));
+        f.AssertControlAlive();
+        using EncodedFrame? frame = await f.Read(child).WaitAsync(Guard);
+        AssertGoldenFrame(frame);
+        await f.AssertDistinctConnectionsAsync();
+        await f.CloseServerControlAsync().WaitAsync(Guard);
+        await monitor.WaitAsync(Guard);
+        Assert.Null(f.Control.LatestDisplayCatalog);
+        AssertMonitorRevoked(f, child);
+        await f.Own(f.Control.CloseAndJoinAsync()).WaitAsync(Guard);
+        await f.JoinServerConnectionsAsync();
+        Assert.Equal(0, f.Clock.TimerCount);
     }
 
     private static async Task WaitForRealControlReadAsync(SslStream stream)

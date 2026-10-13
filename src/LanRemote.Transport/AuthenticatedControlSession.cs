@@ -169,6 +169,7 @@ public sealed partial class AuthenticatedControlSession : IDisposable, IAsyncDis
             if (connection is not null)
             {
                 _controlMonitor?.ObserveLocalStopUnderGate();
+                _latestDisplayCatalog = null;
                 CryptographicOperations.ZeroMemory(_sessionToken);
                 // 仅逻辑失效，不能在认证 owner 撤销路径调度网络或任意取消回调。
                 _videoLifetime?.MarkStoppedUnderGate();

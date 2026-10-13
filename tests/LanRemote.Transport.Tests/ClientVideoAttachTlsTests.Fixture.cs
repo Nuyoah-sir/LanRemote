@@ -216,6 +216,10 @@ public sealed partial class ClientVideoAttachTlsTests
         internal Task SendServerControlByteAsync(byte value) => Own(
             _controlServer.Connection.Stream.WriteAsync(new byte[] { value }, CancellationToken.None).AsTask());
 
+        internal Task SendServerCatalogForTestingAsync(byte[] payload) => Own(
+            FrameWriter.WriteFrameAsync(_controlServer.Connection.Stream, payload,
+                DisplayCatalogFrame.MaxPayloadByteLength, CancellationToken.None));
+
         internal async Task JoinServerConnectionsAsync()
         {
             // 这里只等待事实，不请求关闭，更不能对已经断开的 Control 调用 AssertControlAlive。

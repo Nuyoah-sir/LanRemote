@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 
 namespace LanRemote.Transport;
 
-/// <summary>独立单次首读/接续/预算组合，尚未接入真实 Control。</summary>
+/// <summary>单次首读/接续/预算组合；外部首字节入口供认证后Client目录接收使用。</summary>
 /// <remarks>
 /// 借用流且要求唯一读者；外层负责认证/权限和在 AbortRequired 后锁外关闭流、持有关闭原任务。
 /// Start 的同一结果 Task 向指定唯一消费者移交数组；重复 await 是同一引用，不是新的所有权。

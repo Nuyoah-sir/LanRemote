@@ -4,7 +4,7 @@ using LanRemote.Core.Models;
 
 namespace LanRemote.Transport;
 
-/// <summary>M6 独立 host_status 显示目录载荷；未接认证会话、网络读取或远端切屏。</summary>
+/// <summary>M6 host_status 显示目录载荷；已供认证后Client唯一读者消费，未接Host发送或远端切屏。</summary>
 /// <remarks>
 /// 仅传本次目录的原始索引和几何，不能作为持久身份或采集授权。
 /// seq/timestampMs 是消息元数据，不是拓扑世代、反重放或帧坐标关联证明。
