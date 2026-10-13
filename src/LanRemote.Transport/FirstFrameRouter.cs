@@ -51,6 +51,7 @@ internal sealed class FirstFrameRouter
     internal string? Rejection { get; private set; }
     internal VideoAttachStatus? AttachStatus { get; private set; }
     internal int AttachAttempts { get; private set; }
+    internal ControlAuthSession? CatalogAuthSession { get; private set; }
 
     internal async Task RunAsync(AcceptedConnection connection, CancellationToken cancellationToken)
     {
@@ -103,7 +104,10 @@ internal sealed class FirstFrameRouter
             }
             await JoinAsync(closeSupervisor, errors).ConfigureAwait(false);
             if (auth is not null)
+            {
                 await JoinAsync(auth.JoinOwnedOperationsAsync(), errors).ConfigureAwait(false);
+                auth.AddCatalogErrors(errors);
+            }
         }
         finally
         {
@@ -127,7 +131,9 @@ internal sealed class FirstFrameRouter
                     // 首帧已消费；不能再调用 public pre-auth 重读，也不能把信封令牌泄漏到 holding。
                     ControlPreAuthHandoff handoff = new(connection.Stream, connection.Security, payload);
                     CheckEnvelope(enteredAt, cancellationToken);
-                    auth = handoff.BeginAuthentication(_context, _timeouts);
+                    auth = CatalogAuthSession = handoff.BeginAuthentication(_context, _timeouts);
+                    if (_context.DisplayCatalogSend is { } catalog)
+                        auth.BindCatalogLifetime(catalog, closeRequired);
                     await auth.RunAsync(cancellationToken).ConfigureAwait(false);
                     return;
                 }

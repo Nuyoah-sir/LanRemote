@@ -98,6 +98,12 @@ public sealed class ControlAuthSession
     private readonly AuthChallengeV2 _challenge;
     private OwnedControlActivityRead? _pendingRead;
     private Task<LocalApprovalDecision>? _approvalDecision;
+    private readonly object _catalogBindingGate = new();
+    private HostDisplayCatalogSendOptions? _catalogOptions;
+    private TaskCompletionSource? _catalogCloseRequired;
+    private HostAuthenticatedCatalogLifetime? _catalogLifetime;
+    private Task? _catalogHolding;
+    private Exception? _catalogSetupError, _catalogOwnerError;
     private int _started;
 
     internal ControlAuthSession(
@@ -150,6 +156,19 @@ public sealed class ControlAuthSession
     /// 成功 → <see cref="ControlSessionState.Authenticated"/>；失败 → <see cref="ControlSessionState.Closed"/>。</summary>
     public ControlSessionState State { get; private set; } = ControlSessionState.Authenticating;
 
+    internal void BindCatalogLifetime(HostDisplayCatalogSendOptions options, TaskCompletionSource closeRequired)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(closeRequired);
+        lock (_catalogBindingGate)
+        {
+            if (_started != 0 || _catalogOptions is not null)
+                throw new InvalidOperationException("目录生命周期只允许在认证启动前绑定一次。");
+            _catalogOptions = options;
+            _catalogCloseRequired = closeRequired;
+        }
+    }
+
     /// <summary>
     /// 跑完整条认证链。
     /// </summary>
@@ -163,10 +182,13 @@ public sealed class ControlAuthSession
     /// <exception cref="InvalidOperationException">同一个实例被 run 了第二次。</exception>
     public async Task<ControlAuthResult> RunAsync(CancellationToken cancellationToken)
     {
-        if (Interlocked.Exchange(ref _started, 1) != 0)
+        lock (_catalogBindingGate)
         {
-            throw new InvalidOperationException(
-                "一个连接的认证只允许跑一次（BeginAuthentication 的 exactly-once 的下游一半）。");
+            if (Interlocked.Exchange(ref _started, 1) != 0)
+            {
+                throw new InvalidOperationException(
+                    "一个连接的认证只允许跑一次（BeginAuthentication 的 exactly-once 的下游一半）。");
+            }
         }
 
         byte[]? accessKeyBytes = null;
@@ -418,14 +440,47 @@ public sealed class ControlAuthSession
             {
                 using (registration)
                 {
-                    await HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken).ConfigureAwait(false);
+                    if (_catalogOptions is null)
+                    {
+                        await HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            // 原位置直接进入 holding 的同步前缀，保存原 Task；不搬读线程、不另开读者。
+                            _catalogHolding = HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken);
+                            HostDisplayCatalogSendAttempt send = new(
+                                _stream, _catalogOptions.Source, Context.TimeProvider, _catalogOptions.Budget);
+                            _catalogLifetime = new(send, _catalogHolding, _catalogCloseRequired!, cancellationToken);
+                            _ = _catalogLifetime.Start();
+                            await _catalogLifetime.StopRequired.ConfigureAwait(false);
+                        }
+                        catch (Exception error)
+                        {
+                            // 目录装配失败不套用 Router 的首帧 IO/取消豁免；关线后统一按来源报告。
+                            _catalogSetupError = error;
+                        }
+                        finally
+                        {
+                            _catalogCloseRequired!.TrySetResult();
+                        }
+                    }
                 }
             }
             finally
             {
-                // 先撤销并注销自身，再在锁外等已经预约的子连接完整收尾。
-                // 子任务只报告 join 完成，不传播视频故障覆盖原控制结局。
-                await registration!.VideoCompletion.ConfigureAwait(false);
+                // 先撤销并注销自身，再取得子连接 join；一项故障不能跳过另一项原根。
+                Task videoCompletion = registration!.VideoCompletion;
+                if (_catalogOptions is null)
+                    await videoCompletion.ConfigureAwait(false);
+                else
+                    await Task.WhenAll(JoinCatalogOperationsAsync(), videoCompletion).ConfigureAwait(false);
+            }
+            if (_catalogHolding is not null)
+            {
+                // 目录错误走独立诊断，原 holding 的 Host 取消仍沿原认证返回路径传播。
+                await _catalogHolding.ConfigureAwait(false);
             }
 
             return new ControlAuthResult(true, ControlSessionState.Authenticated, null, SessionId);
@@ -468,11 +523,62 @@ public sealed class ControlAuthSession
         }
     }
 
+    // Router 在关线和原 join 后收集；按故障槽保留原树，不能套用网络/取消豁免或按异常引用去重。
+    internal void AddCatalogErrors(List<Exception> errors)
+    {
+        ArgumentNullException.ThrowIfNull(errors);
+        Add("setup", _catalogSetupError);
+        Add("owner-completion", _catalogOwnerError);
+        if (_catalogLifetime is not { } lifetime) return;
+        HostAuthenticatedCatalogLifetime.LifetimeSnapshot owner = lifetime.Snapshot;
+        HostDisplayCatalogSendAttempt.AttemptSnapshot attempt = owner.Attempt;
+        Add($"operation-{attempt.ErrorStage}", attempt.OperationError);
+        Add("observation", attempt.ObservationError);
+        Add("final-sample", attempt.FinalSampleError);
+        Add("coordination", attempt.CoordinationError);
+        Add("budget", attempt.Budget?.Error);
+        Add("budget-cleanup", attempt.Budget?.CleanupError);
+        Add("owner-attempt", owner.AttemptError);
+        Add("owner-coordination", owner.CoordinationError);
+        Add("owner-cleanup", owner.CleanupError);
+        // HoldingError 不重报；原 holding 仍由 RunAsync 及原审批读 join 使用既有分类。
+
+        void Add(string source, Exception? error)
+        {
+            if (error is not null) errors.Add(new Exception($"host-catalog-{source}", error));
+        }
+    }
+
+    private Task JoinCatalogOperationsAsync() => Task.WhenAll(
+        JoinCatalogOwnerAsync(_catalogLifetime?.Completion), JoinCatalogHoldingAsync(_catalogHolding));
+
+    private async Task JoinCatalogOwnerAsync(Task? completion)
+    {
+        if (completion is null) return;
+        try { await completion.ConfigureAwait(false); }
+        catch (Exception error)
+        {
+            AggregateException? errors = completion.Exception;
+            _catalogOwnerError = errors is null ? error : errors.InnerExceptions.Count == 1
+                ? errors.InnerExceptions[0] : errors;
+        }
+    }
+
+    private static async Task JoinCatalogHoldingAsync(Task? holding)
+    {
+        if (holding is null) return;
+        try { await holding.ConfigureAwait(false); }
+        catch (OperationCanceledException)
+        {
+            // 这里只负责兜底 join；原 holding 的取消从 RunAsync 传播，不重复报告。
+        }
+    }
+
     // Router 在 RunAsync 结束并关流后调用；不超时遗弃不合作的 gate，也不因一项故障跳过另一项。
     internal Task JoinOwnedOperationsAsync()
     {
-        // 直接返回 WhenAll，保留两项意外故障供调用方从 Exception 中完整观察。
-        return Task.WhenAll(JoinPendingReadAsync(), JoinDecisionAsync(_approvalDecision));
+        // 直接返回 WhenAll，保留原读/审批意外故障；目录原根只 join，独立按槽报告。
+        return Task.WhenAll(JoinPendingReadAsync(), JoinDecisionAsync(_approvalDecision), JoinCatalogOperationsAsync());
 
         static async Task JoinDecisionAsync(Task<LocalApprovalDecision>? decision)
         {

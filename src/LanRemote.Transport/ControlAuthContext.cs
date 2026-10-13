@@ -59,6 +59,9 @@ public sealed record ControlAuthContext
     // Host 共用；即使一个 store Task 无视取消，也不得由后续连接积累无限迟到任务。
     internal AuthenticationSecretLoader SecretLoader { get; } = new();
 
+    // 默认仍为原认证保持路径；只有内部 Router 显式绑定才启动目录发送。
+    internal HostDisplayCatalogSendOptions? DisplayCatalogSend { get; init; }
+
     /// <summary>本机设备号（进 challenge 的 <c>serverDeviceId</c>，同时是 transcript 素材）。</summary>
     public required Guid ServerDeviceId { get; init; }
 
