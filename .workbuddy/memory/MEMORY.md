@@ -2,20 +2,22 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至087：完整V2-only认证接线；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至088：Client目录接收；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-13，权威详HANDOFF§19.43/ADR087）
+## 当前续作点（2026-10-13，权威详HANDOFF§19.44/ADR088）
 
-最近代码`33aca8f0207bc09a38fe1ca70594b1c78a6ea84b`：完整V2-only接线及补测已提交推送并核对远端，各5246冻结；累计基线acec599保留，后续逐片提交。Host显式ViewOnly与真实WPF本机审批；Client独立远端key、Control/Video双TLS、有界JPEG和安全关停；Control仍灰显（M7），不可因用户想控制就放松审批/权限。首装无配置可只公告身份，已有配置`allowDiscovery`必须唯一布尔，否则拒公告/监听。
+最近代码`79a532c82e4e73833e9021007ef9cb9c8013bd3e`：Client目录接收已提交推送并核远端，各5279冻结；前片33aca8f/5246及累计acec599保留，后续逐片提交。Host显式ViewOnly与真实WPF本机审批；Client独立远端key、Control/Video双TLS、有界JPEG和安全关停；Control仍灰显（M7），不可因用户想控制就放松审批/权限。首装无配置可只公告身份，已有配置`allowDiscovery`必须唯一布尔，否则拒公告/监听。
 
-**M5已按用户确认收口。** 2026-10-12用户明确“稳定，之前的卡顿应该是误判，可告一段落继续M6了”；不重查撤回的卡顿判断，不要求重复人工验收/额外性能压测。此前十分钟内存、慢网、双方上网逐项用户确认保留，但不捏造两机原始数字、截图时序或独立性能审计。§19.29完整手动画质ZIP `LanRemote-M5-完整手动画质-20261008-win-x64.zip`（63,951,214字节，SHA0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945）不覆盖/重打，不含M6。Host默认5/50/JPEG60；显式10/15/20/30默认75/JPEG60，手动scale50/67/75/100、JPEG40..85，Auto禁、不写config/热切，停完整后再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限，不是全机内存上界。
+**M5已收口。** 用户2026-10-12确认稳定、撤回卡顿判断并要求继续M6；不重查/重验/加压测。十分钟内存、慢网、双方上网人工确认保留，不捏造原始数字、截图时序或独立审计。§19.29 `LanRemote-M5-完整手动画质-20261008-win-x64.zip`（63,951,214字节，SHA0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945）不覆盖/重打，不含M6。Host默认5/50/JPEG60；显式10/15/20/30默认75/JPEG60，手动scale50/67/75/100、JPEG40..85，Auto禁、不写config/热切，停完整后再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限，不是全机内存上界。
 
 **M6完整V2-only认证接线子片完成，非M6收口。** 两Host入口/Client现为TLS/pinning→Hello2→Challenge2→Offer→Accept→clientProof V2→真实审批→serverProof V2→新版父资格。agreement须同session但不是授权；原绝对deadline、单读者/close/join保留。仅完整合法V1/未知版声明产生升级诊断，Host UI独立标注未经认证，EOF/timeout/畸形不确诊旧端，device/实际pin/proof/密码/审批错误优先。无fallback。VideoHello/ACK protocol1、VIDEO-V1域、83字节Video transcript、第二TLS/LRVF不变。
 
-Host七项核原Run状态机transcript/_client清零/终态/null、四失败finally及真实join、wrong-schema/第二Accept精确拒绝。Client十四例原窗口末检；binding到期先于目标检查，隔离原私有Task。八变异各1/1/4/5/2/2/0/4红并恢复；Accept单删4绿属纵深，不称单点kill。原文案分类exit2、CS0649未执行测试均保留。恢复定向1055/134；四Rebuild零警告错误、16TRX双配置各5246、六子命令及外层wait0。独立核验exit0。旧5143→5246为+115/-12实例、107新增键，三组显示截断重数3/3/5；旧身份迁移不能称原样保留。384源码含tools，不含docs/memory/HANDOFF；非连续锁/全历史审计/全机排空/双机人工。证据及完整SHA见§19.43、outputs/m6-live-v2-20261012/，默认不推原日志。
+§19.43保留5246历史/差集/八变异；Accept单删仍绿，不称单点kill或旧语义原样保留。
 
-**下一片：认证后Host→Client目录传输与唯一读者分派。** 先核现有DisplayCatalog/host_status纯合同及holding/monitor额外数据拒绝，不增加同流读者，不放宽逆向/未知/畸形；随后目录UI、切屏、每会话质量。当前未接这些功能、未出M6新包、未跑本轮双机，不重做M4/M5人工、不启动M7、不改网/防护/权限、不执行旧Undo。§19.40–42纯核及身份历史保留；16字段/15NUL/无尾NUL及AUTH/GRANT-V2绑定不变。
+**Client目录接收完成。** 仅原monitored/public attach启动的唯一monitor，首字节退出后串行256KiB接续，10秒本地观察锚点，解析后复核截止/频率/回退；只收严格host_status protocol1，internal不可变单槽、父gate发布与撤销清空。原IO/组合/timer真实join，完整异常树及未知借用/释放失败纳入AllOwnedRootsReleased。Reached早于Task发布，夹具必须发布确切原句柄；WhenAny非join。四有效变异9/1/3/3断言红，旧截止Guard红不计，改观察点Assert.Null后补测。恢复125；四Rebuild零警告错误、双配置各5279、六子命令及外层wait0；三核验exit0。5246→5279为+35/-2，旧0/255字节测试迁移非法长度。385源含tools不含docs/memory/HANDOFF，非连续锁/全历史审计/双机；详§19.44、outputs/m6-live-v2-20261012/catalog-*，不推原日志。
+
+**下一片：产品Host认证成功后初始目录发送。** 保持success/审批后、唯一writer、holding原读及close/join；当前测试侧Host写目录不等于产品发送。随后目录UI、切屏、每会话画质；未出M6包/双机，不重验M4/M5、不启动M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2绑定不变。
 
 M4已收口（§18.25/c251d21），不翻绿/重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界§18.22–23。
 
@@ -65,7 +67,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.43完整V2-only认证/拒旧UI已接，各5246及独立核验通过；目录传输/切屏/每会话画质未接。 |
+| **M6** | 进行中：§19.44 Client目录接收各5279通过；Host发送/UI/切屏/会话画质未接。 |
 | M7~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。

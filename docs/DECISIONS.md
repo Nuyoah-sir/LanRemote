@@ -1778,3 +1778,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **实际敏感性。** 删除Host立即Clear、局部置null、finally Clear分别1/1/4项断言失败；终态标志改false产生5项ObjectDisposedException缺失断言失败。Offer末检删除4例中2个无效Offer报错优先级变红，2个有效Offer仍被写前检查拒绝；binding末检删除6例中2个binding分支因返回agreement而红，其余write/flush被前检拒绝。单删Accept末检4例仍绿；再删binding末检，隔离write/flush四例因过期仍返回agreement而红。保留全部原字节恢复记录；不能把纵深仍绿写成单点覆盖。最初自定义Assert.True文案无“Assert.”使固定runner负例分类exit2，保持原失败证据，只给断言文案加标识；删除终态赋值曾引入CS0649，被零警告门禁挡在测试前，改为显式false的等效行为变异后才运行。未改固定runner或预算，不把未执行测试的阶段算运行红灯。
 
 **不变与边界。** VideoHello/ACK protocol1、LANREMOTE-VIDEO-V1、83字节Video transcript、第二条TLS、LRVF和attach/join保持；仅Control父认证升级V2，不全局替换协议常量。真实回环TLS、受控IO、静态审阅与双机人工体验分开记账。最终双配置各5246PASS/0FAIL/0SKIP，四Rebuild零警告错误；384项源码快照含tools、不含docs/memory/HANDOFF。相对5143基线新增115/消失12个身份实例，新增唯一键107；三组长JSON显示名截断形成3/3/5的multiplicity，保留Counter计数而不改写为唯一测试数。正式独立核验实际exit0，详HANDOFF§19.43和本片原证据。不宣称M6整体完成、目录传输/切屏/每会话画质或M7已接入。不重做M4/M5人工项，不改网络、防火墙、防护或桌面权限，不覆盖旧M5ZIP。
+
+### ADR-088 — Client认证后目录单读者、有界接续与释放证据
+
+**2026-10-13，Client接收侧子片。** 仅原显式monitored/public Video attach登记的Control monitor扩展为目录接收循环；不在所有认证成功/旧internal Control-only路径新增读者。空闲保留原单字节ReadAsync，不建空闲timer；原读完整退出后才调用FromObservedFirstByte接续最多256KiB载荷。非零大端长度首字节可立即拒绝；零长/超限沿用精确FrameProtocolException。只消费严格Host→Client `host_status`、目录载荷`protocol:1`，不将Control认证V2外推为所有帧protocol2。未知、反向、认证帧和畸形目录均关闭父子会话。
+
+**时间及发布。** 每帧10秒为初始预算，从唯一读者本地观察首字节完成后采样起算，不是物理到达时刻；idle调度间隙不冒称计入预算。沿用原同源单调锚点及频率，不因接续、timer释放或解析重置；组合完成后解析和消费仍复核原截止及高水位。目录是internal不可变单槽，替换而不排队、不回调UI；同父gate检查真实交付及连接有效性再发布，撤销时清空。返回过的不可变对象不是可撤销能力；seq/timestamp不是重放、拓扑、选屏或视频坐标授权。
+
+**失败及所有权。** AbortRequired只用于及时请求撤销/关线/停止child，随后仍await同一个组合原Task；组合等待原接续、原I/O与timer释放。保留原Task的完整异常树、兄弟和cleanup根，不Flatten，不把本地Stop吞作成功。只清零完整交付且已静止的payload，未知借用区及TLS内部副本不作擦除保证。GetDisposalEvidence分别记录已取得原操作完成与全部已拥有根释放，目录未知借用/timer释放失败必须使后者为false；不合作原操作可持续阻塞，不能用超时包装冒称join。
+
+**测试取证合同。** 正常协调阶段是WhenAny，只证明原read被continuation直接await；进入失败收尾后才证明原timer dispose贯穿monitor及父join。Reached通知可能发生在async方法返回/原Task句柄赋值之前，夹具用独立TaskCompletionSource<Task>发布确切原Task，通知不替代join。原红灯保留，不增加Guard或认可WhenAny作为完整等待。真实TLS目录正例由测试侧Host显式写入，不能代表产品Host已发送。
+
+**范围。** 未接产品Host发送、公开目录UI、远端切屏、每会话画质或M7；不出M6产品包、不重复M4/M5人工验收，不改网/防护/权限或旧ZIP。当前片恢复定向125PASS、双配置各5279PASS、四Rebuild零警告错误；四有效变异9/1/3/3断言红后原字节恢复。相对5246身份+35/-2，385源冻结与三份证据核验通过。截止首次Guard失败保留，新观察点在错误发布后由Assert.Null明确裁决；不把Guard超时算有效kill。详HANDOFF§19.44，不继承§19.43的5246冻结。
