@@ -1764,3 +1764,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **非授权边界。** 无流、时钟、密钥或审批，无session注册和Video资格；对象非一次性能力，未来live须在消费前后检查原绝对预算。真实旧Host收Hello2可能直接关线，新Client无法仅从EOF判断旧版；已发布旧UI也不能保证识别新增拒绝文案。不伪装Challenge1，不新增legacy live分支。
 
 **实测。** 31专项旧实现31Assert红（全部为入口缺失，非31独立行为红）→新实现31绿；TLS/device/payload pin/提前Legacy分类四产品变异各4/4/4/3失败并精确恢复。四Rebuild零警告错误，16TRX双配置各5143PASS，旧5112+新31精确身份核对；独立核验实际exit0。355项源码快照不含tools/docs/memory/HANDOFF，未沿用上一片完整audit/post合同或100/7自测，不混称同强度审计。详HANDOFF§19.42及outputs/m6-challenge-admission-20261012/。下一片直接推进ADR084完整V2-only真实链与新版父资格，保持真实审批、原预算/唯一读者/清理和原Video合同。
+
+### ADR-087 — V2-only完整认证接线、父资格与原预算末检
+
+**2026-10-13，真实收发接线。** 两个Host首帧入口均严格消费完整Hello2，handoff构造再次校验已读payload，不再有默认V1构造路径。Client固定Hello2，按连接身份消费Challenge2；在原机器/Challenge绝对窗口内完成Host Offer→Client Accept→clientProof V2→真实本机审批→serverProof V2。Host Register与Client AuthenticatedControlSession构造均要求非空、同SessionId的DisplayCatalogAgreementBinding；binding只是经过方向/会话绑定的协商事实，不是认证或一次性能力令牌。Host仍须proof、审批、success写出才登记，Client仍须serverProof与CommitDelivery才交付。
+
+**版本声明与UI。** 完整合法V1/未知正版本才产生固定升级/不支持短码；畸形、EOF、timeout不确诊旧端，目标device/实际TLS pin、proof/密码/审批失败不得被升级提示覆盖。不伪造Challenge1，不fallback。Host仅保存本监听轮的两种短码单槽，UI独立显示“未经身份认证”的协议声明诊断，不覆盖停止/排空状态，停止意图立即隐藏，窗口关闭停表解绑。真正旧Host可能见Hello2直接EOF，旧版已发布UI也不保证识别新提示。
+
+**清理及读所有权。** AuthTranscriptV2的导出/proof/Clear共锁；Clear清零私有原数组并进入不可逆终态。Host生成serverProof后立即Clear并将局部置null，外层finally兜底；Client原数组同样在finally清理。不声称清零JSON字符串、TLS/框架副本或全部进程内存。审批Activity复用于holding，原Run/审批决定/读必须真实close/join，意外gate故障不得吞掉。测试只反射原Run Task的实际状态机和_client原引用，不引入生产observer、不用Export副本代替原数组。
+
+**deadline证据。** timer只负责唤醒/中断，接受仍由原父/子窗口单调截止决定。新增Offer解析后、Accept write/flush完成后、binding构造后十四例。Offer到期发生在及时payload读后检查及分段timer释放之后；write/flush在原IO挂起时先推进截止，再放行。binding在第三次有效采样后已客观到期，第四次只检查；直接原NegotiateCatalogAsync隔离外层末检，不将其称为公开完整认证链或同步构造耗时测量。
+
+**实际敏感性。** 删除Host立即Clear、局部置null、finally Clear分别1/1/4项断言失败；终态标志改false产生5项ObjectDisposedException缺失断言失败。Offer末检删除4例中2个无效Offer报错优先级变红，2个有效Offer仍被写前检查拒绝；binding末检删除6例中2个binding分支因返回agreement而红，其余write/flush被前检拒绝。单删Accept末检4例仍绿；再删binding末检，隔离write/flush四例因过期仍返回agreement而红。保留全部原字节恢复记录；不能把纵深仍绿写成单点覆盖。最初自定义Assert.True文案无“Assert.”使固定runner负例分类exit2，保持原失败证据，只给断言文案加标识；删除终态赋值曾引入CS0649，被零警告门禁挡在测试前，改为显式false的等效行为变异后才运行。未改固定runner或预算，不把未执行测试的阶段算运行红灯。
+
+**不变与边界。** VideoHello/ACK protocol1、LANREMOTE-VIDEO-V1、83字节Video transcript、第二条TLS、LRVF和attach/join保持；仅Control父认证升级V2，不全局替换协议常量。真实回环TLS、受控IO、静态审阅与双机人工体验分开记账。最终双配置各5246PASS/0FAIL/0SKIP，四Rebuild零警告错误；384项源码快照含tools、不含docs/memory/HANDOFF。相对5143基线新增115/消失12个身份实例，新增唯一键107；三组长JSON显示名截断形成3/3/5的multiplicity，保留Counter计数而不改写为唯一测试数。正式独立核验实际exit0，详HANDOFF§19.43和本片原证据。不宣称M6整体完成、目录传输/切屏/每会话画质或M7已接入。不重做M4/M5人工项，不改网络、防火墙、防护或桌面权限，不覆盖旧M5ZIP。
