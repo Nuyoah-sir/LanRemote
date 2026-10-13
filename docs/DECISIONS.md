@@ -1808,3 +1808,11 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **最小边界。** 只把关闭监督放到worker，`RunCoreAsync`和Auth、首帧及holding读的同步前缀仍从原调用链进入，不加同流reader、不改public六参数factory、Registry入口、SessionRegistration属性或Auth授权/秘密清理。目录发送底座的AbortRequired尚未接该信号，产品自动目录发送仍未实现；后续才接认证后持有登记资格的生命周期，登记Dispose完成后取VideoCompletion的合同不变。
 
 **非保证。** 不保证任意不合作同步source/读/写/timer/close能有限退出；首次外部clock调用仍在监督发布之前，Host自身其它取消回调可阻塞本通知派发。Stop只通知并不与外部调用物理原子。保留既有首帧IO/ODE/OCE分类，不利用本片吞掉将来的目录来源错误；下一片须在原首帧豁免之外保存目录故障。本片受控测试/回归和提交事实见HANDOFF§19.46：新17/恢复464、双配置各5361通过，四Rebuild零警告错误；两变异各2断言红并恢复。独立核验36原TRX/21895唯一execution、旧5344+17/-0、388源及126证据保持，实际exit0；代码e7d098b已提交推送核完整号。stop变异是10秒有界观察未收到关闭信号后的Assert.Same红，不是无看门狗或Timeout异常证明；未新增核验器穷举篡改自测。
+
+### ADR-091 — 认证后目录生命周期先撤销资格再完整等待
+
+**2026-10-13，internal可选接线已验证；新基线22、恢复486、双配置各5383通过，四Rebuild零警告错误。** 三项精确生产变异分别3/6/4个原断言失败，均逐字节恢复；独立原证据核验exit0，旧5361完整Counter新增22/删除0，37原TRX/22012唯一execution、391源与146证据保持。代码新提交8001488；完整提交/交付收据见HANDOFF§19.47。 `ControlAuthContext.DisplayCatalogSend`默认null；仅Router在原Auth启动前冷绑定来源、预算及已有close通知，public未绑定入口不自行启动。完整auth_success Write/Flush及取消后检、Register成功、原sessionToken/successPayload/DTO token finally清理后，仍在原位置直接调用holding取得原Task，再启动固定`HostAuthenticatedCatalogLifetime`。保留public真正async RunAsync及原秘密局部，不移读同步前缀、不新增Control读者、不改Registry/Video证明或public factory。
+
+**通知与等待分离。** owner的固定worker跨Start同gate发布屏障后才启动发送；首次WhenAny含原holding、Abort、Host stop及原sending，Sent后仅继续等待前三项，意外fault/cancel/Rejected也停止。RequestStop按close通知→发送stop→StopRequired通知；Auth在using内只等StopRequired，先Dispose撤销登记资格，随后才取稳定VideoCompletion，与owner/原holding完整WhenAll。Router最终仍等待原close及Auth全部owned操作。通知不等于原Task退出，Sent不结束父会话；目录来源/原IO/预算timer不合作时不保证有限join。
+
+**错误及范围。** Router在原首帧IO/ODE/OCE catch之外、原close及Auth join后收集目录各槽；每槽独立来源标签包装原异常，不Flatten、不按实例引用去重。同Host token的自发OCE也不静默归正常停机；holding保留原分类。owner快照不涵盖Host close/Video原根，AllOwnedRootsReleased不能外推物理释放。原holding同步前缀未交Task时不能越过它提前注销，仍由既有Router Host取消监督请求close。App/GDI来源、默认产品发送、UI/切屏/会话画质尚未装配；本片测试、变异、full和提交以HANDOFF§19.47实际记录为准，不沿用5361；Registry真实租约测试不是实际视频TLS子连接验收。
