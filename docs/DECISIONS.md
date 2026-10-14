@@ -1828,3 +1828,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **验证边界。** 新来源24例、产品3例定向已通过；产品用例实际StartAsync、单机Control TLS/pinning、WPF控件自动批准/拒绝、真实只读GDI、成功后自然注销；没有视频attach，不等同双机、真人审批观察或物理多屏验证。透明来源计数在StartAsync之后安装，不能单凭它证明启动期间cold。异常树/外桥async/App删装配三变异各3断言红并原字节恢复；App红停在配置非null断言，不称三条独立线缆行为kill。初始Expression命名歧义只属编译失败，别名修正后通过。新执行器完整build/test及原wait收据校验后才恢复；缺收据不会自动恢复，未做异常中断故障注入、不修改历史执行器。恢复Transport111/产品3、四Rebuild零警告错误、双配置各5410通过。独立核验实际exit0，旧5383完整Counter+27/-0、39原TRX/21738唯一execution、393源及168证据保持；代码c745ae42c92593e937ec85d8bbd8e0899f993d01已普通推送并核远端完整号，提交后393源/168原件再次核对一致。完整收据见HANDOFF§19.48。
 
 **非目标。** 不修改Client目录UI、切屏、会话画质、M7、网络、防火墙、防护、桌面权限或旧ZIP；不重验已收口M4/M5，不宣告M6整体完成。
+
+### ADR-093 — Client公开只读目录及WPF单槽采样与清理
+
+**2026-10-14，Client投影片。** `DisplayCatalogSnapshot`为sealed纯数据外壳，仅有get-only的Sequence/TimestampMs/Displays，构造internal；DisplayCatalogFrame严格校验并复制后生成一次外壳，内部wire字段转发到它，不另设可变会话槽。`AuthenticatedControlSession.GetDisplayCatalogSnapshot()`在原父gate下，仅已交付且未撤销时返回当前外壳；没有完整目录返回null，重复读取返回同一实例。公开面不暴露wire DTO、流、token、写入或选择能力；撤销只能影响后续查询，不能抹除调用方已经保留的历史数据。保留原Control唯一reader、256KiB/10秒原锚、终态撤销和原根join，元数据不变成反重放/拓扑世代/视频选屏证明。
+
+**App装配。** 真实ClientConnectService在原Video attach之后的Dispatcher建窗块中绑定父会话getter与本Attempt停止token。RemoteViewWindow每实例仅绑定一次，单DispatcherTimer以250ms名义间隔在UI线程读取；不另启网络reader，不启后台投递循环、不缓存目录队列。相同实例不重绑ItemsSource，seq下降的新实例仍显示。只读ItemsControl有120高滚动区域，显示枚举ID、名称、宽高、原点和主屏标记；明确标注非当前视频选屏状态，无选择/控制按钮。250ms不是实时刷新或撤销墙钟上界，Dispatcher阻塞和父gate竞争可推迟显示；目录纯数据不是持续授权能力。
+
+**清理。** getter前后检查停止/关闭/终态，防取值期间取消或重入停止后的历史结果再次显示。本地Closing在请求网络停止之前清目录；服务在进入原四支Drain前解除绑定，窗口SessionEnded再幂等清理。停止计时器并退订Tick，清getter、快照、停止token与ItemsSource；迟到Tick不复活，不允许旧窗绑定新会话。原错误诊断保窗与断开回调释放保持，窗口排空证据扩展到目录所有权。UI清理错误追加到原错误树，不覆盖旧错，也不能阻止TLS/视频原任务join。
+
+**测试与局限。** 新Transport11例实用受控原reader；WPF10例用反射构造纯数据，明示不等于认证证据；新增产品3例走真实双TLS、显式测试审批gate、合成两屏目录与2x2 JPEG，不等于真人WPF审批、双机或物理多屏。慢停止用例预先登记阻塞取消回调，确保最终WaitAsync先收到取消；禁用UI timer退路，以Control撤销证明已进入Drain后直接断言目录清除、原取消/清理仍未完成。原错误登记顺序和首次Guard变异失败保留不算kill；六项正式变异为公开getter丢失3红、取值后停止检查2红、timer启动1红、ItemsSource清除4红、App绑定3红、Drain前清理1红并恢复。App绑定变异止于非空getter接线断言；慢Drain变异为真实原Null断言，不拿Guard超时当通过。完整验证与交付收据见HANDOFF§19.49。首轮full因两旧公共方法精确白名单漏列GetDisplayCatalogSnapshot而2红，仅精确加入该纯数据方法，保留其他API约束。新恢复656/20、四Rebuild零警告错误、双配置各5434全通过；独立原证据核验exit0，旧5410完整Counter+24/-0，397源、357原件保持。正式变异使用v4字节，最终白名单两处修订由逆替换SHA精确衔接；55TRX/28711execution不含另外六个仅做原件/wait保持核对的失败历史阶段。
+
+**非目标。** 不切屏、不改变采集/视频几何/会话画质，不开始M7，不改网络/防护/权限，不重验M4/M5，不重打旧ZIP。本片无必须先由双机人工完成才能继续的开发依赖；不取消后续M6实机验收。
