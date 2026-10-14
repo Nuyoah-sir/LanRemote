@@ -2,32 +2,31 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至091：认证后目录生命周期；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至092：Host公开来源与App装配；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-13，权威详HANDOFF§19.47/ADR091）
+## 当前续作点（2026-10-14，权威详HANDOFF§19.48/ADR092）
 
-已推代码`8001488`/5383（完整号见HANDOFF）。Host ViewOnly/WPF审批；Client独立key/双TLS/有界JPEG；M7灰显。首装可只公告身份；已有配置allowDiscovery须唯一布尔，否则拒公告/监听。
+已推代码`c745ae4`/5410（完整号见HANDOFF）。Host ViewOnly/WPF审批；Client独立key/双TLS/有界JPEG；M7灰显。首装可只公告身份；已有配置allowDiscovery须唯一布尔，否则拒公告/监听。
 
 **M5已收口。** 2026-10-12用户确认稳定、继续M6；撤回卡顿判断，不重查/重验/加压测。十分钟/慢网/双方上网人工确认保留，不捏造数字、截图或独立审计。§19.29 `LanRemote-M5-完整手动画质-20261008-win-x64.zip`（63,951,214字节，SHA0137f49542e0f79d43ed3022737a4eeb00653875d8677508ca1411601a8c9945）不覆盖/重打，不含M6。Host默认5/50/JPEG60；显式10/15/20/30默认75/JPEG60，手动scale50/67/75/100、JPEG40..85，Auto禁、不写config/热切，停完整后再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限，不是全机内存上界。
 
 **M6认证V2-only已接，非整体收口。** 两Host/Client：TLS/pinning→Hello2→Challenge2→Offer/Accept→clientProofV2→真实审批→serverProofV2→父资格。同session agreement非授权，绝对deadline/单读者/close/join保留。仅合法V1/未知版声明提示升级，UI标未经认证；EOF/timeout/畸形不确诊旧端，身份/pin/proof/密码/审批错误优先；无fallback。VideoHello/ACK protocol1、VIDEO-V1/83字节transcript、第二TLS/LRVF不变。
 
-§19.43保留5246历史/差集/八变异；Accept单删仍绿，不称单点kill或旧语义原样保留。
+§19.43 Accept单删仍绿，不称单点kill。
 
-**Client目录已接（§19.44）。** 原monitor唯一读、256KiB/10秒原锚、严格host_status/不可变单槽，父gate发布撤销、原IO/timer完整join。恢复125/双配置5279/变异9/1/3/3；5246→5279为+35/-2（旧0/255移非法长度）。Reached不是原Task发布，WhenAny不是join。
+**Client目录（§19.44）。** 原monitor唯一读、256KiB/10秒原锚、严格host_status/不可变单槽；父gate发布撤销、原IO/timer完整join。Reached非原Task发布，WhenAny非join；5279历史/变异/差集详HANDOFF。
 
-**Host底座（§19.45）。** 固定worker同gate发布、None原IO；source原锚覆盖序列化/IO/timer，Int128末检及sampleGate高水位。Abort仅通知，join原Task；未知借用不清零，退出≠全释放。65/恢复682，四变异6/1/3/1，高水位仅归因敏感；双配置5344/独立exit0。旧runner2/核验exit1保留，RunInfo修订20自测；旧ZIP不重打。
+**Host底座/Router（§19.45–46）。** 固定worker同gate发布、None原IO，source原锚覆盖序列化/IO/timer，Int128末检/sampleGate高水位。Abort仅通知、join原Task；未知借用不清零，退出≠释放。Router先于core监督Host取消/core结束，再join原close/读/审批，不移读线程；首次clock/其它回调仍可阻塞。5344/5361及独立exit0为历史；stop变异为10秒观察后Assert.Same红非Timeout，详细变异/失败收据见HANDOFF。
 
-**Router监督（§19.46）。** 先于core，Host取消/core结束通知，再join原close/读/审批，不移读线程。双配置5361/独立exit0；stop/join各2断言红，前者10秒未收通知Assert.Same非Timeout，后者原close受闸时提前结束。首次clock/其它回调仍可阻塞。
 
-**认证后目录生命周期（§19.47）。** internal默认null；success完整flush→Register→秘密finally→原holding→目录。StopRequired先close通知/注销，再join原来源/IO/holding/timer/Video；Dispose后取VideoCompletion，Sent不结束会话。错误旧catch外逐槽保树、不按实例去重。新22/恢复486；close预算3红（Host取消3绿）/owner join6红/错误收集4红并恢复；四Rebuild/双配置5383，独立exit0，5361+22/-0，37TRX/22012execution、391源146证据保持。受控流/真实Registry租约≠新TLS或双机；异常中断缺记录的变异恢复未证明。
+**认证后目录（§19.47）。** success完整flush→Register→秘密finally→原holding→目录。StopRequired先close/注销再join来源/IO/holding/timer/Video，Dispose后取VideoCompletion；Sent保持会话。旧catch外逐槽保错误树、不去重。5383/独立exit0；受控流/Registry租约不等于视频TLS。
 
-**下一片：Host只读GDI来源与App默认装配**，再UI/切屏/会话画质。未出M6产品包/双机，不重验M4/M5、不启动M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
+**App已装配（§19.48）。** WithDisplayCatalogSource用record副本保共享引用、非async外桥保未交Task未知退出，投影await原Task保完整错误树；单根faulted OCE状态可变Canceled但保实例/token。委托内每次new GDI，10秒原发送预算不保证原生退出；seq0/UTC仅元数据。24/3、恢复111/3、三变异各3红；App删除止于配置断言。四Rebuild/双配置5410、独立exit0，5383+27/-0、39TRX/21738execution、393源168原件保持。产品实测单机Control TLS/WPF自动控件/GDI非真人/双机/视频联合；观察从Start后开始。新变异缺完整wait不恢复，异常中断故障注入未做。
 
-M4已收口（§18.25/c251d21），不翻绿/重跑/加DPI；pin仅顺序关联，采样跨度非清理耗时，不外推擦除。A可做的不推B；SAC授权非产品功能。隔离WinExe无vault/发现/改网；旧ZIP不动，包边界§18.22–23。
+**下一片：Client公开只读目录投影及App显示/清理**，再切屏/会话画质。无M6产品包/双机；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
-历史§19.16–18：BGRA/JPEG最近邻/原worker单飞，WPF写错须JpegOutputStream锁存；32MiB仅输出上限。投影先发布后Start；父等raw+投影、子仅raw；不吞close错。敏感wire等原IO退出再清零，不承诺TLS副本擦除。
+M4收口详§18.25；不翻绿/重跑/加DPI，pin仅顺序关联，采样跨度非清理耗时，SAC非产品功能。历史视频合同详§19.16–18：投影先发布后Start，父等raw+投影、子仅raw，不吞close错；敏感wire等原IO退出再清零，不承诺TLS副本擦除。
 
 审批按状态机接受时刻：elapsed>=budget拒，gate前计时含UI；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后终检，之前不改limiter；context loader至多一项实际store，迟到key先清零再释放准入，CTS不能硬中断同步DPAPI/gate/阻塞回调。客户端独占TLS到认证，presentedPin及grant proof验完才交会话，public无流/token/输入；hello后machine10s、challenge只收窄、独立approval60s。只消费首个终帧；DTO/TLS内部副本不保证擦除；clock变异须在被删检查之前客观固定到期，不把后置兜底误称单点覆盖。
 
@@ -63,7 +62,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 `.ps1` 必须 UTF-8 **with BOM**；`.cmd` 纯ASCII。新包不交付这些脚本。
 M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代码提交。
 
-## 里程碑（更新至2026-10-13）
+## 里程碑（更新至2026-10-14）
 
 | 阶段 | 状态 |
 | --- | --- |
@@ -73,7 +72,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.47认证后目录内部接线各5383通过；App默认来源/UI/切屏/会话画质未接。 |
+| **M6** | 进行中：§19.48 App默认Host来源装配各5410通过；Client公开投影/UI/切屏/会话画质未接。 |
 | M7~M11 | 未开始 |
 
 M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。

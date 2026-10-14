@@ -1816,3 +1816,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **通知与等待分离。** owner的固定worker跨Start同gate发布屏障后才启动发送；首次WhenAny含原holding、Abort、Host stop及原sending，Sent后仅继续等待前三项，意外fault/cancel/Rejected也停止。RequestStop按close通知→发送stop→StopRequired通知；Auth在using内只等StopRequired，先Dispose撤销登记资格，随后才取稳定VideoCompletion，与owner/原holding完整WhenAll。Router最终仍等待原close及Auth全部owned操作。通知不等于原Task退出，Sent不结束父会话；目录来源/原IO/预算timer不合作时不保证有限join。
 
 **错误及范围。** Router在原首帧IO/ODE/OCE catch之外、原close及Auth join后收集目录各槽；每槽独立来源标签包装原异常，不Flatten、不按实例引用去重。同Host token的自发OCE也不静默归正常停机；holding保留原分类。owner快照不涵盖Host close/Video原根，AllOwnedRootsReleased不能外推物理释放。原holding同步前缀未交Task时不能越过它提前注销，仍由既有Router Host取消监督请求close。App/GDI来源、默认产品发送、UI/切屏/会话画质尚未装配；本片测试、变异、full和提交以HANDOFF§19.47实际记录为准，不沿用5361；Registry真实租约测试不是实际视频TLS子连接验收。
+
+### ADR-092 — 公开惰性纯数据目录来源与App默认装配
+
+**2026-10-14，Host来源片。** `ControlAuthContext.WithDisplayCatalogSource(Func<ValueTask<IReadOnlyList<DisplayInfo>>>, TimeSpan)`仅返回record副本，保留原SecretLoader、Registry、两个limiter、审批门、时钟和选项引用，原context不变且默认仍null。公开面不暴露wire DTO、流、token或序列化器。App在原StartAsync创建同轮context后显式装配，委托执行时每次创建独立GdiDisplayCatalog只读枚举；不在启动/配置时提前枚举、不改变现有CreateWithVideo、认证/审批/holding线程或视频采集。不同已认证连接可并发调用，来源必须并发安全且交还代表全部所属工作的原ValueTask；不得隐匿后台工作或交还后并发修改列表。
+
+**原操作与失败。** 外层桥不是async，先直接调用source().AsTask()，只有原Task已交还才进入异步投影。因此source/GetStatus/OnCompleted同步失败未交Task仍由sender记录未知退出；GetResult失败但AsTask已交回faulted Task则为已知退出。投影完整await原Task，保留原Task.Exception的兄弟/嵌套/重复引用，不Flatten，不用WaitAsync或新增Task.Run/CTS取代原任务。单根faulted OCE可能经async投影变为Canceled，但原异常实例及token仍保留为来源故障；不声称投影与原Task状态等价，也不能重建上游已丢失的异常。
+
+**消息与预算。** 每父连接单次发送，seq=0；来源成功后用UTC毫秒作为历史消息元数据，非拓扑世代、安全时钟或当前视频帧坐标。沿用内部DisplayCatalogFrame的有界不可变复制和严格校验；不造默认主屏、不截断目录、不授予采集/切屏资格。App发送总预算10秒，从原source前单调观察起算并覆盖投影、序列化、IO及timer释放，沿已有close/注销/原根join合同；不保证原生GDI可中断或最终等待有限。
+
+**验证边界。** 新来源24例、产品3例定向已通过；产品用例实际StartAsync、单机Control TLS/pinning、WPF控件自动批准/拒绝、真实只读GDI、成功后自然注销；没有视频attach，不等同双机、真人审批观察或物理多屏验证。透明来源计数在StartAsync之后安装，不能单凭它证明启动期间cold。异常树/外桥async/App删装配三变异各3断言红并原字节恢复；App红停在配置非null断言，不称三条独立线缆行为kill。初始Expression命名歧义只属编译失败，别名修正后通过。新执行器完整build/test及原wait收据校验后才恢复；缺收据不会自动恢复，未做异常中断故障注入、不修改历史执行器。恢复Transport111/产品3、四Rebuild零警告错误、双配置各5410通过。独立核验实际exit0，旧5383完整Counter+27/-0、39原TRX/21738唯一execution、393源及168证据保持；代码c745ae42c92593e937ec85d8bbd8e0899f993d01已普通推送并核远端完整号，提交后393源/168原件再次核对一致。完整收据见HANDOFF§19.48。
+
+**非目标。** 不修改Client目录UI、切屏、会话画质、M7、网络、防火墙、防护、桌面权限或旧ZIP；不重验已收口M4/M5，不宣告M6整体完成。
