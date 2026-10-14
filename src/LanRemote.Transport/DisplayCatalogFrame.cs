@@ -4,7 +4,7 @@ using LanRemote.Core.Models;
 
 namespace LanRemote.Transport;
 
-/// <summary>M6 host_status 显示目录载荷；已供认证后Client唯一读者消费，未接Host发送或远端切屏。</summary>
+/// <summary>M6 host_status 显示目录载荷；用于认证后Host发送与Client唯一读者消费，不提供远端切屏。</summary>
 /// <remarks>
 /// 仅传本次目录的原始索引和几何，不能作为持久身份或采集授权。
 /// seq/timestampMs 是消息元数据，不是拓扑世代、反重放或帧坐标关联证明。
@@ -49,14 +49,13 @@ internal sealed class DisplayCatalogFrame
         if (primaries != 1 || displays.Count != count)
             throw new ArgumentException("显示目录必须稳定且恰好含一个主屏。", nameof(displays));
 
-        Sequence = sequence;
-        TimestampMs = timestampMs;
-        Displays = Array.AsReadOnly(snapshot);
+        PublicSnapshot = new DisplayCatalogSnapshot(sequence, timestampMs, Array.AsReadOnly(snapshot));
     }
 
-    internal long Sequence { get; }
-    internal long TimestampMs { get; }
-    internal IReadOnlyList<DisplayInfo> Displays { get; }
+    internal long Sequence => PublicSnapshot.Sequence;
+    internal long TimestampMs => PublicSnapshot.TimestampMs;
+    internal IReadOnlyList<DisplayInfo> Displays => PublicSnapshot.Displays;
+    internal DisplayCatalogSnapshot PublicSnapshot { get; }
 
     /// <summary>只输出 UTF-8 JSON；长度前缀由现有帧封装处理，不直接写任何流。</summary>
     internal byte[] Serialize()

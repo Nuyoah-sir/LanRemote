@@ -155,9 +155,12 @@ public sealed class ClientConnectService
             primary = error;
         }
 
+        // UI目录先失效，不能因原TLS/帧任务慢退出而继续显示旧会话目录。
+        try { attempt.View?.StopDisplayCatalog(); }
+        catch (Exception error) { cleanup = AddCleanupError(cleanup, error); }
         // 四条收尾分支并发请求停止、独立等待；任一报错不妨碍其余 TLS/原读取 join。
         try { await DrainAsync(attempt).ConfigureAwait(true); }
-        catch (Exception error) { cleanup = error; }
+        catch (Exception error) { cleanup = AddCleanupError(cleanup, error); }
         // Connector 在交付 Control 之前也可能已拥有 TLS；认证失败时若原错误为聚合，
         // 其中可能含其内部 CloseAsync 的清理故障，此处的空 Control 无法再次证明资源根释放。
         // 保留原异常树但将这种无法拆清的报告归入不可信清理，不因本地 Drain 为空而洗绿。
@@ -282,6 +285,7 @@ public sealed class ClientConnectService
                 Owner = attempt.Owner,
             };
             attempt.View = view;
+            view.StartDisplayCatalog(attempt.Control!.GetDisplayCatalogSnapshot, attempt.Stop.Token);
             view.Show();
             attempt.Dialog.Hide();
             attempt.PresenterInvoked = true;

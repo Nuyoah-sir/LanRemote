@@ -7,6 +7,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
         <DockPanel Grid.Row="0" Background="#FF232323" LastChildFill="True">
@@ -16,7 +17,28 @@
                        Foreground="White" TextWrapping="Wrap"
                        Margin="12,10" VerticalAlignment="Center" />
         </DockPanel>
-        <Border Grid.Row="1" Background="Black" ClipToBounds="True">
+        <StackPanel Grid.Row="1" Background="#FFF3F4F6">
+            <TextBlock x:Name="CatalogStatusText" Margin="12,5" Foreground="#FF24292F"
+                       Text="等待远端屏幕目录（只读，尚不支持切换屏幕）。" TextWrapping="Wrap" />
+            <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl x:Name="DisplayCatalogItems" Margin="12,0,12,5">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Foreground="#FF24292F" TextWrapping="Wrap">
+                                <Run Text="屏幕 " /><Run Text="{Binding Id.Value, Mode=OneWay}" />
+                                <Run Text=" · " /><Run Text="{Binding Name, Mode=OneWay}" />
+                                <Run Text=" · " /><Run Text="{Binding Width, Mode=OneWay}" />
+                                <Run Text=" × " /><Run Text="{Binding Height, Mode=OneWay}" />
+                                <Run Text=" · 原点 (" /><Run Text="{Binding X, Mode=OneWay}" />
+                                <Run Text=", " /><Run Text="{Binding Y, Mode=OneWay}" /><Run Text=")" />
+                                <Run Text=" · 主屏：" /><Run Text="{Binding IsPrimary, Mode=OneWay}" />
+                            </TextBlock>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </StackPanel>
+        <Border Grid.Row="2" Background="Black" ClipToBounds="True">
             <Image x:Name="RemoteImage" Stretch="Uniform" />
         </Border>
     </Grid>

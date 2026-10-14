@@ -14,6 +14,14 @@ public sealed partial class AuthenticatedControlSession
         get { lock (_gate) return _connection is not null && _deliveryCommitted ? _latestDisplayCatalog : null; }
     }
 
+    /// <summary>取得当前已交付且未撤销会话的最后一个完整显示目录；尚未收到目录时返回 null。</summary>
+    /// <remarks>重复读取同一目录返回同一不可变实例。撤销只阻止后续查询，不能清除调用方已保留的历史快照。</remarks>
+    public DisplayCatalogSnapshot? GetDisplayCatalogSnapshot()
+    {
+        lock (_gate)
+            return _connection is not null && _deliveryCommitted ? _latestDisplayCatalog?.PublicSnapshot : null;
+    }
+
     internal enum ControlMonitorEnd { Pending, SkippedLocalStop, EndOfStream, UnexpectedData, Faulted }
 
     /// <summary>

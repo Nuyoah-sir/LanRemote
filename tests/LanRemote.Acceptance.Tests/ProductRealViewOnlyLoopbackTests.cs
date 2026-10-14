@@ -26,7 +26,7 @@ using LanRemote.Transport;
 namespace LanRemote.Acceptance.Tests;
 
 [Collection(AcceptanceStageFiveCollection.Name)]
-public sealed class ProductRealViewOnlyLoopbackTests
+public sealed partial class ProductRealViewOnlyLoopbackTests
 {
     private static readonly TimeSpan Guard = TimeSpan.FromSeconds(15);
 
@@ -35,12 +35,12 @@ public sealed class ProductRealViewOnlyLoopbackTests
     {
         await using StaDispatcherFixture sta = new();
         Dispatcher dispatcher = await sta.Ready.WaitAsync(Guard);
-        Task run = dispatcher.InvokeAsync(RunOnStaAsync).Task.Unwrap();
+        Task run = dispatcher.InvokeAsync(() => RunOnStaAsync()).Task.Unwrap();
         try { await run.WaitAsync(TimeSpan.FromSeconds(55)); }
         finally { await run.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.SuppressThrowing); }
     }
 
-    private static async Task RunOnStaAsync()
+    private static async Task RunOnStaAsync(bool withCatalog = false, bool delayedCatalog = false, bool externalStop = false)
     {
         Assert.Equal(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
         string root = Path.Combine(Path.GetTempPath(), $"LanRemote-product-loopback-{Guid.NewGuid():N}");
@@ -60,6 +60,16 @@ public sealed class ProductRealViewOnlyLoopbackTests
         LoopbackPolicy policy = new();
         Exception? failure = null;
         List<Exception> cleanupErrors = [];
+        using CancellationTokenSource externalCancellation = new();
+        CancellationTokenRegistration slowStop = default;
+        TaskCompletionSource stopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource stopRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<IReadOnlyList<DisplayInfo>> catalogRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource catalogEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int catalogCalls = 0;
+        DisplayInfo[] catalogDisplays = [
+            new(new DisplayId(4), "远端主屏", 0, 0, 1920, 1080, true),
+            new(new DisplayId(9), "左侧屏幕 <不解析为标记>", -1280, -120, 1280, 1024, false)];
         try
         {
             Directory.CreateDirectory(root);
@@ -105,6 +115,14 @@ public sealed class ProductRealViewOnlyLoopbackTests
                     FailureDelayMax = TimeSpan.Zero,
                 },
             };
+            if (withCatalog)
+                context = context.WithDisplayCatalogSource(() =>
+                {
+                    Interlocked.Increment(ref catalogCalls);
+                    catalogEntered.TrySetResult();
+                    return delayedCatalog ? new ValueTask<IReadOnlyList<DisplayInfo>>(catalogRelease.Task)
+                        : ValueTask.FromResult<IReadOnlyList<DisplayInfo>>(catalogDisplays);
+                }, TimeSpan.FromSeconds(10));
             using TcpListener reservation = new(IPAddress.Loopback, 0);
             reservation.Start();
             int port = ((IPEndPoint)reservation.LocalEndpoint).Port;
@@ -127,7 +145,20 @@ public sealed class ProductRealViewOnlyLoopbackTests
             clientService = new ClientConnectService(identity, new ControlClientConnector());
             string enteredRemoteKey = CrockfordBase32.Encode(remoteKey);
             Assert.NotEqual(CrockfordBase32.Encode(localKey), enteredRemoteKey);
-            client = clientService.ConnectAsync(target!, enteredRemoteKey, owner);
+            client = clientService.ConnectAsync(target!, enteredRemoteKey, owner, externalCancellation.Token);
+            if (externalStop)
+            {
+                object attempt = typeof(ClientConnectService).GetField("_active",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(clientService)!;
+                CancellationTokenSource stop = (CancellationTokenSource)attempt.GetType().GetProperty("Stop",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(attempt)!;
+                // 在最终Presenter.WaitAsync注册之前登记；取消时该最终等待先被唤醒，再阻塞原取消任务。
+                slowStop = stop.Token.Register(() =>
+                {
+                    stopEntered.TrySetResult();
+                    stopRelease.Task.GetAwaiter().GetResult();
+                });
+            }
 
             LocalApprovalRequest pending = await gate.Received.WaitAsync(Guard);
             Assert.Equal(remoteDeviceId, context.ServerDeviceId);
@@ -138,6 +169,7 @@ public sealed class ProductRealViewOnlyLoopbackTests
             Assert.Empty(context.SessionRegistry.Snapshot());
             Assert.Equal(1, context.PendingApprovalLimiter.GlobalInUse);
             Assert.Equal(0, factory.Calls);
+            Assert.Equal(0, Volatile.Read(ref catalogCalls));
             Assert.Equal(1, host.ActiveConnections);
             Assert.Equal(1, host.AdmittedConnections);
             RemoteConnectDialog dialog = Assert.IsType<RemoteConnectDialog>(
@@ -154,6 +186,24 @@ public sealed class ProductRealViewOnlyLoopbackTests
                 is BitmapSource { IsFrozen: true, PixelWidth: 2, PixelHeight: 2 }, client);
             RemoteViewWindow view = Assert.IsType<RemoteViewWindow>(
                 ReadAttemptWindow<RemoteViewWindow>(clientService, "View"));
+            if (withCatalog)
+            {
+                await catalogEntered.Task.WaitAsync(Guard);
+                ItemsControl items = Assert.IsType<ItemsControl>(view.FindName("DisplayCatalogItems"));
+                Assert.NotNull(typeof(RemoteViewWindow).GetField("_readCatalog",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view));
+                if (delayedCatalog)
+                {
+                    Assert.Null(items.ItemsSource);
+                    Assert.Contains("等待", ((TextBlock)view.FindName("CatalogStatusText")).Text);
+                    catalogRelease.SetResult(catalogDisplays);
+                }
+                await WaitOnUiAsync(() => items.Items.Count == 2, client);
+                Assert.Equal(catalogDisplays, items.Items.Cast<DisplayInfo>());
+                Assert.Contains("只读", ((TextBlock)view.FindName("CatalogStatusText")).Text);
+                Assert.Contains("非当前视频选屏状态", ((TextBlock)view.FindName("CatalogStatusText")).Text);
+                Assert.Equal(1, Volatile.Read(ref catalogCalls));
+            }
             BitmapSource image = Assert.IsAssignableFrom<BitmapSource>(view.VideoImage.Source);
             Assert.True(image.IsFrozen);
             Assert.Equal(2, image.PixelWidth);
@@ -176,7 +226,30 @@ public sealed class ProductRealViewOnlyLoopbackTests
             Assert.Equal(2, host.AdmittedConnections);
             Assert.Equal(2, policy.Calls);
 
-            view.Close();
+            if (externalStop)
+            {
+                // 禁用UI采样退路，独立证明服务进入慢Drain之前确实解除目录绑定。
+                ((DispatcherTimer)typeof(RemoteViewWindow).GetField("_catalogTimer",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).Stop();
+                Assert.Same(pendingCleanup, clientService.StopAndDisposeAsync());
+                await stopEntered.Task.WaitAsync(Guard);
+                object attempt = typeof(ClientConnectService).GetField("_active",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(clientService)!;
+                AuthenticatedControlSession control = (AuthenticatedControlSession)attempt.GetType().GetProperty("Control",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(attempt)!;
+                // 以原Control确已撤销证明已进入Drain，再直接断言UI；不以等不到UI的超时冒充单点kill。
+                await WaitOnUiAsync(() => control.GetDisplayCatalogSnapshot() is null, client);
+                AssertCatalogDetached(view);
+                Assert.False(client.IsCompleted);
+                Assert.False(pendingCleanup.IsCompleted);
+                Assert.False(stopRelease.Task.IsCompleted);
+                stopRelease.SetResult();
+            }
+            else
+            {
+                view.Close();
+                AssertCatalogDetached(view);
+            }
             Assert.True(view.IsVisible, "真实窗口不得在原连接与帧处理完成前立即关闭。");
             Assert.False(HasDrainEvidenceFor(clientService, pendingCleanup));
             try
@@ -226,6 +299,7 @@ public sealed class ProductRealViewOnlyLoopbackTests
                 Assert.Equal(safeStatus, clientService.LastStatus);
                 Assert.Equal(safeStatus, ((TextBlock)view.FindName("StatusText")).Text);
                 Assert.Null(view.VideoImage.Source);
+                AssertCatalogDetached(view);
                 Assert.Null(typeof(RemoteViewWindow).GetField("_requestDisconnect",
                     BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view));
                 Assert.True(view.IsVisible, "原诊断保留在窗口中，供用户主动二次关闭。");
@@ -247,6 +321,9 @@ public sealed class ProductRealViewOnlyLoopbackTests
         finally
         {
             gate.ReleasePending();
+            stopRelease.TrySetResult();
+            await slowStop.DisposeAsync();
+            catalogRelease.TrySetResult(catalogDisplays);
             if (clientService is not null)
             {
                 Task cleanup = clientService.StopAndDisposeAsync();
