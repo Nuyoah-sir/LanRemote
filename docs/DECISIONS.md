@@ -1850,3 +1850,13 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **生命周期。** 两入口共用原后台调度、创建核心及失败清理路径。全部工厂/枚举同步前缀仍在原Task.Run中，不传调度取消、不用取消代理提前交还；最后取消检查前由局部变量拥有依赖，成功仅交付尚未Start的生产者。目标失败时不创建encoder或pipeline，已取得的capture仍完整清理。原异常实例/错误树、借用对象不释放、同对象依赖去重及原Stop/Dispose完整join保持；准备成功不清除旧视频根，也不是可复用writer的暂停信号。
 
 **验证状态与非目标。** 新增41case/11方法，保留原116工厂用例与夹具，初始及恢复工厂各157PASS；四Rebuild零警告错误、Debug/Release各5475PASS/0FAIL/0SKIP。独立核验exit0，旧5434完整Counter+41/-0，397源仅工厂/测试两文件变化、173观察原件保持，39原TRX/22163唯一execution；五变异metadata/duplicate/target-id/original-task/selection-cancel各6/3/3/4/1原断言失败，完整wait后逐项精确恢复。真实pipeline配受控capture/encoder，不是GDI/物理多屏/TLS联合切屏；大尺寸边界仅prepare/Stop。新核验器未做穷举篡改自测或异常中断注入。本片不改GDI主屏限制、Transport唯一读者/认证/租约/视频头、App只读目录或会话画质；没有live远端切屏、物理多屏/双机人工验收，不启动M7，不改网/防护/权限，不重验M4/M5、不覆盖旧ZIP。新增切屏消息与现有V2目录peer的能力协商及失败响应仍待设计，不能仅凭应用profile=2就发送新消息。
+
+### ADR-095 — 显式可选的发送尝试编号与原整帧写出生命周期
+
+**2026-10-14，内部实现；Router/live未启用。** 编码器每次重建从1起，编码结果还可能被有界队列丢弃；共享编码序列也不能保证并发发布后的实际发送顺序。故不加Capture共享序列作为必经前置，改在单次、串行sender即将调用writer时分配。保留原默认`VideoFrameSender()`的完整ulong/重复/倒序透传；显式internal `VideoFrameSender(ulong firstFrameId)`才启用该实例独占序列，起点允许0，不用static或跨会话共享。未修改Router构造点，产品路径仍默认透传。
+
+**编号与耗尽。** source原调用完整完成→接管帧→caller检查→EOF→原整帧预算建立/复查→分配→await原writer→原预算末检→timer/frame清理。MaxValue只分配一次，不回绕；下一次仍正常读取来源，EOF正常结束，多一帧则在原写前预算检查后以InvalidOperationException拒绝并释放。等待来源期间仍无新增写预算/硬中断，caller取消和原来源错误优先级不变；耗尽不允许重用sender。分配是写入尝试顺序，不保证首字节写入、完整发送、Client消费或显示；写失败后不重试半帧，也不回收或复用编号。
+
+**借用写出。** 新internal `WriteFrameWithIdAsync(EncodedFrame, ulong, CancellationToken)`与原入口直接返回同一个private async核心的原Task。先FromFrame验证原模型，再仅覆盖值类型header.FrameId；原frame.FrameId/有效payload切片/owner均不改，不构造第二个EncodedFrame，不形成双owner。两入口共用单writer状态、整帧header→payload→Flush→末检、永久终止与一次关闭/诊断；关闭通知不等于join或成功释放。sender仍在原写任务退出后才释放frame，单次运行、不预取、不新增取消代理；来源主异常、写出主异常实例/OCE token及有界清理诊断保持。
+
+**验证与边界。** 新增61case（sender23/writer38），初始定向147PASS；五项生产字节变异：删header覆盖3红、删递增4红、绕过耗尽1红、原await之前释放owner6红、删整帧最终绝对预算2红。每项完整wait/原TRX断言核验后精确恢复；owner变异证明提前释放敏感性，不夸作取消代理或所有join删除的单点覆盖。恢复定向147PASS；四Rebuild零警告/错误、Debug和Release各5536PASS/0FAIL/0SKIP，原六dotnet命令及launcher/worker完整wait0。正式独立核验exit0：旧5475完整四字段身份保留、+61/-0，397源仅两生产/两测试改变，174观察原件重哈希保持；39TRX/22334唯一execution（含旧baseline、当前full、初始/恢复定向及五失败变异）。新增证据为受控Stream/来源与真实Task，不是GDI/JPEG可解码实屏/物理多屏/双机/真实TLS联合切屏。保持LRVF40字节/flags与reserved=0，reader排序规则不变；未冻结Control切屏字段、能力协商、跨TLS或Client显示屏障，未接运行中source/producer换代、每会话画质。无M6产品包、不启动M7、不重验M4/M5、不改网/权限/防护/旧ZIP。
