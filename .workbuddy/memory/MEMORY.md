@@ -2,12 +2,12 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至095：可选发送编号；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至096：生产者换代；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-14，权威详HANDOFF§19.51/ADR095）
+## 当前续作点（2026-10-14，权威详HANDOFF§19.52/ADR096）
 
-已推代码`cd2bfd0`/5536，完整号见HANDOFF。首装可只公告身份；已有配置allowDiscovery须唯一布尔，否则拒公告/监听。
+已推代码`6363e53`/5584，完整号见HANDOFF。首装可只公告身份；已有配置allowDiscovery须唯一布尔，否则拒公告/监听。
 
 **M5已收口。** 2026-10-12用户确认稳定、继续M6，撤回卡顿判断；不重查/重验/加压测。原十分钟/慢网/双方上网确认保留，不捏造数字/截图/审计。§19.29旧ZIP不覆盖/重打、不含M6（完整收据见HANDOFF）。Host默认5/50/JPEG60，显式10/15/20/30默认75/JPEG60，scale50/67/75/100、JPEG40..85；Auto禁，不写config/热切，停完整再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限非全机内存上界。
 
@@ -17,22 +17,19 @@
 
 **Client接收（§19.44）。** 唯一reader、256KiB/10秒原锚、严格host_status/单槽；父gate发布撤销、原IO/timer完整join。Reached非Task发布，WhenAny非join。
 
-**Host底座/Router（§19.45–46）。** 同gate发布worker、None原IO，原锚含序列化/IO/timer，Int128末检。Abort仅通知、join原Task；未知借用不清零，退出≠释放。先监督Host取消/core，再join原close/读/审批；首次clock/回调可阻塞。stop变异为Assert.Same红非Timeout。
+**Host/Router（§19.45–47）。** 同gate发布worker、None原IO；原锚含序列化/IO/timer及Int128末检。Abort仅通知、原Task join，未知借用不清零，退出≠释放。success flush→Register→秘密finally→holding→目录；StopRequired先close/注销再join全部根，Dispose后取VideoCompletion。逐槽保原错误树；受控流非TLS。
 
+**Host/Client目录（§19.48–49）。** Host record共享守卫，非async外桥/原Task保错误树；委托内new GDI，10秒非硬中断，seq0仅元数据。Client原父gate只读单槽、撤销留历史；250ms timer非实时，Closing/SessionEnded/Drain前清timer/getter/token/ItemsSource，拒迟到且异常不跳Drain。5410/5434历史是单机自动化，不是双机/真人/多屏联合。
 
-**认证后目录（§19.47）。** success flush→Register→秘密finally→holding→目录。StopRequired先close/注销再join全部根，Dispose后取VideoCompletion；Sent保持。catch外逐槽保错误树不去重；受控流不等于TLS。
+**固定目标准备（§19.50）。** internal CreateForDisplayAsync完整枚举唯一ID及record匹配，无主屏回退；目标预算先于encoder，交付未Start，创建token不控制生产。共用原Task/回滚，保错误树；selected诊断。41新/5475历史，记录相等非硬件身份/拓扑锁，受控pipeline非GDI/多屏。
 
-**App Host（§19.48）。** record共享守卫；非async外桥保原退出，await原Task保错误树/OCE。委托每次new GDI，10秒非原生硬中断，seq0/UTC仅元数据。5410为单机Control TLS/WPF自动审批/GDI，非双机/视频联合。
+**可选编号（§19.51）。** sender(ulong)实例写前序列，默认new()透传；Max一次，后续EOF正常/额外帧释放耗尽不回绕。writer仅改header，原owner/Task/单飞/终止保持，IO退出释放不预取。61新/5536历史；编号非发送/显示证明，owner变异为提前Dispose而非取消代理。
 
-**Client目录/UI（§19.49）。** 只读同实例/原父gate单槽，撤销留历史。固定getter，单250ms timer非实时；Closing/SessionEnded/Drain前清timer/getter/token/ItemsSource，前后停检拒迟到，异常不跳Drain。5434历史；合成两屏/JPEG同机双TLS非真人/双机/GDI联合。
+**拥有型换代（§19.52）。** internal ReplaceableVideoFrameSource单session/read/replace，正常返回Task即接管未Start候选；旧代原Start/Read及迟到owner完整结算后才新Start。Stop/Dispose/Completion锁外独立，只有同原Task去重；真错入Replace与Completion。提交帧不能收回，旧EOF不外泄；活动EOF永久终止，无active Completion自动监视。Completion先退役/Replace→settled→外层Read避免自join；回调禁等自身。48新/定向195/双配置5584，独立exit0：+48/-0、399源175原件、39TRX/22638execution，五变异1/2/1/1/2红恢复非删除join证明。3个旧帧原IO阻塞时换代完成的同sender测试通过，非TLS/GDI/实屏。
 
-**固定目标准备（§19.50）。** internal CreateForDisplayAsync固定record，完整枚举匹配唯一ID及整条记录，无主屏回退。仅目标预算且先于encoder；成功未Start，创建token不控制生产。共用原Task.Run/回滚，未知原同步调用不代理交还，保错误树；预算ParamName改selected。41新/工厂157/双配置5475/五变异及收据详HANDOFF。受控pipeline非GDI/TLS/多屏，大尺寸仅准备；记录相等非硬件身份/拓扑锁。
+**下一片：经认证会话内部换代接缝与装配，再live/画质。** Router仍固定source/default sender，未接新来源；换代非发送/显示屏障，单次Video租约禁重连。无双机人工前置，后续实机验收保留。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
-**可选编号（§19.51）。** internal sender(ulong)实例序列，默认new()透传。串行写前分配，Max一次，随后EOF正常/额外帧释放并耗尽，不回绕。writer只改header ID，frame/owner不改，共用原Task/验证/单飞/终止；IO退出才释放、不预取。61新/定向147/双配置5536，独立exit0：+61/-0、397源174原件、39TRX/22334execution。五变异3/4/1/6/2红恢复，owner是提前释放非取消代理。编号非发送/显示证明。Router/GDI/live未接，Stop不收回sender/Client帧，单次Video租约禁重连切屏。
-
-**下一片：同一Video流source/producer换代生命周期，再live切屏/画质。** 当前无双机人工前置依赖，后续M6实机验收保留。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
-
-M4收口详§18.25；不翻绿/重跑/加DPI，pin仅顺序关联，采样跨度非清理耗时，SAC非产品功能。历史视频合同详§19.16–18：投影先发布后Start，父等raw+投影、子仅raw，不吞close错；敏感wire等原IO退出再清零，不承诺TLS副本擦除。
+M4详§18.25，不翻绿/重跑；pin仅顺序关联、采样跨度非清理耗时，SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 
 审批按状态机接受时刻：elapsed>=budget拒，gate前计时含UI；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后终检，之前不改limiter；context loader至多一项实际store，迟到key先清零再释放准入，CTS不能硬中断同步DPAPI/gate/阻塞回调。客户端独占TLS到认证，presentedPin及grant proof验完才交会话，public无流/token/输入；hello后machine10s、challenge只收窄、独立approval60s。只消费首个终帧；DTO/TLS内部副本不保证擦除；clock变异须在被删检查之前客观固定到期，不把后置兜底误称单点覆盖。
 
@@ -78,7 +75,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.51可选发送编号各5536通过；live切屏/会话画质未接。 |
+| **M6** | 进行中：§19.52内部换代来源各5584通过；Router/live/会话画质未接。 |
 | M7~M11 | 未开始 |
 
 历史提交链见HANDOFF。

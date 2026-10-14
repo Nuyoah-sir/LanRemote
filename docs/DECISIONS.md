@@ -1860,3 +1860,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **借用写出。** 新internal `WriteFrameWithIdAsync(EncodedFrame, ulong, CancellationToken)`与原入口直接返回同一个private async核心的原Task。先FromFrame验证原模型，再仅覆盖值类型header.FrameId；原frame.FrameId/有效payload切片/owner均不改，不构造第二个EncodedFrame，不形成双owner。两入口共用单writer状态、整帧header→payload→Flush→末检、永久终止与一次关闭/诊断；关闭通知不等于join或成功释放。sender仍在原写任务退出后才释放frame，单次运行、不预取、不新增取消代理；来源主异常、写出主异常实例/OCE token及有界清理诊断保持。
 
 **验证与边界。** 新增61case（sender23/writer38），初始定向147PASS；五项生产字节变异：删header覆盖3红、删递增4红、绕过耗尽1红、原await之前释放owner6红、删整帧最终绝对预算2红。每项完整wait/原TRX断言核验后精确恢复；owner变异证明提前释放敏感性，不夸作取消代理或所有join删除的单点覆盖。恢复定向147PASS；四Rebuild零警告/错误、Debug和Release各5536PASS/0FAIL/0SKIP，原六dotnet命令及launcher/worker完整wait0。正式独立核验exit0：旧5475完整四字段身份保留、+61/-0，397源仅两生产/两测试改变，174观察原件重哈希保持；39TRX/22334唯一execution（含旧baseline、当前full、初始/恢复定向及五失败变异）。新增证据为受控Stream/来源与真实Task，不是GDI/JPEG可解码实屏/物理多屏/双机/真实TLS联合切屏。保持LRVF40字节/flags与reserved=0，reader排序规则不变；未冻结Control切屏字段、能力协商、跨TLS或Client显示屏障，未接运行中source/producer换代、每会话画质。无M6产品包、不启动M7、不重验M4/M5、不改网/权限/防护/旧ZIP。
+
+### ADR-096 — 内部拥有型视频来源的生产者换代与完整退役
+
+**2026-10-14；不接Router/live。** 新internal `ReplaceableVideoFrameSource(Guid sessionId)`实现`IVideoFrameSource/IAsyncDisposable`，初始无producer，读取等待安装而非返回EOF。单session、单read、单replace，不排队候选。`ReplaceAsync(IVideoFrameProducer next)`同步检查；正常返回Task即接管专用且尚未Start候选，之后异步失败也不返还。同步拒绝不接管新对象，同引用重复提交不改变既有归属。没有可撤销替换或替换超时代理。
+
+**先退役后启动。** gate内封口旧代读准入并发布原worker，gate外分别发出Stop、Dispose和Completion观察，任何同步入口阻塞不妨碍其他入口发出。退役包含原Start、原底层Read的同步前缀及异步尾部、迟到帧清理；不等整个外层source Read，后者可能要等待新代，避免循环等待。旧代完全结算成功后才启动并发布候选；旧代或候选真错永久终止，不回滚到已经Stop的旧producer。Start/Read外部调用前先确认Task已在gate发布；所有外部方法、Completion getter、拒绝证明探针和owner Dispose都在gate外。
+
+**所有权与终止。** 非null帧在gate内提交给读者后本来源立即清空局部owner，不做后置取消检查；换代/Dispose先赢时旧帧在锁外释放一次，原attempt退出才算结算。已交付sender的旧帧不被收回，换代不取消writer，换代成功不是发送或Client显示屏障。活动代真正EOF永久封口，退役代EOF只是内部过渡。当前不另起active Completion监视器，仅由EOF/真实读取故障/Dispose终止；不隐含生产者停止即source所有原Read已退出。终态协调先join代际根及原Replace，再发布内部settled使外层Read退出，最后完成稳定Completion；Dispose始终返回同一个Completion。
+
+**错误与取消。** 原任务只AsTask一次；保留原Task多根和嵌套错误，不Flatten、不按异常引用全局去重。Stop/Dispose/Completion只有同一个原Task才去重，独立操作即使共用异常实例仍各保留。读取真错与迟到owner清理真错同时进入Replace失败和最终Completion；caller token真实Canceled原读可取消本次读取而不终止生产，Faulted OCE/异token及清理OCE仍是真错。Start拒绝只在已观察退役且有同实例显式证明时作为停止竞争处理，探针错误和原错误均保留；不靠事后Dispose重判。依赖/owner回调不得等待本来源操作或Completion，以免自join。
+
+**验证边界。** 初始定向195PASS，新增48case；其中3case在旧帧header/payload/flush原IO仍受控阻塞时完成换代，核对owner存活、未预取、原token未取消，放行后同sender连续70/71编号写出。五项生产变异late-owner/delivered-owner/shared-task/original-roots/replace-read-error分别1/2/1/1/2原断言红并精确恢复；不是删除原join或取消代理的独立kill证明。恢复与完整双配置验证结果另记HANDOFF，不以静态审查替代实跑。受控producer/Stream非实际GDI/真实TLS/物理多屏；不改Router、Control codec、Client/UI、FramePipeline、LRVF、Video单次租约与现网安全边界。
