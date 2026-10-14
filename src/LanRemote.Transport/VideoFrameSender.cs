@@ -6,10 +6,26 @@ namespace LanRemote.Transport;
 /// <summary>单次运行，串行接管、写出并释放帧；不预取，不拥有共享帧来源。</summary>
 internal sealed class VideoFrameSender
 {
+    private readonly bool _useSequentialFrameIds;
+    private ulong _nextFrameId;
+    private bool _sequenceExhausted;
     private int _started;
     private Exception? _sourceFailure;
     private Exception? _frameCleanupError;
     private Exception? _writerCleanupError;
+
+    /// <summary>默认逐帧透传来源编号，包括重复、倒序与完整 ulong 范围。</summary>
+    internal VideoFrameSender() { }
+
+    /// <summary>
+    /// 显式启用本 sender 的写入尝试编号（允许起点 0）。分配不是完整发送或显示证明。
+    /// MaxValue 只分配一次；之后允许来源 EOF，若又交付帧则释放该帧并失败，不回绕、不重试。
+    /// </summary>
+    internal VideoFrameSender(ulong firstFrameId)
+    {
+        _useSequentialFrameIds = true;
+        _nextFrameId = firstFrameId;
+    }
 
     /// <summary>仅保留来源边界判定的首个真实故障，不受后续取消影响。</summary>
     internal Exception? SourceFailure => Volatile.Read(ref _sourceFailure);
@@ -80,7 +96,16 @@ internal sealed class VideoFrameSender
                         clock, startedAt, frameWriteTimeout, cancellationToken, cancellationToken);
                     deadline = new AuthenticationDeadline(clock, remaining, cancellationToken);
                     CheckWriteBudget(clock, startedAt, frameWriteTimeout, cancellationToken, deadline.Token);
-                    await writer.WriteFrameAsync(frame, deadline.Token).ConfigureAwait(false);
+                    if (_useSequentialFrameIds)
+                    {
+                        // 只在串行写入前分配；即使原写出部分失败，也不复用已分配编号。
+                        ulong frameId = ReserveFrameId();
+                        await writer.WriteFrameWithIdAsync(frame, frameId, deadline.Token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await writer.WriteFrameAsync(frame, deadline.Token).ConfigureAwait(false);
+                    }
                     CheckWriteBudget(clock, startedAt, frameWriteTimeout, cancellationToken, deadline.Token);
                 }
                 catch (Exception error)
@@ -139,6 +164,25 @@ internal sealed class VideoFrameSender
         }
 
         failure?.Throw();
+    }
+
+    private ulong ReserveFrameId()
+    {
+        if (_sequenceExhausted)
+        {
+            throw new InvalidOperationException("视频发送帧编号已耗尽。");
+        }
+
+        ulong frameId = _nextFrameId;
+        if (frameId == ulong.MaxValue)
+        {
+            _sequenceExhausted = true;
+        }
+        else
+        {
+            _nextFrameId++;
+        }
+        return frameId;
     }
 
     private static TimeSpan CheckWriteBudget(

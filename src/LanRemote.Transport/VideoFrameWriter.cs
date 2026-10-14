@@ -41,7 +41,14 @@ internal sealed class VideoFrameWriter : IDisposable
         _stream = stream;
     }
 
-    internal async Task WriteFrameAsync(EncodedFrame frame, CancellationToken cancellationToken = default)
+    internal Task WriteFrameAsync(EncodedFrame frame, CancellationToken cancellationToken = default) =>
+        WriteFrameCoreAsync(frame, null, cancellationToken);
+
+    /// <summary>仅覆盖本次 wire 头的编号；仍借用原帧，不创建或接管第二个 payload owner。</summary>
+    internal Task WriteFrameWithIdAsync(EncodedFrame frame, ulong frameId, CancellationToken cancellationToken = default) =>
+        WriteFrameCoreAsync(frame, frameId, cancellationToken);
+
+    private async Task WriteFrameCoreAsync(EncodedFrame frame, ulong? frameId, CancellationToken cancellationToken)
     {
         try
         {
@@ -54,6 +61,10 @@ internal sealed class VideoFrameWriter : IDisposable
             }
 
             VideoFrameHeader header = VideoFrameHeader.FromFrame(frame);
+            if (frameId is ulong selectedId)
+            {
+                header = header with { FrameId = selectedId };
+            }
             ReadOnlyMemory<byte> payload = frame.Payload;
             if (payload.Span.Length != header.PayloadLength)
             {

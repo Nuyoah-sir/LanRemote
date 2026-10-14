@@ -758,6 +758,338 @@ public sealed class VideoFrameSenderTests
         Assert.Equal(1, stream.DisposeCalls);
     }
 
+    [Theory]
+    [InlineData(0ul)]
+    [InlineData(1ul)]
+    [InlineData(0x8000000000000000ul)]
+    [InlineData(ulong.MaxValue - 1)]
+    public async Task OptIn_Sequence_Overrides_Repeated_Source_Ids_And_Is_Per_Sender(ulong firstId)
+    {
+        // 两个独立 sender 相同起点；编码器重建后的重复 ID 不进入选定的 wire 编号。
+        for (int run = 0; run < 2; run++)
+        {
+            RecordingVideoOwner firstOwner = new(32);
+            RecordingVideoOwner secondOwner = new(64);
+            using EncodedFrame first = CreateFrame(firstOwner);
+            using EncodedFrame second = CreateFrame(secondOwner);
+            ulong sourceId = first.FrameId;
+            RecordingVideoStream stream = new();
+            using VideoFrameWriter writer = new(stream);
+            VideoFrameSender sender = new(firstId);
+            ManualDeadlineClock clock = new();
+            int reads = 0;
+            DelegateSource source = new((_, _) =>
+            {
+                Assert.Equal(0, clock.TimerCount);
+                Assert.Equal(reads, stream.FlushCalls);
+                if (reads > 0) Assert.Equal(1, firstOwner.DisposeCalls);
+                if (reads > 1) Assert.Equal(1, secondOwner.DisposeCalls);
+                return ValueTask.FromResult<EncodedFrame?>(reads++ switch { 0 => first, 1 => second, _ => null });
+            });
+
+            await sender.SendAsync(Guid.NewGuid(), writer, source, clock, Budget, CancellationToken.None);
+
+            Assert.Equal(WireWithId(firstId).Concat(WireWithId(firstId + 1)).ToArray(), stream.Written);
+            Assert.Equal(sourceId, first.FrameId);
+            Assert.Equal(sourceId, second.FrameId);
+            Assert.Equal(3, source.Calls);
+            Assert.Equal(0, source.DisposeCalls);
+            Assert.Equal(new[] { 40, 5, 40, 5 }, stream.WriteRequests);
+            Assert.All(firstOwner.Bytes[5..], value => Assert.Equal(0xCC, value));
+            Assert.All(secondOwner.Bytes[5..], value => Assert.Equal(0xCC, value));
+            Assert.Equal(1, stream.DisposeCalls);
+            Assert.Empty(sender.CleanupErrors);
+            Assert.Null(sender.SourceFailure);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OptIn_MaxValue_Is_Written_Once_Then_Eof_Or_Exhaustion_Never_Wraps(bool extraFrame)
+    {
+        RecordingVideoOwner lastOwner = new(32);
+        RecordingVideoOwner extraOwner = new(32);
+        using EncodedFrame last = CreateFrame(lastOwner);
+        using EncodedFrame extra = CreateFrame(extraOwner);
+        RecordingVideoStream stream = new();
+        using VideoFrameWriter writer = new(stream);
+        VideoFrameSender sender = new(ulong.MaxValue);
+        ManualDeadlineClock clock = new();
+        int reads = 0;
+        DelegateSource source = new((_, _) =>
+        {
+            if (reads > 0) Assert.Equal(1, lastOwner.DisposeCalls);
+            return ValueTask.FromResult<EncodedFrame?>(reads++ == 0 ? last : extraFrame ? extra : null);
+        });
+
+        Exception? error = await Record.ExceptionAsync(() => sender.SendAsync(
+            Guid.NewGuid(), writer, source, clock, Budget, CancellationToken.None));
+
+        if (extraFrame) Assert.Equal("视频发送帧编号已耗尽。", Assert.IsType<InvalidOperationException>(error).Message);
+        else Assert.Null(error);
+        Assert.Equal(WireWithId(ulong.MaxValue), stream.Written);
+        Assert.Equal(1, stream.FlushCalls);
+        Assert.Equal(2, source.Calls);
+        Assert.Equal(1, lastOwner.DisposeCalls);
+        Assert.Equal(extraFrame ? 1 : 0, extraOwner.DisposeCalls);
+        Assert.Equal(1, stream.DisposeCalls);
+        Assert.Equal(0, clock.TimerCount);
+        Assert.Null(sender.SourceFailure);
+        Assert.Empty(sender.CleanupErrors);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sender.SendAsync(
+            Guid.NewGuid(), writer, source, clock, Budget, CancellationToken.None));
+        Assert.Equal(2, source.Calls);
+    }
+
+    [Theory]
+    [InlineData("header", false)]
+    [InlineData("payload", false)]
+    [InlineData("flush", false)]
+    [InlineData("header", true)]
+    [InlineData("payload", true)]
+    [InlineData("flush", true)]
+    public async Task OptIn_Original_Io_Is_Joined_Before_Release_And_No_Prefetch_Or_Reentry(string stage, bool expire)
+    {
+        using CancellationTokenSource caller = new();
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        RecordingVideoOwner owner = new(32);
+        using EncodedFrame frame = CreateFrame(owner);
+        ReadOnlyMemory<byte> originalPayload = frame.Payload;
+        ulong originalId = frame.FrameId;
+        RecordingVideoStream resource = new();
+        HookVideoStream stream = new(resource);
+        CancellationToken activeToken = default;
+        async Task Block(CancellationToken token)
+        {
+            activeToken = token;
+            entered.TrySetResult();
+            await release.Task;
+            Assert.Equal(0, owner.DisposeCalls);
+            Assert.Equal(originalId, frame.FrameId);
+            Assert.Equal(VideoFrameTestData.Payload(), frame.Payload.ToArray());
+        }
+        stream.BeforeWrite = async (bytes, token) =>
+        {
+            if (bytes.Length == 5) Assert.True(originalPayload.Equals(bytes));
+            if ((stage == "header" && bytes.Length == 40) || (stage == "payload" && bytes.Length == 5))
+                await Block(token);
+        };
+        if (stage == "flush") stream.BeforeFlush = Block;
+        using VideoFrameWriter writer = new(stream);
+        ManualDeadlineClock clock = new();
+        VideoFrameSender sender = new(0);
+        DelegateSource source = new((_, _) => ValueTask.FromResult<EncodedFrame?>(frame));
+        Task sending = sender.SendAsync(Guid.NewGuid(), writer, source, clock, Budget, caller.Token);
+        try
+        {
+            await entered.Task.WaitAsync(Watchdog);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sender.SendAsync(
+                Guid.NewGuid(), writer, source, clock, Budget, caller.Token));
+            Assert.Equal(0, resource.DisposeCalls);
+            if (expire) clock.Advance(Budget);
+            else caller.Cancel();
+            Assert.True(activeToken.IsCancellationRequested);
+            Assert.False(sending.IsCompleted);
+            Assert.Equal(0, owner.DisposeCalls);
+            Assert.Equal(0, resource.DisposeCalls);
+            Assert.Equal(1, source.Calls);
+            int bytesBefore = stage == "header" ? 0 : stage == "payload" ? 40 : 45;
+            Assert.Equal(WireWithId(0)[..bytesBefore], resource.Written);
+            release.SetResult();
+            OperationCanceledException error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sending);
+            Assert.Equal(activeToken, error.CancellationToken);
+            Assert.Equal(1, owner.DisposeCalls);
+            Assert.Equal(1, resource.DisposeCalls);
+            Assert.Equal(0, clock.TimerCount);
+            Assert.Equal(1, source.Calls);
+            Assert.Null(sender.SourceFailure);
+        }
+        finally
+        {
+            release.TrySetResult();
+            caller.Cancel();
+            await Record.ExceptionAsync(() => sending);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OptIn_Late_Original_Write_Error_Wins_Over_Cancellation_And_Cleanup(bool cancelError)
+    {
+        using CancellationTokenSource caller = new();
+        Exception primary = cancelError
+            ? new OperationCanceledException("原写出取消实例。", caller.Token)
+            : new AggregateException("原写出错误树。", new IOException("内层一。"), new IOException("内层二。"));
+        IOException cleanup = new("帧清理错误。");
+        RecordingVideoOwner owner = new(32) { DisposeFailure = cleanup };
+        using EncodedFrame frame = CreateFrame(owner);
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        RecordingVideoStream resource = new() { FailDispose = true };
+        HookVideoStream stream = new(resource)
+        {
+            BeforeWrite = async (bytes, _) =>
+            {
+                if (bytes.Length != 5) return;
+                entered.TrySetResult();
+                await release.Task;
+                Assert.Equal(0, owner.DisposeCalls);
+                throw primary;
+            },
+        };
+        using VideoFrameWriter writer = new(stream);
+        VideoFrameSender sender = new(7);
+        ManualDeadlineClock clock = new();
+        DelegateSource source = new((_, _) => ValueTask.FromResult<EncodedFrame?>(frame));
+        Task sending = sender.SendAsync(Guid.NewGuid(), writer, source, clock, Budget, caller.Token);
+        try
+        {
+            await entered.Task.WaitAsync(Watchdog);
+            caller.Cancel();
+            Assert.False(sending.IsCompleted);
+            Assert.Equal(0, owner.DisposeCalls);
+            release.SetResult();
+            Assert.Same(primary, await Record.ExceptionAsync(() => sending));
+            Assert.Equal(WireWithId(7)[..40], resource.Written);
+            Assert.Equal(1, source.Calls);
+            Assert.Equal(1, owner.DisposeCalls);
+            Assert.Equal(1, resource.DisposeCalls);
+            Assert.Null(sender.SourceFailure);
+            Assert.Equal(2, sender.CleanupErrors.Count);
+            Assert.Same(cleanup, sender.CleanupErrors[0]);
+            Assert.Same(Assert.Single(writer.CleanupErrors), sender.CleanupErrors[1]);
+            Assert.Equal(0, clock.TimerCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await Record.ExceptionAsync(() => sending);
+        }
+    }
+
+    [Theory]
+    [InlineData("frame")]
+    [InlineData("eof")]
+    [InlineData("fault")]
+    public async Task OptIn_Exhausted_Sequence_Still_Joins_Next_Source_And_Preserves_Boundary(string result)
+    {
+        using CancellationTokenSource caller = new();
+        RecordingVideoOwner firstOwner = new(32);
+        RecordingVideoOwner lateOwner = new(32);
+        using EncodedFrame first = CreateFrame(firstOwner);
+        using EncodedFrame late = CreateFrame(lateOwner);
+        IOException sourceFailure = new("迟到来源错误。");
+        TaskCompletionSource<EncodedFrame?> pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        RecordingVideoStream stream = new();
+        using VideoFrameWriter writer = new(stream);
+        VideoFrameSender sender = new(ulong.MaxValue);
+        ManualDeadlineClock clock = new();
+        int reads = 0;
+        DelegateSource source = new((_, _) => reads++ == 0
+            ? ValueTask.FromResult<EncodedFrame?>(first) : new(pending.Task));
+        Task sending = sender.SendAsync(Guid.NewGuid(), writer, source, clock, Budget, caller.Token);
+        try
+        {
+            Assert.Equal(2, source.Calls);
+            Assert.Equal(1, firstOwner.DisposeCalls);
+            caller.Cancel();
+            Assert.False(sending.IsCompleted);
+            Assert.Equal(0, stream.DisposeCalls);
+            Assert.Equal(0, lateOwner.DisposeCalls);
+            if (result == "fault") pending.SetException(sourceFailure);
+            else pending.SetResult(result == "frame" ? late : null);
+            Exception? error = await Record.ExceptionAsync(() => sending);
+            if (result == "fault")
+            {
+                Assert.Same(sourceFailure, error);
+                Assert.Same(sourceFailure, sender.SourceFailure);
+            }
+            else
+            {
+                Assert.Equal(caller.Token, Assert.IsAssignableFrom<OperationCanceledException>(error).CancellationToken);
+                Assert.Null(sender.SourceFailure);
+            }
+            Assert.Equal(WireWithId(ulong.MaxValue), stream.Written);
+            Assert.Equal(result == "frame" ? 1 : 0, lateOwner.DisposeCalls);
+            Assert.Equal(1, stream.DisposeCalls);
+            Assert.Equal(0, clock.TimerCount);
+        }
+        finally
+        {
+            pending.TrySetResult(null);
+            await Record.ExceptionAsync(() => sending);
+        }
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task OptIn_Flush_Bytes_Are_Not_Proof_Of_Success_At_Exact_Deadline(int offsetTicks)
+    {
+        ManualDeadlineClock clock = new();
+        RecordingVideoOwner owner = new(32);
+        using EncodedFrame frame = CreateFrame(owner);
+        RecordingVideoStream resource = new();
+        HookVideoStream stream = new(resource)
+        {
+            AfterFlush = () => clock.Advance(TimeSpan.FromTicks(Budget.Ticks + offsetTicks), fireTimers: false),
+        };
+        using VideoFrameWriter writer = new(stream);
+        VideoFrameSender sender = new(ulong.MaxValue);
+        int reads = 0;
+        DelegateSource source = new((_, _) => ValueTask.FromResult<EncodedFrame?>(reads++ == 0 ? frame : null));
+        Exception? error = await Record.ExceptionAsync(() => sender.SendAsync(
+            Guid.NewGuid(), writer, source, clock, Budget, CancellationToken.None));
+        if (offsetTicks < 0) Assert.Null(error);
+        else Assert.IsAssignableFrom<OperationCanceledException>(error);
+        Assert.Equal(offsetTicks < 0 ? 2 : 1, source.Calls);
+        Assert.Equal(WireWithId(ulong.MaxValue), resource.Written);
+        Assert.Equal(1, resource.FlushCalls);
+        Assert.All(resource.Tokens, token => Assert.False(token.IsCancellationRequested));
+        Assert.Equal(1, owner.DisposeCalls);
+        Assert.Equal(1, resource.DisposeCalls);
+        Assert.Equal(0, clock.TimerCount);
+    }
+
+    [Theory]
+    [InlineData("pre-cancel")]
+    [InlineData("empty")]
+    [InlineData("zero-budget")]
+    public async Task OptIn_No_Write_Path_Does_Not_Change_Frame_Or_Start_Timer(string mode)
+    {
+        using CancellationTokenSource caller = new();
+        RecordingVideoOwner owner = new(32);
+        using EncodedFrame frame = CreateFrame(owner);
+        ulong originalId = frame.FrameId;
+        RecordingVideoStream stream = new();
+        using VideoFrameWriter writer = new(stream);
+        ProbeClock clock = new(new ManualDeadlineClock());
+        VideoFrameSender sender = new(0);
+        DelegateSource source = new((_, _) => ValueTask.FromResult<EncodedFrame?>(mode == "empty" ? null : frame));
+        if (mode == "pre-cancel") caller.Cancel();
+        Exception? error = await Record.ExceptionAsync(() => sender.SendAsync(Guid.NewGuid(), writer, source,
+            clock, mode == "zero-budget" ? TimeSpan.Zero : Budget, caller.Token));
+        if (mode == "empty") Assert.Null(error);
+        else Assert.IsAssignableFrom<OperationCanceledException>(error);
+        Assert.Equal(originalId, frame.FrameId);
+        Assert.Equal(mode == "pre-cancel" ? 0 : 1, source.Calls);
+        Assert.Equal(mode == "zero-budget" ? 1 : 0, owner.DisposeCalls);
+        Assert.Empty(stream.Written);
+        Assert.Equal(0, clock.TimerCreations);
+        Assert.Equal(1, stream.DisposeCalls);
+    }
+
+    private static byte[] WireWithId(ulong frameId)
+    {
+        byte[] wire = VideoFrameTestData.Wire();
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(wire.AsSpan(8, 8), frameId);
+        return wire;
+    }
+
     private static EncodedFrame CreateFrame(RecordingVideoOwner owner)
     {
         VideoFrameTestData.Payload().CopyTo(owner.Bytes, 0);
