@@ -1840,3 +1840,13 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **测试与局限。** 新Transport11例实用受控原reader；WPF10例用反射构造纯数据，明示不等于认证证据；新增产品3例走真实双TLS、显式测试审批gate、合成两屏目录与2x2 JPEG，不等于真人WPF审批、双机或物理多屏。慢停止用例预先登记阻塞取消回调，确保最终WaitAsync先收到取消；禁用UI timer退路，以Control撤销证明已进入Drain后直接断言目录清除、原取消/清理仍未完成。原错误登记顺序和首次Guard变异失败保留不算kill；六项正式变异为公开getter丢失3红、取值后停止检查2红、timer启动1红、ItemsSource清除4红、App绑定3红、Drain前清理1红并恢复。App绑定变异止于非空getter接线断言；慢Drain变异为真实原Null断言，不拿Guard超时当通过。完整验证与交付收据见HANDOFF§19.49。首轮full因两旧公共方法精确白名单漏列GetDisplayCatalogSnapshot而2红，仅精确加入该纯数据方法，保留其他API约束。新恢复656/20、四Rebuild零警告错误、双配置各5434全通过；独立原证据核验exit0，旧5410完整Counter+24/-0，397源、357原件保持。正式变异使用v4字节，最终白名单两处修订由逆替换SHA精确衔接；55TRX/28711execution不含另外六个仅做原件/wait保持核对的失败历史阶段。
 
 **非目标。** 不切屏、不改变采集/视频几何/会话画质，不开始M7，不改网络/防护/权限，不重验M4/M5，不重打旧ZIP。本片无必须先由双机人工完成才能继续的开发依赖；不取消后续M6实机验收。
+
+### ADR-094 — 切屏前置的固定目标生产者准备，暂不冻结跨通道切屏消息
+
+**2026-10-14，内部准备实现及验证完成，live切屏未接。** 原规格仅列出`request_display`/`display_changed`及通用消息元数据，未规定视频边界关联字段。现有Video租约只消费一次，writer取消/出错会永久关闭；停止pipeline不能收回sender或Client已持帧，编码器重建又从frameId=1开始且编码首帧可能被DropOldest丢弃。因此本片不先冻结`firstFrameId`等wire字段，不把Control通知当视频已显示，不以重连Video代替切屏。先建立无跨TLS假设的固定目标生产者准备入口，后续再确定同一视频流连续编号、整帧写出和Client消费/显示屏障。
+
+**准备合同。** 在`FramePipelineVideoProducerFactory`增加internal的`CreateForDisplayAsync(Guid, DisplayInfo, CancellationToken)`，公开`CreateAsync`仍默认唯一主屏。目标是本次调用固定的不可变数据，不增设工厂共享可变选择槽；同一工厂不同调用仍必须取得各自专用的capture/encoder。目标分支在当前后端目录完整枚举中按ID唯一匹配，并比较完整`DisplayInfo`记录；缺失、重复、元数据不等明确拒绝，不回退主屏，不把数组位置当ID。只对选中目标执行既有维度/像素预算，其他非目标大屏不成为拒绝理由。该内部入口不追加wire的0..255限制，不授予认证、句柄或网络能力；记录相等也不能证明硬件身份、拓扑世代或之后不会热插拔。共享预算诊断中性化：公开默认路径超预算仍抛原`ArgumentOutOfRangeException`，但`ParamName`从`primary`变为`selected`、文案从“主屏”变为“目标显示器”；不宣称诊断字符串逐字兼容。
+
+**生命周期。** 两入口共用原后台调度、创建核心及失败清理路径。全部工厂/枚举同步前缀仍在原Task.Run中，不传调度取消、不用取消代理提前交还；最后取消检查前由局部变量拥有依赖，成功仅交付尚未Start的生产者。目标失败时不创建encoder或pipeline，已取得的capture仍完整清理。原异常实例/错误树、借用对象不释放、同对象依赖去重及原Stop/Dispose完整join保持；准备成功不清除旧视频根，也不是可复用writer的暂停信号。
+
+**验证状态与非目标。** 新增41case/11方法，保留原116工厂用例与夹具，初始及恢复工厂各157PASS；四Rebuild零警告错误、Debug/Release各5475PASS/0FAIL/0SKIP。独立核验exit0，旧5434完整Counter+41/-0，397源仅工厂/测试两文件变化、173观察原件保持，39原TRX/22163唯一execution；五变异metadata/duplicate/target-id/original-task/selection-cancel各6/3/3/4/1原断言失败，完整wait后逐项精确恢复。真实pipeline配受控capture/encoder，不是GDI/物理多屏/TLS联合切屏；大尺寸边界仅prepare/Stop。新核验器未做穷举篡改自测或异常中断注入。本片不改GDI主屏限制、Transport唯一读者/认证/租约/视频头、App只读目录或会话画质；没有live远端切屏、物理多屏/双机人工验收，不启动M7，不改网/防护/权限，不重验M4/M5、不覆盖旧ZIP。新增切屏消息与现有V2目录peer的能力协商及失败响应仍待设计，不能仅凭应用profile=2就发送新消息。

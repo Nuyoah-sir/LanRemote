@@ -2,12 +2,12 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至093：Client目录投影/UI清理；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至094：固定目标准备；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-14，权威详HANDOFF§19.49/ADR093）
+## 当前续作点（2026-10-14，权威详HANDOFF§19.50/ADR094）
 
-已推代码`3a4280d`/5434，完整号见HANDOFF。首装可只公告身份；已有配置allowDiscovery须唯一布尔，否则拒公告/监听。
+已推代码`f33277e`/5475，完整号见HANDOFF。首装可只公告身份；已有配置allowDiscovery须唯一布尔，否则拒公告/监听。
 
 **M5已收口。** 2026-10-12用户确认稳定、继续M6，撤回卡顿判断；不重查/重验/加压测。原十分钟/慢网/双方上网确认保留，不捏造数字/截图/审计。§19.29旧ZIP不覆盖/重打、不含M6（完整收据见HANDOFF）。Host默认5/50/JPEG60，显式10/15/20/30默认75/JPEG60，scale50/67/75/100、JPEG40..85；Auto禁，不写config/热切，停完整再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限非全机内存上界。
 
@@ -17,16 +17,18 @@
 
 **Client接收（§19.44）。** 唯一reader、256KiB/10秒原锚、严格host_status/单槽；父gate发布撤销、原IO/timer完整join。Reached非Task发布，WhenAny非join。
 
-**Host底座/Router（§19.45–46）。** 固定worker同gate发布、None原IO，原锚含序列化/IO/timer，Int128末检/sampleGate高水位。Abort仅通知、join原Task；未知借用不清零，退出≠释放。Router先监督Host取消/core结束，再join原close/读/审批；首次clock/回调仍可阻塞。stop变异为10秒后Assert.Same红非Timeout；历史收据见HANDOFF。
+**Host底座/Router（§19.45–46）。** 同gate发布worker、None原IO，原锚含序列化/IO/timer，Int128末检。Abort仅通知、join原Task；未知借用不清零，退出≠释放。先监督Host取消/core，再join原close/读/审批；首次clock/回调可阻塞。stop变异为Assert.Same红非Timeout。
 
 
 **认证后目录（§19.47）。** success完整flush→Register→秘密finally→原holding→目录。StopRequired先close/注销再join来源/IO/holding/timer/Video，Dispose后取VideoCompletion；Sent保持会话。旧catch外逐槽保错误树、不去重。5383/独立exit0；受控流/Registry租约不等于视频TLS。
 
-**App Host（§19.48）。** WithDisplayCatalogSource record副本保共享引用；非async外桥保未交Task未知退出，await原Task保错误树，单根faulted OCE可转Canceled但保实例/token。委托内每次new GDI，10秒预算非原生硬中断；seq0/UTC仅元数据。5410/独立exit0历史；单机Control TLS/WPF自动控件/GDI非真人/双机/视频联合，观察从Start后开始。
+**App Host（§19.48）。** record副本保共享守卫；非async外桥保原调用退出，await原Task保错误树及OCE实例/token。委托内每次new GDI，10秒非原生硬中断；seq0/UTC仅元数据。5410历史为单机Control TLS/WPF自动审批/GDI，非双机/视频联合。
 
-**Client公开目录/UI（§19.49）。** DisplayCatalogSnapshot纯只读，原父gate/单槽；重复getter同实例，撤销只阻止后续查询，不抹历史。固定Attempt getter，单DispatcherTimer名义250ms非实时保证；Closing/SessionEnded/Drain前释放timer/getter/token/ItemsSource，前后停止检查防迟到，证据含目录根，错误追加不跳Drain。新11+10+3例、恢复656/20；六变异3/2/1/4/3/1原断言红。首轮full两旧API白名单红，仅补getter；v4到最终此两处逆替换SHA核对。双配置5434/独立exit0，5410+24/-0、397源357原件、55TRX/28711execution；六历史失败仅核原件/wait非kill。合成两屏/2x2JPEG同机双TLS、测试审批gate非真人/双机/GDI联合。变异缺wait不恢复，未做异常中断注入。
+**Client公开目录/UI（§19.49）。** 纯只读同实例/原父gate单槽，撤销不抹历史。固定Attempt getter，单timer名义250ms非实时；Closing/SessionEnded/Drain前释放timer/getter/token/ItemsSource，前后停止检查防迟到，异常不跳Drain。5434历史，新24/六变异/两白名单修订及收据详HANDOFF。合成两屏/2x2JPEG同机双TLS、测试审批非真人/双机/GDI联合。
 
-**下一片：切屏合同及最小生命周期，再会话画质。** 当前无双机人工前置依赖，后续M6实机验收保留。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
+**固定目标准备（§19.50）。** internal CreateForDisplayAsync固定record参数，共用原Task.Run/创建/回滚；完整枚举按唯一ID和整条记录匹配，无主屏回退，不按列表索引。预算只查目标、先于encoder；成功尚未Start，创建token不控制生产。原同步调用未退出不得代理取消交还，保异常实例/错误树。新41/工厂157，双配置5475/独立exit0，5434+41/-0、397源173原件、39TRX/22163execution。五变异6/3/3/4/1原断言红、完整wait后精确恢复。真实pipeline+受控依赖非GDI/TLS/多屏；大尺寸仅prepare/Stop。公开预算异常ParamName改selected、文案中性化。记录相等非硬件身份/拓扑锁；GDI仍主屏，live/wire未改。停止pipeline不能排空sender/Client已持帧，重建encoder编号重置，不能重连单次Video租约当切屏。
+
+**下一片：同一Video流连续编号/整帧边界与切换生命周期，再live切屏/画质。** 当前无双机人工前置依赖，后续M6实机验收保留。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
 M4收口详§18.25；不翻绿/重跑/加DPI，pin仅顺序关联，采样跨度非清理耗时，SAC非产品功能。历史视频合同详§19.16–18：投影先发布后Start，父等raw+投影、子仅raw，不吞close错；敏感wire等原IO退出再清零，不承诺TLS副本擦除。
 
@@ -74,11 +76,11 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.49 Client公开目录/UI清理各5434通过；切屏/会话画质未接。 |
+| **M6** | 进行中：§19.50固定目标准备各5475通过；live切屏/会话画质未接。 |
 | M7~M11 | 未开始 |
 
-M3最终1d5ffc8/M3.1 2dee00c；M4阶段0~3=2312e70/35506b5/21a8829/760e950；完整提交链见HANDOFF。
-远端origin为public，地址/推送历史见HANDOFF§1；不将旧“远端=本地”外推当前。gh未装也无需。push曾遇超时/schannel；helper-selector每次弹GUI且可能清空helper，勿裸跑（含--help）。2026-09-21全局+repo已修selected=manager及“空值+manager”链，fill rc0/trace仅GCM。按上述持续授权逐片提交推送。
+历史提交链见HANDOFF。
+origin为public，地址/历史见HANDOFF§1，不外推当前同步。gh无需。勿裸跑helper-selector（含--help），会弹GUI/改配置。凭据selected=manager、空值+manager链已修；按持续授权逐片提交推送。
 
 ## 实测事实（别再猜）
 
@@ -107,7 +109,7 @@ accept→同子网→准入→TLS不可换；pre-auth≤4KiB；M3旧hello后关�
 - 禁止「失败即 PASS」：连不上抛 `SocketException`/`IOException` 永不是 `AuthenticationException`；`ConnectionReset` 不算「没连上」
 - TLS 1.3 幽灵行 → 判定写区间 `3..4`；`ReadAsync==0` ≠ close_notify → 文案写「有序 EOF」；`TryParse` 语义别反
 - 裸后台线程未处理异常 = 进程瞬死；未观察 faulted Task = 静默存活 → 两个 handler 都要挂
-- 按行数记账的 tailer：`usable` 必须=「确定写完的行数」→ 配独立 `CountCompleteLines` 对账防回归
+- tailer的`usable`须等于确定写完行数，配独立`CountCompleteLines`对账。
 - 帧读取器「失败后恢复」场景：**消费掉的字节无法退回**——半前缀超时后再读必然错位；恢复性用例只能建在 **0 字节失败**上（B19 定案）
 - `dotnet test` 全量数总数用 `| grep -E "已通过!|失败!"`：`tail -N` 会截掉**首个**项目结果行（Protocol.Tests 曾被整行吞掉，574→601 的「差值」据此而来）
 - **黄金向量**：期望来自独立第二实现`scripts/reference/gen-auth-golden-vectors.py`；NUL写`\u0000`，C#的`\0`接数字会成八进制；变异须触实现，常量自证是假绿。
