@@ -299,6 +299,11 @@ public sealed class HostRuntimeService
                 ApprovalGate = _approvalGate,
                 Options = new ControlAuthOptions { RequireLocalApproval = true },
             };
+            // 惰性只读枚举：配置/Host构造不接触桌面，实际来源由认证后的目录生命周期调用。
+            // 每次独立枚举器；10秒覆盖整个发送尝试，不承诺中断不合作的原生枚举。
+            context = context.WithDisplayCatalogSource(
+                () => ValueTask.FromResult<IReadOnlyList<DisplayInfo>>(new GdiDisplayCatalog().GetDisplays()),
+                TimeSpan.FromSeconds(10));
             FramePipelineVideoProducerFactory factory = new(
                 () => new GdiScreenCaptureBackend(),
                 () => new WpfJpegFrameEncoder(),

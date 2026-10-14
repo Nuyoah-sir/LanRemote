@@ -1,4 +1,6 @@
+using System.Runtime.ExceptionServices;
 using LanRemote.Core.Abstractions;
+using LanRemote.Core.Models;
 using LanRemote.Transport.Auth;
 
 namespace LanRemote.Transport;
@@ -59,8 +61,43 @@ public sealed record ControlAuthContext
     // Host 共用；即使一个 store Task 无视取消，也不得由后续连接积累无限迟到任务。
     internal AuthenticationSecretLoader SecretLoader { get; } = new();
 
-    // 默认仍为原认证保持路径；只有内部 Router 显式绑定才启动目录发送。
+    // 未配置仍为原认证保持路径；显式来源由 Router 在认证后生命周期内启动。
     internal HostDisplayCatalogSendOptions? DisplayCatalogSend { get; init; }
+
+    /// <summary>返回装配单次只读显示器目录来源的副本；保留本 Host 的所有共享守卫。</summary>
+    /// <remarks>
+    /// 配置时不调用来源、时钟或 I/O。来源仅由已完成认证/审批/登记及秘密清理的连接调用，
+    /// 每连接至多一次；不同连接可以并发调用，来源不得共享未同步的可变状态。
+    /// budget 覆盖来源、校验、序列化、写出和预算清理；停止不取消或遗弃来源原任务，
+    /// 不合作的同步调用或原任务可能使最终等待不结束。返回的数据仅为历史元数据，非采集或切屏授权。
+    /// 来源必须交还代表全部所属工作的 ValueTask，不得隐匿后台操作；列表交还后不得再并发修改。
+    /// </remarks>
+    public ControlAuthContext WithDisplayCatalogSource(
+        Func<ValueTask<IReadOnlyList<DisplayInfo>>> source, TimeSpan budget)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return this with
+        {
+            DisplayCatalogSend = new HostDisplayCatalogSendOptions(
+                // 非 async 桥：source/AsTask 未交还原 Task 的同步异常仍由 sender 记录未知退出。
+                () => new ValueTask<DisplayCatalogFrame>(ProjectCatalogAsync(source().AsTask())), budget),
+        };
+    }
+
+    private static async Task<DisplayCatalogFrame> ProjectCatalogAsync(Task<IReadOnlyList<DisplayInfo>> original)
+    {
+        IReadOnlyList<DisplayInfo> displays;
+        try { displays = await original.ConfigureAwait(false); }
+        catch
+        {
+            // await 只抛一个异常；保留原 Task 的兄弟、嵌套和重复引用，不 Flatten/去重。
+            if (original.Exception is { } tree)
+                ExceptionDispatchInfo.Capture(tree.InnerExceptions.Count == 1 ? tree.InnerExceptions[0] : tree).Throw();
+            throw;
+        }
+        // 当前每父连接仅一次发送，seq=0；UTC仅消息元数据，不作为单调预算、拓扑代或视频坐标映射。
+        return new DisplayCatalogFrame(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), displays);
+    }
 
     /// <summary>本机设备号（进 challenge 的 <c>serverDeviceId</c>，同时是 transcript 素材）。</summary>
     public required Guid ServerDeviceId { get; init; }
