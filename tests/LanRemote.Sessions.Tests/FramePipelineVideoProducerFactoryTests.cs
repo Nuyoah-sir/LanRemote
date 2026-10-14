@@ -869,6 +869,444 @@ public sealed class FramePipelineVideoProducerFactoryTests
         }
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Target_display_is_fixed_by_id_and_complete_metadata_and_creation_token_does_not_control_production(int targetIndex)
+    {
+        var f = new Fixture();
+        DisplayInfo[] displays = new[] { 902, 41, 703 }
+            .Select((id, index) => Display(id, index == (targetIndex + 1) % 3)).ToArray();
+        DisplayInfo expectedDisplay = displays[targetIndex] with { };
+        f.Capture.Displays = () => displays;
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            IVideoFrameProducer producer = await f.Create(new TargetFactory(factory, expectedDisplay));
+            f.AssertCalls(1, 1, 1);
+            Assert.NotSame(expectedDisplay, displays[targetIndex]);
+            Assert.False(expectedDisplay.IsPrimary);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            Assert.Equal(0, f.Encoder.EncodeCount);
+            Assert.Equal(0, f.Clock.TimestampCalls);
+            Assert.Throws<InvalidOperationException>(() => { _ = f.Read(producer); });
+            f.CreationCancellation.Cancel();
+            producer.Start();
+            Assert.Throws<InvalidOperationException>(producer.Start);
+            FrameCall<CapturedFrame> capture = f.Capture.Captures[0];
+            await Success(capture.Entered.Task);
+            Assert.Equal(expectedDisplay.Id, f.Capture.LastDisplay);
+            Assert.False(capture.Token.IsCancellationRequested);
+            CapturedFrame raw = capture.Reply();
+            FrameCall<EncodedFrame> encode = f.Encoder.Encodes[0];
+            await Success(encode.Entered.Task);
+            Assert.Same(raw, f.Encoder.LastInput);
+            Assert.Equal(expectedDisplay.Id, f.Encoder.LastInput!.DisplayId);
+            Assert.False(encode.Token.IsCancellationRequested);
+            EncodedFrame expected = encode.Reply();
+            using (EncodedFrame? actual = await Success(f.Read(producer))) Assert.Same(expected, actual);
+            Task stopping = producer.StopAsync();
+            f.ReleaseFrames();
+            await Success(stopping);
+            Assert.Same(stopping, producer.Completion);
+            Assert.Same(stopping, producer.DisposeAsync().AsTask());
+            Assert.Null(await Success(f.Read(producer)));
+            f.AssertDisposed(1, 0);
+            f.AssertOwnersReleased();
+            f.AssertBorrowed();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("duplicate-value")]
+    [InlineData("duplicate-reference")]
+    [InlineData("duplicate-different-metadata")]
+    [InlineData("name")]
+    [InlineData("x")]
+    [InlineData("y")]
+    [InlineData("width")]
+    [InlineData("height")]
+    [InlineData("primary")]
+    public async Task Target_display_missing_duplicate_or_changed_metadata_rejects_without_primary_fallback(string shape)
+    {
+        var f = new Fixture();
+        DisplayInfo expected = Display(902, false);
+        DisplayInfo changed = shape switch
+        {
+            "name" => expected with { Name = expected.Name + "变更" },
+            "x" => expected with { X = expected.X + 1 },
+            "y" => expected with { Y = expected.Y + 1 },
+            "width" => expected with { Width = expected.Width + 1 },
+            "height" => expected with { Height = expected.Height + 1 },
+            "primary" => expected with { IsPrimary = true },
+            _ => expected
+        };
+        DisplayInfo primary = Display(73, true);
+        DisplayInfo[] displays = shape switch
+        {
+            "missing" => [primary, Display(41, false)],
+            "duplicate-value" => [expected, primary, expected with { }],
+            "duplicate-reference" => [expected, primary, expected],
+            "duplicate-different-metadata" => [expected, primary, expected with { X = 0 }],
+            _ => [primary, changed]
+        };
+        int enumeratedToEnd = 0;
+        f.Capture.Displays = () => new TargetDisplayList(displays, () => Interlocked.Increment(ref enumeratedToEnd));
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            Task<IVideoFrameProducer> creation = await f.Begin(new TargetFactory(factory, expected)).Published();
+            var error = Assert.IsType<InvalidOperationException>(await Error(creation));
+            Assert.Contains(shape == "missing" ? "未找到" : shape.StartsWith("duplicate", StringComparison.Ordinal) ? "重复" : "元数据", error.Message);
+            Assert.True(creation.IsFaulted);
+            Assert.Equal(1, enumeratedToEnd);
+            f.AssertCalls(1, 1, 0);
+            Assert.Equal(1, f.Capture.Cleanup.AsyncCalls);
+            Assert.Equal(0, f.Capture.Cleanup.SyncCalls);
+            Assert.Equal(0, f.Encoder.Cleanup.TotalCalls);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            Assert.Equal(0, f.Encoder.EncodeCount);
+            f.AssertBorrowed();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(1, 0)]
+    [InlineData(-1, 1)]
+    [InlineData(1, -1)]
+    [InlineData(8193, 1)]
+    [InlineData(1, 8193)]
+    [InlineData(4096, 4097)]
+    [InlineData(4097, 4096)]
+    [InlineData(8192, 8192)]
+    [InlineData(int.MaxValue, int.MaxValue)]
+    public async Task Target_display_outside_frame_budget_rejects_before_encoder_or_capture(int width, int height)
+    {
+        var f = new Fixture();
+        DisplayInfo expected = Display(902, false) with { Width = width, Height = height };
+        f.Capture.Displays = () => [Display(73, true), expected];
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            Task<IVideoFrameProducer> creation = await f.Begin(new TargetFactory(factory, expected)).Published();
+            Assert.IsType<ArgumentOutOfRangeException>(await Error(creation));
+            Assert.True(creation.IsFaulted);
+            f.AssertCalls(1, 1, 0);
+            Assert.Equal(1, f.Capture.Cleanup.AsyncCalls);
+            Assert.Equal(0, f.Capture.Cleanup.SyncCalls);
+            Assert.Equal(0, f.Encoder.Cleanup.TotalCalls);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            Assert.Equal(0, f.Encoder.EncodeCount);
+            f.AssertBorrowed();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(4096, 4096)]
+    [InlineData(8192, 2048)]
+    [InlineData(2048, 8192)]
+    public async Task Target_display_within_budget_is_not_rejected_by_oversized_other_displays(int width, int height)
+    {
+        var f = new Fixture();
+        DisplayInfo expected = Display(902, false) with { Width = width, Height = height };
+        f.Capture.Displays = () =>
+        [
+            Display(73, true) with { Width = 8193 },
+            expected,
+            Display(41, false) with { Width = 8192, Height = 8192 }
+        ];
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            IVideoFrameProducer producer = await f.Create(new TargetFactory(factory, expected));
+            f.AssertCalls(1, 1, 1);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            Assert.Equal(0, f.Encoder.EncodeCount);
+            await Success(producer.StopAsync());
+            f.AssertDisposed(1, 0);
+            f.AssertBorrowed();
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Target_display_arguments_are_rejected_synchronously_before_acquiring_resources(bool canceled)
+    {
+        var f = new Fixture();
+        try
+        {
+            if (canceled) f.CreationCancellation.Cancel();
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            var missing = Assert.Throws<ArgumentNullException>(() =>
+            {
+                _ = factory.CreateForDisplayAsync(Guid.NewGuid(), null!, f.CreationCancellation.Token);
+            });
+            Assert.Equal("expectedDisplay", missing.ParamName);
+            var empty = Assert.Throws<ArgumentException>(() =>
+            {
+                _ = factory.CreateForDisplayAsync(Guid.Empty, Display(902, false), f.CreationCancellation.Token);
+            });
+            Assert.Equal("sessionId", empty.ParamName);
+            f.AssertCalls(0, 0, 0);
+            f.AssertDisposed(0, 0);
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Fact]
+    public async Task Target_display_pre_cancellation_acquires_nothing_and_preserves_creation_token()
+    {
+        var f = new Fixture();
+        try
+        {
+            f.CreationCancellation.Cancel();
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            Task<IVideoFrameProducer> creation = await f.Begin(new TargetFactory(factory, Display(902, false))).Published();
+            var error = Assert.IsAssignableFrom<OperationCanceledException>(await Error(creation));
+            Assert.Equal(f.CreationCancellation.Token, error.CancellationToken);
+            Assert.True(creation.IsCanceled);
+            f.AssertCalls(0, 0, 0);
+            f.AssertDisposed(0, 0);
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData("capture")]
+    [InlineData("displays")]
+    [InlineData("selection")]
+    [InlineData("encoder")]
+    public async Task Target_display_synchronous_prefix_stays_on_original_background_task_until_canceled_call_exits(string stage)
+    {
+        var f = new Fixture();
+        DisplayInfo expected = Display(902, false);
+        Gate held = stage == "selection" ? f.NewGate() : f.Stage(stage);
+        held.Hold();
+        f.Capture.Displays = () => new TargetDisplayList([Display(73, true), expected], () =>
+        {
+            if (stage == "selection") held.Invoke(() => 0);
+        });
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            Request request = f.Begin(new TargetFactory(factory, expected));
+            await Success(held.Entered.Task);
+            Assert.NotEqual(request.CallerThread, held.ThreadId);
+            Assert.NotSame(request.Outer, held.ExecutingTask);
+            Task<IVideoFrameProducer> creation = await request.Published();
+            Task originalInvocation = Assert.IsAssignableFrom<Task>(held.ExecutingTask);
+            await AssertForwarded(originalInvocation, creation);
+            f.CreationCancellation.Cancel();
+            await AssertForwarded(originalInvocation, creation);
+            Assert.Equal(0, f.Capture.Cleanup.TotalCalls);
+            Assert.Equal(0, f.Encoder.Cleanup.TotalCalls);
+            held.Open();
+            var error = Assert.IsAssignableFrom<OperationCanceledException>(await Error(creation));
+            Assert.Equal(f.CreationCancellation.Token, error.CancellationToken);
+            Assert.True(creation.IsCanceled);
+            f.AssertCalls(1, stage == "capture" ? 0 : 1, stage == "encoder" ? 1 : 0);
+            Assert.Equal(1, f.Capture.Cleanup.AsyncCalls);
+            Assert.Equal(0, f.Capture.Cleanup.SyncCalls);
+            Assert.Equal(stage == "encoder" ? 1 : 0, f.Encoder.Cleanup.AsyncCalls);
+            Assert.Equal(0, f.Encoder.Cleanup.SyncCalls);
+            await f.JoinInvocation(originalInvocation);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            Assert.Equal(0, f.Encoder.EncodeCount);
+            f.AssertBorrowed();
+        }
+        finally { held.Open(); await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData("displays")]
+    [InlineData("selection")]
+    [InlineData("duplicate-selection")]
+    public async Task Target_display_late_enumeration_failure_keeps_original_instance_instead_of_cancellation(string stage)
+    {
+        var f = new Fixture();
+        DisplayInfo expected = Display(902, false);
+        var original = new AggregateException("迟到的真实目标枚举异常。", new IOException("枚举叶。"));
+        Gate held = stage == "displays" ? f.Capture.DisplayGate : f.NewGate();
+        held.Hold();
+        DisplayInfo[] displays = stage == "duplicate-selection"
+            ? [expected, Display(73, true), expected] : [Display(73, true), expected];
+        f.Capture.Displays = stage == "displays" ? () => throw original
+            : () => new TargetDisplayList(displays, () => held.Invoke<int>(() => throw original));
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            Request request = f.Begin(new TargetFactory(factory, expected));
+            await Success(held.Entered.Task);
+            Assert.NotEqual(request.CallerThread, held.ThreadId);
+            Task<IVideoFrameProducer> creation = await request.Published();
+            Task originalInvocation = Assert.IsAssignableFrom<Task>(held.ExecutingTask);
+            f.CreationCancellation.Cancel();
+            await AssertForwarded(originalInvocation, creation);
+            Assert.Equal(0, f.Capture.Cleanup.TotalCalls);
+            held.Open();
+            Assert.Same(original, await Error(creation));
+            Assert.True(creation.IsFaulted);
+            f.AssertCalls(1, 1, 0);
+            Assert.Equal(1, f.Capture.Cleanup.AsyncCalls);
+            Assert.Equal(0, f.Capture.Cleanup.SyncCalls);
+            Assert.Equal(0, f.Encoder.Cleanup.TotalCalls);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            Assert.Equal(0, f.Encoder.EncodeCount);
+            await f.JoinInvocation(originalInvocation);
+            f.AssertBorrowed();
+        }
+        finally { held.Open(); await f.Finish(); }
+    }
+
+    [Fact]
+    public async Task Target_display_concurrent_preparations_from_one_factory_keep_independent_selection_and_production()
+    {
+        var f = new Fixture();
+        Dependency secondCapture = f.NewDependency("dual");
+        Dependency secondEncoder = f.NewDependency("dual");
+        DisplayInfo firstDisplay = Display(902, false);
+        DisplayInfo secondDisplay = Display(703, false) with { X = -200 };
+        DisplayInfo[] displays = [secondDisplay, Display(73, true), firstDisplay];
+        f.Capture.Displays = () => displays;
+        secondCapture.Displays = () => displays;
+        int captures = 0;
+        int encoders = 0;
+        f.Target.CaptureResult = () => Interlocked.Increment(ref captures) == 1 ? f.Capture : secondCapture;
+        // 第一调用停在 GetDisplays，第二调用先取得其专用编码器。
+        f.Target.EncoderResult = () => Interlocked.Increment(ref encoders) == 1 ? secondEncoder : f.Encoder;
+        f.Capture.DisplayGate.Hold();
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            Request firstRequest = f.Begin(new TargetFactory(factory, firstDisplay));
+            await Success(f.Capture.DisplayGate.Entered.Task);
+            Task<IVideoFrameProducer> firstCreation = await firstRequest.Published();
+            Task firstInvocation = Assert.IsAssignableFrom<Task>(f.Capture.DisplayGate.ExecutingTask);
+            await AssertForwarded(firstInvocation, firstCreation);
+            IVideoFrameProducer second = await f.Create(new TargetFactory(factory, secondDisplay));
+            await AssertForwarded(firstInvocation, firstCreation);
+            f.Capture.DisplayGate.Open();
+            IVideoFrameProducer first = await Success(firstCreation);
+            await f.JoinInvocation(firstInvocation);
+            Assert.NotSame(first, second);
+            Assert.NotSame(first.Completion, second.Completion);
+            Assert.Equal(2, captures);
+            Assert.Equal(2, encoders);
+            Assert.Equal(1, f.Capture.DisplayGate.Count);
+            Assert.Equal(1, secondCapture.DisplayGate.Count);
+            Assert.All(f.Resources, dependency => Assert.Equal(0, dependency.CaptureCount));
+            Assert.All(f.Resources, dependency => Assert.Equal(0, dependency.EncodeCount));
+            f.CreationCancellation.Cancel();
+            first.Start();
+            second.Start();
+            await Success(Task.WhenAll(f.Capture.Captures[0].Entered.Task, secondCapture.Captures[0].Entered.Task));
+            Assert.Equal(firstDisplay.Id, f.Capture.LastDisplay);
+            Assert.Equal(secondDisplay.Id, secondCapture.LastDisplay);
+            CapturedFrame firstRaw = f.Capture.Captures[0].Reply();
+            CapturedFrame secondRaw = secondCapture.Captures[0].Reply();
+            await Success(Task.WhenAll(f.Encoder.Encodes[0].Entered.Task, secondEncoder.Encodes[0].Entered.Task));
+            Assert.Same(firstRaw, f.Encoder.LastInput);
+            Assert.Same(secondRaw, secondEncoder.LastInput);
+            Assert.Equal(firstDisplay.Id, f.Encoder.LastInput!.DisplayId);
+            Assert.Equal(secondDisplay.Id, secondEncoder.LastInput!.DisplayId);
+            EncodedFrame firstFrame = f.Encoder.Encodes[0].Reply();
+            EncodedFrame secondFrame = secondEncoder.Encodes[0].Reply();
+            using (EncodedFrame? actual = await Success(f.Read(first))) Assert.Same(firstFrame, actual);
+            using (EncodedFrame? actual = await Success(f.Read(second))) Assert.Same(secondFrame, actual);
+            Task firstStop = first.StopAsync();
+            Task secondStop = second.StopAsync();
+            f.ReleaseFrames();
+            await Success(Task.WhenAll(firstStop, secondStop));
+            Assert.Null(await Success(f.Read(first)));
+            Assert.Null(await Success(f.Read(second)));
+            f.AssertDisposed(1, 0);
+            f.AssertOwnersReleased();
+            f.AssertBorrowed();
+        }
+        finally { f.Capture.DisplayGate.Open(); await f.Finish(); }
+    }
+
+    [Theory]
+    [InlineData("selection")]
+    [InlineData("encoder")]
+    public async Task Target_display_rollback_preserves_original_exception_and_nested_cleanup_roots(string stage)
+    {
+        var f = new Fixture();
+        DisplayInfo expected = Display(902, false);
+        var original = new AggregateException("原目标准备异常。", new IOException("原叶。"));
+        Exception[] cleanup = Roots("multiple");
+        f.Capture.Cleanup.FailTask(cleanup);
+        f.Capture.Displays = stage == "selection"
+            ? () => new TargetDisplayList([expected, Display(73, true)], () => throw original)
+            : () => [expected, Display(73, true)];
+        if (stage == "encoder") f.FailStage("encoder", original);
+        try
+        {
+            var factory = Assert.IsType<FramePipelineVideoProducerFactory>(f.Factory());
+            Task<IVideoFrameProducer> creation = await f.Begin(new TargetFactory(factory, expected)).Published();
+            var failure = Assert.IsType<AggregateException>(await Error(creation));
+            Assert.True(creation.IsFaulted);
+            Assert.Equal(2, failure.InnerExceptions.Count);
+            Assert.Same(original, failure.InnerExceptions[0]);
+            Children(Assert.IsType<AggregateException>(failure.InnerExceptions[1]), cleanup);
+            Children(f.Capture.Cleanup.Original.Task.Exception!, cleanup);
+            f.AssertCalls(1, 1, stage == "encoder" ? 1 : 0);
+            Assert.Equal(1, f.Capture.Cleanup.AsyncCalls);
+            Assert.Equal(0, f.Capture.Cleanup.SyncCalls);
+            Assert.Equal(0, f.Encoder.Cleanup.TotalCalls);
+            Assert.Equal(0, f.Capture.CaptureCount);
+            Assert.Equal(0, f.Encoder.EncodeCount);
+        }
+        finally { await f.Finish(); }
+    }
+
+    [Fact]
+    public void Target_display_preparation_remains_internal_without_expanding_public_factory_contract()
+    {
+        Type factory = typeof(FramePipelineVideoProducerFactory);
+        MethodInfo[] publicMethods = factory.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
+        MethodInfo publicCreate = Assert.Single(publicMethods);
+        Assert.Equal(nameof(IVideoFrameProducerFactory.CreateAsync), publicCreate.Name);
+        Assert.Equal(typeof(ValueTask<IVideoFrameProducer>), publicCreate.ReturnType);
+        Assert.Equal(new[] { typeof(Guid), typeof(CancellationToken) }, publicCreate.GetParameters().Select(parameter => parameter.ParameterType));
+        MethodInfo contract = Assert.Single(typeof(IVideoFrameProducerFactory).GetMethods());
+        Assert.Equal(publicCreate.Name, contract.Name);
+        Assert.Equal(publicCreate.ReturnType, contract.ReturnType);
+        Assert.Equal(new[] { typeof(Guid), typeof(CancellationToken) }, contract.GetParameters().Select(parameter => parameter.ParameterType));
+        MethodInfo targetCreate = Assert.IsAssignableFrom<MethodInfo>(factory.GetMethod("CreateForDisplayAsync", BindingFlags.NonPublic | BindingFlags.Instance));
+        Assert.True(targetCreate.IsAssembly);
+        Assert.Equal(typeof(ValueTask<IVideoFrameProducer>), targetCreate.ReturnType);
+        Assert.Equal(new[] { typeof(Guid), typeof(DisplayInfo), typeof(CancellationToken) }, targetCreate.GetParameters().Select(parameter => parameter.ParameterType));
+        Assert.Single(factory.GetConstructors());
+    }
+
+    private sealed class TargetFactory(FramePipelineVideoProducerFactory factory, DisplayInfo expectedDisplay) : IVideoFrameProducerFactory
+    {
+        public ValueTask<IVideoFrameProducer> CreateAsync(Guid sessionId, CancellationToken cancellationToken) =>
+            factory.CreateForDisplayAsync(sessionId, expectedDisplay, cancellationToken);
+    }
+
+    private sealed class TargetDisplayList(IReadOnlyList<DisplayInfo> displays, Action afterEnumeration) : IReadOnlyList<DisplayInfo>
+    {
+        public int Count => displays.Count;
+        public DisplayInfo this[int index] => throw new XunitException("目标准备必须完整枚举，不能通过列表索引选屏。");
+        public IEnumerator<DisplayInfo> GetEnumerator()
+        {
+            foreach (DisplayInfo display in displays) yield return display;
+            afterEnumeration();
+        }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private static async Task AwaitProbe(Task operation) => await operation.ConfigureAwait(false);
     private static DisplayInfo Display(int id, bool primary) => new(new DisplayId(id), "内存显示器", -100, -50, 1, 1, primary);
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);

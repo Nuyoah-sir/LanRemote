@@ -50,7 +50,19 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
     }
 
     /// <inheritdoc />
-    public ValueTask<IVideoFrameProducer> CreateAsync(Guid sessionId, CancellationToken cancellationToken)
+    public ValueTask<IVideoFrameProducer> CreateAsync(Guid sessionId, CancellationToken cancellationToken) =>
+        ScheduleCreate(sessionId, null, cancellationToken);
+
+    /// <summary>为固定目标准备尚未启动的生产者；不代表认证或运行中切屏能力。</summary>
+    internal ValueTask<IVideoFrameProducer> CreateForDisplayAsync(
+        Guid sessionId, DisplayInfo expectedDisplay, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(expectedDisplay);
+        return ScheduleCreate(sessionId, expectedDisplay, cancellationToken);
+    }
+
+    private ValueTask<IVideoFrameProducer> ScheduleCreate(
+        Guid sessionId, DisplayInfo? expectedDisplay, CancellationToken cancellationToken)
     {
         if (sessionId == Guid.Empty)
         {
@@ -58,10 +70,11 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
         }
 
         // 包括委托和显示器枚举的全部同步前缀都在后台；不传调度取消，也不以取消代理替代原任务。
-        return new ValueTask<IVideoFrameProducer>(Task.Run(() => CreateCoreAsync(sessionId, cancellationToken)));
+        return new ValueTask<IVideoFrameProducer>(Task.Run(() => CreateCoreAsync(sessionId, expectedDisplay, cancellationToken)));
     }
 
-    private async Task<IVideoFrameProducer> CreateCoreAsync(Guid sessionId, CancellationToken cancellationToken)
+    private async Task<IVideoFrameProducer> CreateCoreAsync(
+        Guid sessionId, DisplayInfo? expectedDisplay, CancellationToken cancellationToken)
     {
         IScreenCaptureBackend? capture = null;
         IFrameEncoder? encoder = null;
@@ -75,19 +88,21 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
             IReadOnlyList<DisplayInfo> displays = capture.GetDisplays()
                 ?? throw new InvalidOperationException("采集后端返回了 null 显示器列表。");
             cancellationToken.ThrowIfCancellationRequested();
-            DisplayInfo primary = displays.Single(display => display.IsPrimary);
+            DisplayInfo selected = expectedDisplay is null
+                ? displays.Single(display => display.IsPrimary)
+                : SelectExpectedDisplay(displays, expectedDisplay);
             cancellationToken.ThrowIfCancellationRequested();
-            if (primary.Width is < 1 or > FrameLimits.MaxDimension ||
-                primary.Height is < 1 or > FrameLimits.MaxDimension ||
-                (long)primary.Width * primary.Height > FrameLimits.MaxDecodedPixels)
+            if (selected.Width is < 1 or > FrameLimits.MaxDimension ||
+                selected.Height is < 1 or > FrameLimits.MaxDimension ||
+                (long)selected.Width * selected.Height > FrameLimits.MaxDecodedPixels)
             {
-                throw new ArgumentOutOfRangeException(nameof(primary),
-                    "主屏超过M5单帧像素预算；不创建编码器或采集大型原始帧。");
+                throw new ArgumentOutOfRangeException(nameof(selected),
+                    "目标显示器超过M5单帧像素预算；不创建编码器或采集大型原始帧。");
             }
 
             encoder = _createEncoder() ?? throw new InvalidOperationException("编码器工厂返回了 null。");
             cancellationToken.ThrowIfCancellationRequested();
-            pipeline = new FramePipeline(capture, encoder, primary.Id, _rawCapacity, _encodedCapacity, _timeProvider,
+            pipeline = new FramePipeline(capture, encoder, selected.Id, _rawCapacity, _encodedCapacity, _timeProvider,
                 _settings);
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -116,5 +131,23 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
             cleanupErrors.Insert(0, exception);
             throw new AggregateException($"创建会话 {sessionId} 的视频生产者失败，且清理发生错误。", cleanupErrors);
         }
+    }
+
+    private static DisplayInfo SelectExpectedDisplay(IReadOnlyList<DisplayInfo> displays, DisplayInfo expectedDisplay)
+    {
+        DisplayInfo? selected = null;
+        bool duplicate = false;
+        foreach (DisplayInfo display in displays)
+        {
+            if (display.Id != expectedDisplay.Id) continue;
+            if (selected is not null) duplicate = true;
+            else selected = display;
+        }
+
+        if (selected is null) throw new InvalidOperationException("未找到目标显示器。");
+        if (duplicate) throw new InvalidOperationException("目标显示器标识存在重复。");
+        // 仅核对本次枚举与期望元数据；不保证跨调用硬件身份或拓扑世代未变化。
+        if (selected != expectedDisplay) throw new InvalidOperationException("目标显示器元数据已变化。");
+        return selected;
     }
 }
