@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-10-15，权威详HANDOFF§19.53/ADR097）
 
-已推代码62afdf0/5615（完整号与应用程序集见HANDOFF）；当日早前直连github曾超时/重置致前两次push失败，第三次普通push成功并实读远端refs/heads/main一致。接手提示词见仓库根新对话接手prompt-20261015.md。
+已推代码62afdf0/5615（完整号与应用程序集见HANDOFF）；当日早前直连github曾超时/重置致前两次push失败，第三次普通push成功并实读远端refs/heads/main一致。接手提示词见仓库根新对话接手prompt-20261015.md，**通用版**：只规定读文件路由与硬约束，不写死当前里程碑/任务。
 
 **发布接缝（§19.53）。** PublishVideoSource(真lease, source)在registry同gate单次发布并返回只摘槽句柄，不接管source；ReplaceVideoProducerAsync非async、同gate后直接return source.ReplaceAsync原Task。撤销三态只拒后续接纳、不撤回已接管候选；真lease与registry共gate完成。5files/新31case，定向150/150，双配置各5615PASS，五变异2/1/0not-killed/1/1，独立exit0：+31/-0、400源。Router完整装配留下一片。
 
@@ -35,13 +35,13 @@ M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19
 
 审批按状态机接受时刻：elapsed>=budget拒，gate前计时含UI；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后终检；context loader至多一项实际store，迟到key先清零再释放准入，CTS不能硬中断同步DPAPI/gate/阻塞回调。客户端独占TLS到认证，presentedPin及grant proof验完才交会话，public无流/token/输入；hello后machine10s、challenge只收窄、独立approval60s。只消费首个终帧；DTO/TLS内部副本不保证擦除；clock变异须在被删检查之前客观固定到期。
 
-用户2026-10-12持续授权：每片验证后新提交并推送，再自主继续；仅真人/权限依赖停，不强推/改历史/跳hooks。context单WorkLease先清零归还；Host180秒自然结束、提前停作废，成功SessionId/负例四元组。
+用户2026-10-12持续授权：每片验证后新提交并推送，再自主继续；仅真人/权限依赖停，不强推/改历史/跳hooks。Host180秒自然结束、提前停作废。
 
 ## 定位与硬约束
 
 Windows 局域网屏幕共享/远程控制（自用）。无账号/云/穿透/UPnP；仅同 IPv4 子网 RFC1918 设备，须过访问密钥挑战认证。
 
-- C# / .NET 10 / WPF / x64；TFM `net10.0` + `net10.0-windows`。**不要**加 `windows10.0.19041.0`（无 Win10 SDK，ADR-010）
+- C# / .NET 10 / WPF / x64；TFM `net10.0` + `net10.0-windows`；**不要**加 `windows10.0.19041.0`（无 Win10 SDK，ADR-010）
 - UDP 45872 发现；TCP 45873 控制；Control 与 Video 是**两条独立 TLS**（ADR-003）
 - 访问密钥 128-bit `RandomNumberGenerator`；HMAC-SHA256 挑战；明文 key 不上网；必须验 serverProof
 - 视频管线 bounded queue(1~2)+DropOldest；**严禁无界队列**
