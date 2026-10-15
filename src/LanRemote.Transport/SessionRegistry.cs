@@ -324,6 +324,7 @@ public sealed class SessionRegistry
         public VideoAttachLease? VideoLease { get; set; }
         public bool VideoSourcePublished { get; set; }
         public ReplaceableVideoFrameSource? VideoSource { get; set; }
+        public SessionRegistration.DisplaySwitchAdmission? DisplaySwitchAdmission { get; set; }
         public TaskCompletionSource Revoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -377,6 +378,136 @@ public sealed class SessionRegistry
                     throw new InvalidOperationException("父会话未持有活动的视频换代入口。");
                 // 来源仅在自身 gate 发布 worker，不会同步调用外部生产者；锁序为 registry → source。
                 return source.ReplaceAsync(next);
+            }
+        }
+
+        /// <summary>
+        /// 显式绑定本父会话的Host目录与单槽请求准入；同一entry至多创建一次，关闭后不可重开。
+        /// 目录必须来自本Host的已验证快照；这里不证明目录已发送、拓扑新鲜或目标可采集。
+        /// </summary>
+        internal DisplaySwitchAdmission CreateDisplaySwitchAdmission(DisplayCatalogFrame catalog)
+        {
+            ArgumentNullException.ThrowIfNull(catalog);
+            lock (_registry._gate)
+            {
+                if (!IsDisplaySwitchAvailable())
+                    throw new InvalidOperationException("父会话未持有活动的视频换代入口。");
+                if (_entry.DisplaySwitchAdmission is not null)
+                    throw new InvalidOperationException("本会话已创建过切屏请求准入。");
+                var admission = new DisplaySwitchAdmission(this, catalog);
+                _entry.DisplaySwitchAdmission = admission;
+                return admission;
+            }
+        }
+
+        // 只在registry gate内使用；不调外部接口、不等待任务、不改变租约生命周期。
+        private bool IsDisplaySwitchAvailable() =>
+            _released == 0 && _registry._sessions.TryGetValue(_sessionId, out Entry? current) &&
+            ReferenceEquals(current, _entry) && !_entry.ControlCancellationToken.IsCancellationRequested &&
+            _entry.VideoLease is { } lease && !lease.Completed.IsCompleted && !lease.Revoked.IsCompleted &&
+            _entry.VideoSource is { } source && !source.Termination.IsCompleted;
+
+        /// <summary>仅内部准入结果，不是wire错误码或切屏完成回执。</summary>
+        internal enum DisplaySwitchAdmissionStatus
+        {
+            Accepted,
+            Unavailable,
+            SessionMismatch,
+            Busy,
+            StaleSequence,
+            CatalogMismatch,
+            DisplayNotFound,
+        }
+
+        /// <summary>
+        /// 无资源的单会话准入核；不是factory/Replace协调worker，不创建Task/计时器或后台队列。
+        /// 仅accepted消耗序号；busy或无效请求不消费。预约释放不代表换代、发送或显示完成。
+        /// 同一会话只绑定一个Host目录快照；seq单调性不替代认证，catalogSequence不证明拓扑新鲜。
+        /// </summary>
+        internal sealed class DisplaySwitchAdmission : IDisposable
+        {
+            private readonly SessionRegistration _registration;
+            private readonly DisplayCatalogFrame _catalog;
+            private long _lastSequence = -1;
+            private bool _closed;
+            private DisplaySwitchReservation? _active;
+
+            internal DisplaySwitchAdmission(SessionRegistration registration, DisplayCatalogFrame catalog)
+            {
+                _registration = registration;
+                _catalog = catalog;
+            }
+
+            internal DisplaySwitchAdmissionStatus TryReserve(
+                DisplaySwitchRequestFrame request, out DisplaySwitchReservation? reservation)
+            {
+                ArgumentNullException.ThrowIfNull(request);
+                reservation = null;
+                lock (_registration._registry._gate)
+                {
+                    if (_closed || !ReferenceEquals(_registration._entry.DisplaySwitchAdmission, this) ||
+                        !_registration.IsDisplaySwitchAvailable())
+                        return DisplaySwitchAdmissionStatus.Unavailable;
+                    if (request.SessionId != _registration.SessionId)
+                        return DisplaySwitchAdmissionStatus.SessionMismatch;
+                    if (_active is not null) return DisplaySwitchAdmissionStatus.Busy;
+                    if (request.Sequence <= _lastSequence) return DisplaySwitchAdmissionStatus.StaleSequence;
+                    if (request.CatalogSequence != _catalog.Sequence)
+                        return DisplaySwitchAdmissionStatus.CatalogMismatch;
+                    DisplayInfo? target = null;
+                    foreach (DisplayInfo display in _catalog.Displays)
+                        if (display.Id == request.DisplayId) { target = display; break; }
+                    if (target is null) return DisplaySwitchAdmissionStatus.DisplayNotFound;
+                    var candidate = new DisplaySwitchReservation(this, request, target);
+                    _lastSequence = request.Sequence;
+                    _active = candidate;
+                    reservation = candidate;
+                    return DisplaySwitchAdmissionStatus.Accepted;
+                }
+            }
+
+            /// <summary>仅封口后续准入；不撤回持有者的预约，不停止来源或注销父会话。</summary>
+            public void Dispose()
+            {
+                lock (_registration._registry._gate) _closed = true;
+            }
+
+            internal sealed class DisplaySwitchReservation : IDisposable
+            {
+                private readonly DisplaySwitchAdmission _owner;
+                private bool _released;
+
+                internal DisplaySwitchReservation(DisplaySwitchAdmission owner,
+                    DisplaySwitchRequestFrame request, DisplayInfo target)
+                {
+                    _owner = owner;
+                    Request = request;
+                    Target = target;
+                }
+
+                internal DisplaySwitchRequestFrame Request { get; }
+                internal DisplayInfo Target { get; }
+
+                /// <summary>瞬时可继续快照，不是跨锁授权；真实Replace仍需原父gate最终校验。</summary>
+                internal bool IsCurrent
+                {
+                    get
+                    {
+                        lock (_owner._registration._registry._gate)
+                            return !_released && !_owner._closed && ReferenceEquals(_owner._active, this) &&
+                                _owner._registration.IsDisplaySwitchAvailable();
+                    }
+                }
+
+                public void Dispose()
+                {
+                    lock (_owner._registration._registry._gate)
+                    {
+                        if (_released) return;
+                        _released = true;
+                        if (ReferenceEquals(_owner._active, this)) _owner._active = null;
+                    }
+                }
             }
         }
 
