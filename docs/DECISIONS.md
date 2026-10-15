@@ -1910,3 +1910,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **所有权与边界。** 预约只保留原请求与Host目标record；Dispose幂等仅释放自己的槽，旧预约Dispose不清新槽。准入Dispose仅封口，不注销父/停止source/完成lease，也不撤回历史record。IsCurrent是父gate内瞬时快照，source终态和外部取消与registry不是统一关闭锁；不得跨锁把true当授权。后续原factory与Replace仍由完整worker持有并join，真实Replace需再次过原父gate；本片不执行factory/Replace、不接唯一读写者、不冻结display_changed/成功ACK/首帧编号、不做Client显示屏障/UI/GDI/画质。单次Video租约不重连。
 
 **验证。** 代码580fc12已普通推送并实读一致。新增348case（codec312/准入36），正式初始/恢复491通过；四生产字节变异1/2/1/1原断言红、完整wait后精确恢复。四Rebuild零警告错误，双配置各5999PASS/0FAIL/0SKIP，独立审计实际exit0：5651完整身份+348/-0、405源、40TRX/25267execution、183观察原件退出后保持。v1/v2各490为补测试前历史绿，固定SHA和逆字节桥核实，不冒充最终同树。受控producer/Task非TLS/GDI/双机/真人/物理多屏联合验收；完整收据见HANDOFF§19.55。
+
+### ADR-100 — 切屏请求执行器的候选所有权与完整收尾
+
+**2026-10-15；内部显式装配，已验证并提交35a372d。** 从真实`DisplaySwitchAdmission.CreateExecutor(prepare)`同registry gate仅创建一次执行器；已有手动预约则拒绝，装配后手动准入不可绕过执行器。`TryExecute`保持ADR099裁决优先级，只Accepted消耗seq；同gate先预约、再发布原执行Task，原Task未退出即Busy，即使finally已释放预约也不提前开新执行。没有队列、计时器、重试或重新附着Video租约。
+
+**原操作与候选。** prepare委托接收本Host目录中的原不可变目标record及本执行器创建令牌，必须交付专用且未Start、未被别处拥有的生产者。同步前缀在已登记worker内锁外执行；原Task成功返回即由执行器接管候选，不能在取消后丢弃迟到结果。工厂仍负责失败前未交出的依赖。此片只提供该委托接缝，不直接装配Sessions固定目标工厂或GDI；最终工厂仍须按ADR094重新完整枚举唯一ID/record并在预分配前检查预算。
+
+**移交。** 不是用IsCurrent快照兑换授权：预约/执行器引用身份、关闭状态及父资格在原registry gate内核验，并同步调用既有Replace入口，直接取得其原Task。正常同步返回才清空局部owner；异步失败不返还候选。同步拒绝保留本地owner，StopAsync、DisposeAsync、Completion getter各自独立调度，完整join所有原根，只按相同原Task引用去重，不按异常实例去重、不Flatten错误树。执行器不自行Start/Read候选，不触帧owner。
+
+**停止与结果。** RequestStop在同gate封口、发StopRequired并登记独立取消worker；回调在锁外运行，阻塞/抛错不能阻止局部候选三路清理，Completion仍须等回调及原执行全部退出。只抑制本执行器令牌对应且已取消的同步OCE/真正canceled原Task；faulted OCE保留。稳定Completion/DisposeAsync只证明本执行器已取得的操作完整退出，不能证明违规工厂的隐藏根已释放。执行结果Transferred/ReplacementCompleted只记历史换代事实，绝非发送/显示成功，Stop不能撤回已移交的候选或已经交出的帧。
+
+**外层责任及非目标。** 不自动监听父会话退出，不拥有source/lease/流。外层在父关闭或StopRequired时必须独立停止相关source等依赖，再join本执行器，避免在途Replace等待原代际导致自join；factory、生产者及取消回调也不得等待本执行器。状态检查与锁外factory进入不是硬中断边界。错误采用原Task树逐操作保留；后续Router若汇总还须明确source与执行器传播错误去重合同。本片不接Control唯一reader/writer、成功回执、发送首帧边界、Client显示屏障、App默认路径或画质；不宣称完整M6或双机/物理多屏通过。
+
+**实际验证。** 正式初始v3与恢复定向各181PASS；新增66case。五生产字节变异（预约最终有效性/移交owner清空/原清理Task去重/原错误树/原执行Task单飞）各1原断言红，完整等待后精确恢复。原Task单飞用例仅测试反射释放预约以隔离门禁，非自然调度窗口证明。首轮3warning/2编译error且test未运行、v2历史180绿保留，固定测试SHA逆向字节桥核实；最终Drain直接等待原根，超时只用于正文诊断。四Rebuild零警告错误、Debug/Release各6065PASS，5999旧身份全部保留；独立审计原进程exit0及主线程wait0，407源/40TRX/24680execution/195观察原件保持。全量原launcher收据证实worker/六dotnet完整wait0，但本轮主shell后台句柄丢失，未伪造该句柄回收结果。详HANDOFF§19.56。

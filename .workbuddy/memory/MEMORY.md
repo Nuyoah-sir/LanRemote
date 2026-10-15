@@ -2,12 +2,12 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至099：切屏准入；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至100：请求执行器；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-15，权威详HANDOFF§19.55/ADR099）
+## 当前续作点（2026-10-15，权威详HANDOFF§19.56/ADR100）
 
-已推580fc12/5999。请求七字段纯codec+真entry单次创建/单槽准入，accepted seq单调；无factory/Replace worker/wire/成功回执。348新case，定向491、四变异1/2/1/1红恢复，独立exit0。IsCurrent仅快照，目录seq非拓扑锁；两历史绿经字节桥核实。597条目双回读/13旧包保持。
+已推35a372d/6065。真Admission一次装配执行器，原Task单飞；factory迟到候选归属、同父gate最终Replace移交、本地三清理/取消worker完整join。新66/定向181/五变异各1红恢复，独立exit0；历史编译失败及180绿字节桥核实。原wait链详HANDOFF。外层先stop source再join，父结束RequestStop；目录seq非拓扑锁。612条目双回读/14旧包保持。
 
 **Router装配（§19.54/ADR098）。** 显式可选，App默认不变；ACK→factory→初装→sender worker→真lease发布。共享gate先摘槽再close，writer beforeClose发StopRequired，两WhenAny消费。独立cancel/Dispose后完整join，外层Complete；source.Completion唯一来源错槽，sender分槽保树。5651/三变异1红，历史失败与完整收据见HANDOFF；非双机/GDI/多屏。
 
@@ -31,7 +31,7 @@
 
 **拥有型换代（§19.52）。** 单session/read/replace，返回Task即接管未Start候选；旧代Start/Read/迟到owner结算后才新Start。三清理独立，仅同原Task去重；提交帧不收回，无active Completion监视。Completion先退役/Replace→settled→外层Read避免自join，详ADR096。
 
-**下一片：拥有型请求执行worker（prepare/候选归属/Replace/停止完整join），再发送成功边界/Control回执/显示屏障/产品接线/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
+**下一片：真实整帧发送成功边界及换代关联，再Control回执/Client显示屏障/产品接线/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 
@@ -79,7 +79,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.55请求准入已推580fc12、双配置各5999通过；执行worker/live/画质未接。 |
+| **M6** | 进行中：§19.56请求执行器已推35a372d、双配置各6065通过；发送屏障/live/画质未接。 |
 | M7~M11 | 未开始 |
 
 提交链见HANDOFF。
