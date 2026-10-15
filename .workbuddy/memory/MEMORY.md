@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-10-15，权威详HANDOFF§19.54/ADR098）
 
-已推代码029032b/5651，实读远端一致。接手发现第1节滞后已对齐，未重跑历史验证。根接手prompt为通用文件路由。
+已推代码029032b/5651。§19.54证据包581条目完整回读、十二旧ZIP保持；收据详HANDOFF。根接手prompt通用，索引已对齐。
 
 **Router装配（§19.54）。** 显式可选，默认App/旧fixed路径不变；ACK→factory→初装→sender worker→真lease发布。共享gate先摘槽再close，writer beforeClose发StopRequired，两处WhenAny消费；source.Termination早于Completion。独立cancel/Dispose通知后完整join，外层Complete；source.Completion唯一来源错槽，sender主错/两清理分槽保树。新36case，定向339/339，三变异各1红恢复，双配置5651、独立exit0。8实现文件；402源含历史根prompt例外。v1编译19错测试未跑、v2历史绿、v3正式同树。受控Task/Stream非TLS/双机/GDI/多屏。
 
