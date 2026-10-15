@@ -1884,3 +1884,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **调用方与后片。** 发布前ACK完整退出、初装成功及sender原worker登记是调用方前置，本原语不验证Ready/ACK，空或已关闭source也不由publisher判定。后片Router先满足前置再发布；退出先摘槽，独立通知close/cancel/source Dispose，再join原factory或初装、sender、peer、source Completion、取消和close，最后原Router最外层Complete租约。source拒绝迟到工厂候选时局部owner仍需完整回收；source终态的早期通知与唯一权威错误槽留后片，避免把Replace/sender/source同一错误重复累计。现有Router默认透传编号/sole-error顶层形状保持，优先新增内部显式装配而非静默改变旧路径。不宣称发送/显示屏障或M6 live切屏；不改网络、防护、权限、Control/UI/GDI，不重验M4/M5、不启M7。
 
 **证据。** 本片新20方法/31case；初始/恢复定向各150PASS/0FAIL/0SKIP（含既有登记表/换代来源回归），源码前后快照一致。五项生产字节变异：lease-identity删真实租约引用核对2红、withdraw漏摘槽1红、original-task以Task.WhenAll包装原Task**未击杀**（单任务WhenAll返回原Task，如实记not-killed，另以original-task-proxy换成确实不同的ContinueWith代理1红补证）、parent-cancel漏父取消1红；均完整wait/核验/精确恢复。双配置Debug/Release各5615PASS/0FAIL/0SKIP（Transport3997=3966+31），四Rebuild零警告零错误。独立核验exit0：旧5584完整四字段身份保留、+31/-0、400源码项、39TRX/22707唯一execution。测试的阻塞外部入口验证当前实现不持registry gate，未作同步外部调用回归的卡死变异或共享gate删除的独立kill，不穷举竞态。
+
+### ADR-098 — Router内部显式视频换代装配与先摘槽的完整生命周期
+
+**2026-10-15；内部可选装配，非live切屏。** FirstFrameRouter工厂构造追加`enableProducerReplacement=false`与`firstFrameId=null`。默认仍为FixedProducerFrameSource/默认sender；只有显式启用才使用ReplaceableVideoFrameSource，可选编号仅作用于该sender实例。未启用换代却指定编号同步ArgumentException拒绝，不静默忽略。public API不扩张，App及Host默认装配本片不切换。
+
+**发布及移交。** ACK原写/Flush与末检查完整退出后才调用factory；其成功结果先由局部owner持有，source.ReplaceAsync正常返回原Task才移交。初装成功后，在共享生命周期gate先登记真实sender worker，再以真实VideoAttachLease发布；worker取得同gate检查后才进入SendAsync。同source/sender/连接承接SessionRegistration换代，仍不代表发送或显示屏障。同步拒绝的迟到factory候选由局部owner独立调度Stop/Dispose/Completion并完整join，仅同一原Task去重。
+
+**固定监督与撤槽顺序。** RunAsync入口建立私有VideoPublicationLifetime，以共享gate串行发布/停止/摘槽。host取消始终先Withdraw再通知原close监督，覆盖附着之后仍可能阻塞的clock同步前缀。Withdraw仅标记停止、摘registry借用槽并发出稳定异步StopRequired，不调用外部producer/close或等待任务。HostOwnedVideoStream新增内部可选beforeClose回调，让writer先行失败或Dispose也先摘槽再请求Host关闭；两处WhenAny均消费StopRequired，避免sender帧清理和物理close同时阻塞时遗漏取消与source停止通知。
+
+**通知不等于join。** peer在外部Stream同步读前缀之前登记worker。退出先摘槽，独立通知close/取消/source.Dispose，不让任一外部同步入口或取消回调截断其他通知；随后完整join setup内原factory/初装、sender、peer、source Dispose返回的稳定Completion、取消与原close监督。真实lease.Complete仍仅在Router最外层。source只新增只读internal Termination（原closingSignal.Task），用于早于最终Completion的封口通知，不监视活动producer.Completion。
+
+**权威错误槽。** source.Completion是新路径唯一来源错误槽，初装/Replace/sender传播只join，不重复累计；保留Aggregate原树，不Flatten。sender新增internal SendFailure，区分来源、主发送、帧释放、writer释放；不同操作即使共用异常实例仍逐槽保留。新路径的来源Aggregate形状与旧路径区别明确，旧路径sole-error顶层和默认编号行为保持。
+
+**范围与当前验证。** 新14方法/36case均属于FirstFrameRouterBoundaryTests。最终同树初始定向339PASS；writer-withdraw/source-double-count/sender-sequence三项生产字节变异各1原断言红，原进程完整wait后精确恢复。首轮测试编译失败保留，第二轮339绿后仅补测试时序，第三轮作为正式同树初始；四Rebuild零警告错误、双配置各5651PASS/0FAIL/0SKIP，独立核验实际exit0：旧5615+36/-0，402源含历史根prompt例外，38TRX/23553 execution；代码029032b已普通推送并实读远端一致，完整收据见HANDOFF§19.54。受控Task/Stream，不是实际TLS、双机、真人、GDI或物理多屏验收；仅证明可观察通知/完整收尾，不夸大已严格定序到第二WhenAny，不称穷举竞态或全部join删除变异。无Control/UI/GDI/live切屏/画质改动，不重验M4/M5、不启M7、不改网/防护/权限/旧ZIP。
