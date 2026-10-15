@@ -1898,3 +1898,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **权威错误槽。** source.Completion是新路径唯一来源错误槽，初装/Replace/sender传播只join，不重复累计；保留Aggregate原树，不Flatten。sender新增internal SendFailure，区分来源、主发送、帧释放、writer释放；不同操作即使共用异常实例仍逐槽保留。新路径的来源Aggregate形状与旧路径区别明确，旧路径sole-error顶层和默认编号行为保持。
 
 **范围与当前验证。** 新14方法/36case均属于FirstFrameRouterBoundaryTests。最终同树初始定向339PASS；writer-withdraw/source-double-count/sender-sequence三项生产字节变异各1原断言红，原进程完整wait后精确恢复。首轮测试编译失败保留，第二轮339绿后仅补测试时序，第三轮作为正式同树初始；四Rebuild零警告错误、双配置各5651PASS/0FAIL/0SKIP，独立核验实际exit0：旧5615+36/-0，402源含历史根prompt例外，38TRX/23553 execution；代码029032b已普通推送并实读远端一致，完整收据见HANDOFF§19.54。受控Task/Stream，不是实际TLS、双机、真人、GDI或物理多屏验收；仅证明可观察通知/完整收尾，不夸大已严格定序到第二WhenAny，不称穷举竞态或全部join删除变异。无Control/UI/GDI/live切屏/画质改动，不重验M4/M5、不启M7、不改网/防护/权限/旧ZIP。
+
+### ADR-099 — Control切屏请求纯载荷与真实父会话单槽准入
+
+**2026-10-15；最小内部合同，非live或完整切屏worker。** 原规格04只列`request_display`/`display_changed`及通用seq/timestampMs，未冻结成功屏障。先实现`DisplaySwitchRequestFrame`：type=`request_display`、protocol=1、canonical非空sessionId、非负Int64 seq/timestampMs/catalogSequence、0..255原始displayId，恰好七字段、载荷1..4096字节；严格拒绝缺失/未知/重复及转义等价重复、非整数/溢出/畸形JSON/非法编码。预期session只做关联；parser不触流/时钟、不提供授权。protocol1仅此载荷schema，不改变V2认证、VideoHello/ACK或LRVF；现有profile2本身不承诺已支持此操作，live能力接线后续再定。
+
+**单会话准入。** `SessionRegistration.CreateDisplaySwitchAdmission(hostCatalog)`在真实registry gate创建一次并绑定entry内的准入实例身份；关闭后不能重建，手动构造内部对象不能绕过身份。前置为真实父entry仍在册/未取消、真实子lease未撤销/未完成、已发布source且尚未观察到Termination。仅持有已验证不可变目录，不证明它已发出或拓扑新鲜；调用方必须使用本Host目录，最终固定目标准备仍须完整枚举、唯一ID及record匹配。
+
+**有界预约。** 同gate至多一项无资源预约，无后台队列/计时器/Task；结果优先为Unavailable→SessionMismatch→Busy→StaleSequence→CatalogMismatch→DisplayNotFound→Accepted。仅Accepted消耗请求seq，首个可0/跳号、此后严格递增；long.MaxValue可接纳一次后自然耗尽，不回绕。不把该比较推广为全Control通用序号或认证反重放。catalogSequence只与本准入绑定目录元数据匹配，不是拓扑世代；timestampMs不决定准入。ViewOnly/Control都可选屏，不改变已授予权限、不授予输入控制。
+
+**所有权与边界。** 预约只保留原请求与Host目标record；Dispose幂等仅释放自己的槽，旧预约Dispose不清新槽。准入Dispose仅封口，不注销父/停止source/完成lease，也不撤回历史record。IsCurrent是父gate内瞬时快照，source终态和外部取消与registry不是统一关闭锁；不得跨锁把true当授权。后续原factory与Replace仍由完整worker持有并join，真实Replace需再次过原父gate；本片不执行factory/Replace、不接唯一读写者、不冻结display_changed/成功ACK/首帧编号、不做Client显示屏障/UI/GDI/画质。单次Video租约不重连。
+
+**验证。** 代码580fc12已普通推送并实读一致。新增348case（codec312/准入36），正式初始/恢复491通过；四生产字节变异1/2/1/1原断言红、完整wait后精确恢复。四Rebuild零警告错误，双配置各5999PASS/0FAIL/0SKIP，独立审计实际exit0：5651完整身份+348/-0、405源、40TRX/25267execution、183观察原件退出后保持。v1/v2各490为补测试前历史绿，固定SHA和逆字节桥核实，不冒充最终同树。受控producer/Task非TLS/GDI/双机/真人/物理多屏联合验收；完整收据见HANDOFF§19.55。
