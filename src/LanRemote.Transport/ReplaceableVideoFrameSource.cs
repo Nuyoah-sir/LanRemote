@@ -34,6 +34,7 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
         _completion = Task.Run(CompleteAsync);
     }
 
+    internal Guid SessionId => _sessionId;
     internal Task Completion => _completion;
 
     /// <summary>同步接纳并移交所有权；只允许一个替换，不缓存后续请求。</summary>

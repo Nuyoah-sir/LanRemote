@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using LanRemote.Core.Abstractions;
 using LanRemote.Core.Models;
 using LanRemote.Transport.Auth;
 
@@ -203,7 +204,7 @@ public sealed class SessionRegistry
                 }
 
                 // 最终核对之后在同一把锁内预约子连接，父句柄持有该单次租约直至子连接收尾。
-                VideoAttachLease candidate = new(sessionId, videoSecurity.ConnectionId, entry.Revoked.Task);
+                VideoAttachLease candidate = new(sessionId, videoSecurity.ConnectionId, entry.Revoked.Task, _gate);
                 entry.VideoLease = candidate;
                 entry.VideoAttached = true;
                 lease = candidate;
@@ -244,6 +245,41 @@ public sealed class SessionRegistry
         return entry.VideoAttached ? VideoAttachStatus.AlreadyAttached : null;
     }
 
+    /// <summary>
+    /// 为已经附着的真实租约发布一次换代入口；不接管 source，不启动/停止生产者。
+    /// 调用方须在 ACK 完整写出及初始生产者安装成功后发布，退出先摘槽，再完整停止并 join。
+    /// 此入口不验证网络 ACK，也不代表发送或显示屏障。摘槽后禁止重新发布。
+    /// </summary>
+    internal IDisposable PublishVideoSource(VideoAttachLease lease, ReplaceableVideoFrameSource source)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.SessionId != lease.SessionId)
+            throw new ArgumentException("视频来源不属于本租约会话。", nameof(source));
+        lock (_gate)
+        {
+            if (!_sessions.TryGetValue(lease.SessionId, out Entry? entry) ||
+                !ReferenceEquals(entry.VideoLease, lease) || entry.ControlCancellationToken.IsCancellationRequested ||
+                lease.Completed.IsCompleted || lease.Revoked.IsCompleted)
+                throw new InvalidOperationException("视频租约已失效或不属于本登记表。");
+            if (entry.VideoSourcePublished)
+                throw new InvalidOperationException("本视频租约已发布过换代入口。");
+            VideoSourcePublication publication = new(this, entry);
+            entry.VideoSourcePublished = true;
+            entry.VideoSource = source;
+            return publication;
+        }
+    }
+
+    // 只摘可调用入口；不回收已接管候选，也不停止/等待 source 或提前完成 VideoLease。
+    private sealed class VideoSourcePublication(SessionRegistry registry, Entry entry) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (registry._gate) entry.VideoSource = null;
+        }
+    }
+
     private void Unregister(Guid sessionId, Entry entryIdentity)
     {
         lock (_gate)
@@ -251,6 +287,7 @@ public sealed class SessionRegistry
             if (_sessions.TryGetValue(sessionId, out Entry? entry) && ReferenceEquals(entry, entryIdentity))
             {
                 _sessions.Remove(sessionId);
+                entry.VideoSource = null;
                 CryptographicOperations.ZeroMemory(entry.SessionToken);
                 // TCS 强制异步 continuation；锁内不调用取消源或任何 handler。
                 entry.Revoked.TrySetResult();
@@ -285,6 +322,8 @@ public sealed class SessionRegistry
         public CancellationToken ControlCancellationToken { get; }
         public bool VideoAttached { get; set; }
         public VideoAttachLease? VideoLease { get; set; }
+        public bool VideoSourcePublished { get; set; }
+        public ReplaceableVideoFrameSource? VideoSource { get; set; }
         public TaskCompletionSource Revoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -319,6 +358,25 @@ public sealed class SessionRegistry
                 {
                     return _entry.VideoLease?.Completed ?? Task.CompletedTask;
                 }
+            }
+        }
+
+        /// <summary>
+        /// 同步核对父资格并交给已发布来源；正常返回原 Task 即候选已移交，异步失败不返还。
+        /// 同步拒绝不接管新对象。仅 internal 接缝，无排队、超时代理、网络消息或帧屏障。
+        /// </summary>
+        internal Task ReplaceVideoProducerAsync(IVideoFrameProducer next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+            lock (_registry._gate)
+            {
+                if (_released != 0 || !_registry._sessions.TryGetValue(_sessionId, out Entry? current) ||
+                    !ReferenceEquals(current, _entry) || _entry.ControlCancellationToken.IsCancellationRequested ||
+                    _entry.VideoLease is not { } lease || lease.Completed.IsCompleted || lease.Revoked.IsCompleted ||
+                    _entry.VideoSource is not { } source)
+                    throw new InvalidOperationException("父会话未持有活动的视频换代入口。");
+                // 来源仅在自身 gate 发布 worker，不会同步调用外部生产者；锁序为 registry → source。
+                return source.ReplaceAsync(next);
             }
         }
 

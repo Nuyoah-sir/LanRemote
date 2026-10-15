@@ -4,9 +4,11 @@ namespace LanRemote.Transport;
 internal sealed class VideoAttachLease
 {
     private readonly TaskCompletionSource _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object _gate;
 
-    internal VideoAttachLease(Guid sessionId, Guid videoConnectionId, Task revoked)
+    internal VideoAttachLease(Guid sessionId, Guid videoConnectionId, Task revoked, object? gate = null)
     {
+        _gate = gate ?? new object();
         SessionId = sessionId;
         VideoConnectionId = videoConnectionId;
         Revoked = revoked;
@@ -17,5 +19,9 @@ internal sealed class VideoAttachLease
     internal Task Revoked { get; }
     internal Task Completed => _completed.Task;
 
-    internal void Complete() => _completed.TrySetResult();
+    internal void Complete()
+    {
+        // 真实租约与父登记表共用 gate：完成与换代接纳不能各自通过末检。
+        lock (_gate) _completed.TrySetResult();
+    }
 }

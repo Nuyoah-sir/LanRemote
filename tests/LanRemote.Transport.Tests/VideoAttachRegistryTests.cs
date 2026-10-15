@@ -1228,7 +1228,7 @@ public sealed class VideoAttachRegistryTests
         Assert.DoesNotContain(methods, method => method.Name == "TryGetSessionToken");
         Assert.Equal(new[] { "Snapshot", "get_ActiveSessionCount" },
             methods.Where(method => method.IsPublic).Select(method => method.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
-        Assert.Equal(new[] { "Register", "TryAttachVideo" },
+        Assert.Equal(new[] { "PublishVideoSource", "Register", "TryAttachVideo" },
             methods.Where(method => method.IsAssembly).Select(method => method.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         MethodInfo register = Assert.Single(methods, method => method.Name == "Register");
         ParameterInfo[] parameters = register.GetParameters();
