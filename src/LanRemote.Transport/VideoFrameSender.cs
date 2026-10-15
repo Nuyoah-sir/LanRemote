@@ -11,6 +11,7 @@ internal sealed class VideoFrameSender
     private bool _sequenceExhausted;
     private int _started;
     private Exception? _sourceFailure;
+    private Exception? _sendFailure;
     private Exception? _frameCleanupError;
     private Exception? _writerCleanupError;
 
@@ -29,6 +30,9 @@ internal sealed class VideoFrameSender
 
     /// <summary>仅保留来源边界判定的首个真实故障，不受后续取消影响。</summary>
     internal Exception? SourceFailure => Volatile.Read(ref _sourceFailure);
+
+    // 独立发送操作的错误槽；不含来源传播或 frame/writer 清理，避免按异常引用猜测归属。
+    internal Exception? SendFailure => Volatile.Read(ref _sendFailure);
 
     /// <summary>稳定只读快照，最多保留 frame / writer 各自的首个清理错误。</summary>
     internal IReadOnlyList<Exception> CleanupErrors
@@ -110,6 +114,7 @@ internal sealed class VideoFrameSender
                 }
                 catch (Exception error)
                 {
+                    Interlocked.CompareExchange(ref _sendFailure, error, null);
                     failure = ExceptionDispatchInfo.Capture(error);
                 }
                 finally
@@ -120,6 +125,7 @@ internal sealed class VideoFrameSender
                     }
                     catch (Exception error)
                     {
+                        Interlocked.CompareExchange(ref _sendFailure, error, null);
                         failure ??= ExceptionDispatchInfo.Capture(error);
                     }
 
@@ -138,6 +144,7 @@ internal sealed class VideoFrameSender
         }
         catch (Exception error)
         {
+            if (SourceFailure is null) Interlocked.CompareExchange(ref _sendFailure, error, null);
             failure ??= ExceptionDispatchInfo.Capture(error);
         }
         finally

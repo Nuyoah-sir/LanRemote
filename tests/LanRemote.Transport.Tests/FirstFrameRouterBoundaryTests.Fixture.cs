@@ -64,7 +64,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
         internal BoundaryScenario(byte[]? wire = null, bool badProof = false, int holdRead = 0,
             bool holdWrite = false, bool holdFlush = false, bool failWrite = false, bool failFlush = false,
             TransportTimeouts? timeouts = null, bool cancelAwareRead = false,
-            IVideoFrameProducerFactory? producerFactory = null, bool holdDispose = false)
+            IVideoFrameProducerFactory? producerFactory = null, bool holdDispose = false,
+            bool enableProducerReplacement = false, ulong? firstFrameId = null)
         {
             Stream = new ControlledSslStream(wire ?? HelloWire(badProof), holdRead,
                 holdWrite, holdFlush, failWrite, failFlush, cancelAwareRead, holdDispose);
@@ -87,7 +88,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
             };
             Router = producerFactory is null
                 ? new FirstFrameRouter(context, timeouts ?? NewTimeouts(), Source)
-                : new FirstFrameRouter(context, timeouts ?? NewTimeouts(), producerFactory);
+                : new FirstFrameRouter(context, timeouts ?? NewTimeouts(), producerFactory,
+                    enableProducerReplacement: enableProducerReplacement, firstFrameId: firstFrameId);
         }
 
         internal ObservedClock Clock { get; } = new();
@@ -269,6 +271,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
         private readonly TaskCompletionSource _writeRelease = Signal();
         private readonly TaskCompletionSource _flushRelease = Signal();
         private readonly TaskCompletionSource _disposeRelease = Signal();
+        private readonly TaskCompletionSource<int> _peerEnd = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly ConcurrentQueue<Task> _operations = new();
         private int _offset;
         private int _readCalls;
@@ -301,6 +304,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
         internal TaskCompletionSource Closed { get; } = Signal();
         internal ConcurrentQueue<byte[]> Writes { get; } = new();
         internal Action<int>? BeforeReadCompletes { get; set; }
+        internal Action<int>? BeforeRead { get; set; }
+        internal Action? BeforeDispose { get; set; }
         internal int ReadCalls => Volatile.Read(ref _readCalls);
         internal int BytesRead => Volatile.Read(ref _offset);
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
@@ -319,6 +324,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             int read = Interlocked.Increment(ref _readCalls);
+            BeforeRead?.Invoke(read);
             if (read == _holdRead)
             {
                 HeldReadToken = cancellationToken;
@@ -349,8 +355,8 @@ public sealed partial class FirstFrameRouterBoundaryTests
             try
             {
                 // 首帧后仅留一个下行通道的 peer reader，直到真实关闭句柄 Dispose 本流或取消。
-                await Closed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-                return 0;
+                await Task.WhenAny(Closed.Task, _peerEnd.Task).WaitAsync(cancellationToken).ConfigureAwait(false);
+                return _peerEnd.Task.IsCompletedSuccessfully ? _peerEnd.Task.Result : 0;
             }
             finally
             {
@@ -392,6 +398,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
             Volatile.Write(ref _flushCompleted, 1);
         }
 
+        internal void EndPeer(int bytes = 0) => _peerEnd.TrySetResult(bytes);
         internal void ReleaseRead() => _readRelease.TrySetResult();
         internal void ReleaseWrite() => _writeRelease.TrySetResult();
         internal void ReleaseFlush() => _flushRelease.TrySetResult();
@@ -418,6 +425,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
         {
             if (disposing)
             {
+                BeforeDispose?.Invoke();
                 DisposeEntered.TrySetResult();
                 _disposeRelease.Task.GetAwaiter().GetResult();
                 Interlocked.Increment(ref _disposeCount);

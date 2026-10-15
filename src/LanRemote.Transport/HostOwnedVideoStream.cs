@@ -12,12 +12,14 @@ internal sealed class HostOwnedVideoStream : Stream
 {
     private readonly SslStream _stream;
     private readonly ConnectionCloseHandle _closer;
+    private readonly Action? _beforeClose;
     private int _disposed;
 
-    internal HostOwnedVideoStream(SslStream stream, ConnectionCloseHandle closer)
+    internal HostOwnedVideoStream(SslStream stream, ConnectionCloseHandle closer, Action? beforeClose = null)
     {
         _stream = stream;
         _closer = closer;
+        _beforeClose = beforeClose;
     }
 
     private SslStream ActiveStream
@@ -77,7 +79,8 @@ internal sealed class HostOwnedVideoStream : Stream
     {
         if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _ = _closer.CloseAsync();
+            try { _beforeClose?.Invoke(); }
+            finally { _ = _closer.CloseAsync(); }
         }
 
         base.Dispose(disposing);

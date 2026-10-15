@@ -16,6 +16,8 @@ internal sealed class FirstFrameRouter
     private readonly IVideoFrameSource? _frames;
     private readonly IVideoFrameProducerFactory? _factory;
     private readonly VideoSessionOptions _options;
+    private readonly bool _enableProducerReplacement;
+    private readonly ulong? _firstFrameId;
     private int _started;
 
     internal FirstFrameRouter(
@@ -37,15 +39,21 @@ internal sealed class FirstFrameRouter
         ControlAuthContext context,
         TransportTimeouts timeouts,
         IVideoFrameProducerFactory factory,
-        VideoSessionOptions? options = null)
+        VideoSessionOptions? options = null,
+        bool enableProducerReplacement = false,
+        ulong? firstFrameId = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(timeouts);
         ArgumentNullException.ThrowIfNull(factory);
+        if (!enableProducerReplacement && firstFrameId is not null)
+            throw new ArgumentException("发送编号仅适用于显式启用的生产者换代装配。", nameof(firstFrameId));
         _context = context;
         _timeouts = timeouts;
         _factory = factory;
         _options = options ?? new VideoSessionOptions();
+        _enableProducerReplacement = enableProducerReplacement;
+        _firstFrameId = firstFrameId;
     }
 
     internal string? Rejection { get; private set; }
@@ -64,6 +72,7 @@ internal sealed class FirstFrameRouter
         long enteredAt = _context.TimeProvider.GetTimestamp();
         ControlAuthSession? auth = null;
         VideoAttachLease? attachedLease = null;
+        VideoPublicationLifetime? videoLifetime = _enableProducerReplacement ? new() : null;
         List<Exception> errors = new(5);
         TaskCompletionSource closeRequired = new(TaskCreationOptions.RunContinuationsAsynchronously);
         // 在进入原主体同步前缀之前发布固定监督；不能等不合作的读/写/审批退出才关线。
@@ -88,9 +97,13 @@ internal sealed class FirstFrameRouter
         {
             try
             {
-                // 回调只通知，不执行 close/取消其它令牌/等待任何任务。
-                stopRegistration = cancellationToken.Register(
-                    static state => ((TaskCompletionSource)state!).TrySetResult(), closeRequired);
+                // 回调只摘借用槽并通知，不执行 close/取消其它令牌/等待任何任务。
+                stopRegistration = cancellationToken.Register(() =>
+                {
+                    // 固定监督覆盖附着后的同步前缀；有发布槽时先摘槽，再通知关闭。
+                    videoLifetime?.Withdraw();
+                    closeRequired.TrySetResult();
+                });
                 await JoinAsync(RunCoreAsync(), errors).ConfigureAwait(false);
             }
             catch (Exception error)
@@ -175,7 +188,11 @@ internal sealed class FirstFrameRouter
             }
 
             // 视频内部已分类网络结束和取消；真实来源/清理故障不能再套用上述豁免。
-            await RunVideoAsync(connection, lease, enteredAt, cancellationToken).ConfigureAwait(false);
+            if (_enableProducerReplacement)
+                await RunReplaceableVideoAsync(connection, lease, enteredAt, cancellationToken,
+                    closeRequired, closeSupervisor, videoLifetime!).ConfigureAwait(false);
+            else
+                await RunVideoAsync(connection, lease, enteredAt, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -430,6 +447,213 @@ internal sealed class FirstFrameRouter
             lifetime.Token.ThrowIfCancellationRequested();
             if (lease.Revoked.IsCompleted || peer.IsCompleted || stopped.Task.IsCompleted)
                 throw new OperationCanceledException("视频连接已撤销或关闭。", lifetime.Token);
+        }
+    }
+
+    private async Task RunReplaceableVideoAsync(
+        AcceptedConnection connection, VideoAttachLease lease, long enteredAt, CancellationToken hostToken,
+        TaskCompletionSource closeRequired, Task closeSupervisor, VideoPublicationLifetime videoLifetime)
+    {
+        using CancellationTokenSource lifetime = new();
+        TaskCompletionSource stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using CancellationTokenRegistration stopRegistration = hostToken.Register(
+            static state => ((TaskCompletionSource)state!).TrySetResult(), stopped);
+        ReplaceableVideoFrameSource source = new(lease.SessionId);
+        VideoFrameSender sender = _firstFrameId is { } first ? new(first) : new();
+        object gate = videoLifetime.Gate;
+        Task? sending = null;
+        Task<int> peer = Task.Run(() => ReadVideoPeerAsync(connection.Stream, lifetime.Token));
+        TaskCompletionSource setupEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<Exception> factoryErrors = [];
+        Task setup = Task.Run(async () =>
+        {
+            IVideoFrameProducer? localOwner = null;
+            try
+            {
+                CheckActive();
+                using (AuthenticationDeadline ack = new(
+                    _context.TimeProvider, Min(_options.AckWriteTimeout, CheckEnvelope(enteredAt, lifetime.Token)),
+                    lifetime.Token))
+                {
+                    CheckActive();
+                    await FrameWriter.WriteFrameAsync(connection.Stream,
+                        new VideoAttachAckFrame(lease.SessionId).Serialize(),
+                        TransportConstants.MaxPreAuthMessageBytes, ack.Token).ConfigureAwait(false);
+                    CheckStage(ack, lifetime.Token);
+                    CheckEnvelope(enteredAt, lifetime.Token);
+                }
+                CheckActive();
+                Task<IVideoFrameProducer>? creation = null;
+                try
+                {
+                    creation = _factory!.CreateAsync(lease.SessionId, lifetime.Token).AsTask();
+                    localOwner = await creation.ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("视频工厂未交付生产者。");
+                }
+                catch (Exception error) when (IsExpectedCancellation(error, creation, lifetime.Token)) { return; }
+                catch (Exception error)
+                {
+                    factoryErrors.Add(OriginalFailure(creation, error));
+                    return;
+                }
+
+                Task initial;
+                lock (gate)
+                {
+                    // 正常返回原 Task 才移交；关闭抢先时同步拒绝仍由局部 owner 回收。
+                    if (videoLifetime.Stopping || source.Termination.IsCompleted)
+                    {
+                        // source 的同步 Dispose 仅封口/登记 worker，不调用外部生产者。
+                        _ = source.DisposeAsync();
+                        try { initial = source.ReplaceAsync(localOwner); }
+                        catch (ObjectDisposedException) { return; }
+                    }
+                    else
+                    {
+                        CheckActive();
+                        initial = source.ReplaceAsync(localOwner);
+                    }
+                    localOwner = null;
+                }
+                try { await initial.ConfigureAwait(false); }
+                catch (Exception) { return; } // 唯一来源错误槽是完整 source.Completion。
+
+                lock (gate)
+                {
+                    CheckActive();
+                    if (videoLifetime.Stopping || source.Termination.IsCompleted) return;
+                    // 真 worker 先登记；worker 必须取得同 gate，不能在发布/退出排序之前进入 sender。
+                    sending = Task.Run(async () =>
+                    {
+                        lock (gate) CheckActive();
+                        await sender.SendAsync(lease.SessionId,
+                            new VideoFrameWriter(connection.CreateVideoStream(videoLifetime.Withdraw)), source,
+                            _context.TimeProvider, _options.FrameWriteTimeout, lifetime.Token).ConfigureAwait(false);
+                    });
+                    try { videoLifetime.Publication = _context.SessionRegistry.PublishVideoSource(lease, source); }
+                    catch (InvalidOperationException) { videoLifetime.Stopping = true; }
+                }
+            }
+            finally
+            {
+                setupEnded.TrySetResult();
+                if (localOwner is not null)
+                    factoryErrors.AddRange(await RetireUnacceptedAsync(localOwner).ConfigureAwait(false));
+            }
+        });
+
+        // setup 成功只表示已发布，不能据此结束流；失败/早退则必须启动退出。
+        await Task.WhenAny(setupEnded.Task, peer, lease.Revoked, stopped.Task, source.Termination,
+            videoLifetime.StopRequired)
+            .ConfigureAwait(false);
+        Task? activeSender;
+        lock (gate) activeSender = sending;
+        if (activeSender is not null && !IsEnding())
+            await Task.WhenAny(activeSender, peer, lease.Revoked, stopped.Task, source.Termination,
+                videoLifetime.StopRequired)
+                .ConfigureAwait(false);
+
+        videoLifetime.Withdraw();
+        closeRequired.TrySetResult();
+        // 每项独立发出：任何同步入口/取消回调阻塞都不能截断其它通知。
+        Task cancellation = Task.Run(() => lifetime.CancelAsync());
+        Task disposal = Task.Run(async () => await source.DisposeAsync().ConfigureAwait(false));
+        List<Exception> errors = [];
+        await JoinIndependentAsync(setup, errors, expectedNetworkEnd: true).ConfigureAwait(false);
+        lock (gate) activeSender = sending;
+        if (activeSender is not null)
+        {
+            try { await activeSender.ConfigureAwait(false); }
+            catch (Exception) { /* 主发送/来源/清理各由其权威槽记录。 */ }
+        }
+        if (sender.SendFailure is { } sendError &&
+            sendError is not OperationCanceledException and not IOException and not ObjectDisposedException)
+            errors.Add(sendError);
+        errors.AddRange(sender.CleanupErrors);
+        await JoinIndependentAsync(peer, errors, expectedNetworkEnd: true).ConfigureAwait(false);
+        await JoinIndependentAsync(cancellation, errors).ConfigureAwait(false);
+        await JoinIndependentAsync(disposal, errors).ConfigureAwait(false);
+        // Dispose 原任务就是稳定 Completion；不再把 Replace/sender 的传播树累计一次。
+        errors.AddRange(factoryErrors);
+        try { await closeSupervisor.ConfigureAwait(false); }
+        catch (Exception) { /* 最外层只记录一次原关闭故障，且仍在 lease.Complete 之前。 */ }
+        if (peer.IsCompletedSuccessfully && peer.Result != 0) Rejection = "video-unexpected-upstream-data";
+        if (errors.Count == 1) ExceptionDispatchInfo.Capture(errors[0]).Throw();
+        if (errors.Count > 1) throw new AggregateException("视频连接收尾发生多个错误。", errors);
+        hostToken.ThrowIfCancellationRequested();
+
+        bool IsEnding()
+        {
+            lock (gate)
+                return videoLifetime.Stopping || peer.IsCompleted || lease.Revoked.IsCompleted ||
+                    stopped.Task.IsCompleted || source.Termination.IsCompleted;
+        }
+
+        void CheckActive()
+        {
+            hostToken.ThrowIfCancellationRequested();
+            lifetime.Token.ThrowIfCancellationRequested();
+            if (videoLifetime.Stopping || lease.Revoked.IsCompleted || peer.IsCompleted || stopped.Task.IsCompleted)
+                throw new OperationCanceledException("视频连接已撤销或关闭。", lifetime.Token);
+        }
+    }
+
+    private sealed class VideoPublicationLifetime
+    {
+        private readonly TaskCompletionSource _stopRequired = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal object Gate { get; } = new();
+        internal Task StopRequired => _stopRequired.Task;
+        internal bool Stopping;
+        internal IDisposable? Publication;
+
+        internal void Withdraw()
+        {
+            lock (Gate)
+            {
+                Stopping = true;
+                Publication?.Dispose();
+                Publication = null;
+                _stopRequired.TrySetResult();
+            }
+        }
+    }
+
+    private static async Task<Exception[]> RetireUnacceptedAsync(IVideoFrameProducer producer)
+    {
+        Task<(Task? Original, Exception? Error)> stop = Task.Run(() => Observe(() => producer.StopAsync()));
+        Task<(Task? Original, Exception? Error)> dispose = Task.Run(() => Observe(() => producer.DisposeAsync().AsTask()));
+        Task<(Task? Original, Exception? Error)> completion = Task.Run(() => Observe(() => producer.Completion));
+        var observations = await Task.WhenAll(stop, dispose, completion).ConfigureAwait(false);
+        HashSet<Task> seen = new(ReferenceEqualityComparer.Instance);
+        List<Exception> errors = [];
+        foreach (var observation in observations)
+        {
+            if (observation.Original is not null && !seen.Add(observation.Original)) continue;
+            if (observation.Error is not null) errors.Add(observation.Error);
+        }
+        return errors.ToArray();
+
+        static async Task<(Task? Original, Exception? Error)> Observe(Func<Task> invoke)
+        {
+            Task? original = null;
+            try
+            {
+                original = invoke() ?? throw new InvalidOperationException("生产者未返回完整生命周期任务。");
+                await original.ConfigureAwait(false);
+                return (original, null);
+            }
+            catch (Exception error) { return (original, OriginalFailure(original, error)); }
+        }
+    }
+
+    private static async Task JoinIndependentAsync(Task task, List<Exception> errors, bool expectedNetworkEnd = false)
+    {
+        try { await task.ConfigureAwait(false); }
+        catch (Exception error)
+        {
+            Exception original = OriginalFailure(task, error);
+            if (!expectedNetworkEnd || original is not OperationCanceledException and not IOException and not ObjectDisposedException)
+                errors.Add(original);
         }
     }
 

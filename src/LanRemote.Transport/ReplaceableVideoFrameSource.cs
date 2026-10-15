@@ -36,6 +36,8 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
 
     internal Guid SessionId => _sessionId;
     internal Task Completion => _completion;
+    // 封口即通知监督者；不等待可能仍阻塞的 Start/Read/Stop/Completion。
+    internal Task Termination => _closingSignal.Task;
 
     /// <summary>同步接纳并移交所有权；只允许一个替换，不缓存后续请求。</summary>
     internal Task ReplaceAsync(IVideoFrameProducer next)

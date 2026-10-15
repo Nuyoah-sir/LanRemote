@@ -52,7 +52,8 @@ public sealed record AcceptedConnection(
     /// 创建真实 SSL 的窄读写适配器；Dispose 只请求关闭，pipeline 仍须 await CloseAsync。
     /// writer 的 StreamDisposeSucceeded 在这里仅表示请求发出，不表示物理释放完成。
     /// </summary>
-    internal Stream CreateVideoStream() => new HostOwnedVideoStream(Stream, RequireCloseAuthority());
+    internal Stream CreateVideoStream(Action? beforeClose = null) =>
+        new HostOwnedVideoStream(Stream, RequireCloseAuthority(), beforeClose);
 
     private ConnectionCloseHandle RequireCloseAuthority()
     {

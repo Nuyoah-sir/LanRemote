@@ -845,6 +845,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
         internal Exception? DisposeFailure { get; init; }
         internal Func<Task>? StopTaskFactory { get; init; }
         internal Func<Task>? DisposeTaskFactory { get; init; }
+        internal Func<Task>? CompletionTaskFactory { get; init; }
         internal int Starts => Volatile.Read(ref _starts);
         internal int Reads => Volatile.Read(ref _reads);
         internal int Stops => Volatile.Read(ref _stops);
@@ -854,7 +855,7 @@ public sealed partial class FirstFrameRouterBoundaryTests
         internal TaskCompletionSource StartExited { get; } = Signal();
         internal TaskCompletionSource ReadEntered { get; } = Signal();
         internal TaskCompletionSource StopEntered { get; } = Signal();
-        public Task Completion => _completion.Task;
+        public Task Completion => CompletionTaskFactory?.Invoke() ?? _completion.Task;
 
         public void Start()
         {
