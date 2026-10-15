@@ -431,6 +431,7 @@ public sealed class SessionRegistry
             private long _lastSequence = -1;
             private bool _closed;
             private DisplaySwitchReservation? _active;
+            private DisplaySwitchExecutor? _executor;
 
             internal DisplaySwitchAdmission(SessionRegistration registration, DisplayCatalogFrame catalog)
             {
@@ -438,19 +439,57 @@ public sealed class SessionRegistry
                 _catalog = catalog;
             }
 
+            /// <summary>一次装配拥有型执行器；已有手动预约时拒绝，不接管该预约。</summary>
+            internal DisplaySwitchExecutor CreateExecutor(
+                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare)
+            {
+                ArgumentNullException.ThrowIfNull(prepare);
+                lock (_registration._registry._gate)
+                {
+                    if (_closed || !ReferenceEquals(_registration._entry.DisplaySwitchAdmission, this) ||
+                        !_registration.IsDisplaySwitchAvailable() || _active is not null || _executor is not null)
+                        throw new InvalidOperationException("切屏请求执行器不可创建。");
+                    return _executor = new DisplaySwitchExecutor(_registration._registry._gate, this, prepare);
+                }
+            }
+
+            internal bool OwnsExecutor(DisplaySwitchExecutor executor)
+            {
+                lock (_registration._registry._gate) return ReferenceEquals(_executor, executor);
+            }
+
+            internal void CloseExecutor(DisplaySwitchExecutor executor)
+            {
+                lock (_registration._registry._gate)
+                    if (ReferenceEquals(_executor, executor)) _closed = true;
+            }
+
             internal DisplaySwitchAdmissionStatus TryReserve(
+                DisplaySwitchRequestFrame request, out DisplaySwitchReservation? reservation) =>
+                TryReserveCore(null, request, out reservation);
+
+            internal DisplaySwitchAdmissionStatus TryReserveForExecutor(DisplaySwitchExecutor executor,
+                DisplaySwitchRequestFrame request, out DisplaySwitchReservation? reservation)
+            {
+                ArgumentNullException.ThrowIfNull(executor);
+                return TryReserveCore(executor, request, out reservation);
+            }
+
+            private DisplaySwitchAdmissionStatus TryReserveCore(DisplaySwitchExecutor? executor,
                 DisplaySwitchRequestFrame request, out DisplaySwitchReservation? reservation)
             {
                 ArgumentNullException.ThrowIfNull(request);
                 reservation = null;
                 lock (_registration._registry._gate)
                 {
-                    if (_closed || !ReferenceEquals(_registration._entry.DisplaySwitchAdmission, this) ||
+                    if (_closed || !ReferenceEquals(_executor, executor) ||
+                        !ReferenceEquals(_registration._entry.DisplaySwitchAdmission, this) ||
                         !_registration.IsDisplaySwitchAvailable())
                         return DisplaySwitchAdmissionStatus.Unavailable;
                     if (request.SessionId != _registration.SessionId)
                         return DisplaySwitchAdmissionStatus.SessionMismatch;
-                    if (_active is not null) return DisplaySwitchAdmissionStatus.Busy;
+                    if (_active is not null || _executor?.HasActiveExecution == true)
+                        return DisplaySwitchAdmissionStatus.Busy;
                     if (request.Sequence <= _lastSequence) return DisplaySwitchAdmissionStatus.StaleSequence;
                     if (request.CatalogSequence != _catalog.Sequence)
                         return DisplaySwitchAdmissionStatus.CatalogMismatch;
@@ -487,6 +526,19 @@ public sealed class SessionRegistry
 
                 internal DisplaySwitchRequestFrame Request { get; }
                 internal DisplayInfo Target { get; }
+
+                /// <summary>同一父gate核预约/执行器/父资格并移交；返回原Task，不调用外部生产者。</summary>
+                internal Task ReplaceProducerAsync(DisplaySwitchExecutor executor, IVideoFrameProducer producer)
+                {
+                    ArgumentNullException.ThrowIfNull(executor);
+                    ArgumentNullException.ThrowIfNull(producer);
+                    lock (_owner._registration._registry._gate)
+                    {
+                        if (!ReferenceEquals(_owner._executor, executor) || !IsCurrent)
+                            throw new InvalidOperationException("切屏请求预约已失效。");
+                        return _owner._registration.ReplaceVideoProducerAsync(producer);
+                    }
+                }
 
                 /// <summary>瞬时可继续快照，不是跨锁授权；真实Replace仍需原父gate最终校验。</summary>
                 internal bool IsCurrent
