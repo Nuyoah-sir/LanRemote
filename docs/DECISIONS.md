@@ -1872,3 +1872,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **错误与取消。** 原任务只AsTask一次；保留原Task多根和嵌套错误，不Flatten、不按异常引用全局去重。Stop/Dispose/Completion只有同一个原Task才去重，独立操作即使共用异常实例仍各保留。读取真错与迟到owner清理真错同时进入Replace失败和最终Completion；caller token真实Canceled原读可取消本次读取而不终止生产，Faulted OCE/异token及清理OCE仍是真错。Start拒绝只在已观察退役且有同实例显式证明时作为停止竞争处理，探针错误和原错误均保留；不靠事后Dispose重判。依赖/owner回调不得等待本来源操作或Completion，以免自join。
 
 **验证边界。** 初始定向195PASS，新增48case；其中3case在旧帧header/payload/flush原IO仍受控阻塞时完成换代，核对owner存活、未预取、原token未取消，放行后同sender连续70/71编号写出。五项生产变异late-owner/delivered-owner/shared-task/original-roots/replace-read-error分别1/2/1/1/2原断言红并精确恢复；不是删除原join或取消代理的独立kill证明。恢复与完整双配置验证结果另记HANDOFF，不以静态审查替代实跑。受控producer/Stream非实际GDI/真实TLS/物理多屏；不改Router、Control codec、Client/UI、FramePipeline、LRVF、Video单次租约与现网安全边界。
+
+### ADR-097 — 父资格约束的内部视频来源发布与同步候选接纳
+
+**2026-10-15；内部借用入口，不接Router。** `SessionRegistry.PublishVideoSource(VideoAttachLease, ReplaceableVideoFrameSource)`在原registry gate核真实entry的lease引用、source只读SessionId、控制取消及lease Revoked/Completed。同一租约只允许一次发布，摘槽不恢复发布资格；返回的IDisposable只摘所捕获entry的槽，不查裸Guid删除新entry，不接管source生命周期。不扩大public API、Snapshot或秘密导出面；旧内部方法白名单有意仅增加PublishVideoSource，Register仍只由认证状态机调用。
+
+**同步接纳。** `SessionRegistration.ReplaceVideoProducerAsync(IVideoFrameProducer)`是非async方法，同一registry gate核当前entry引用、句柄释放、控制取消、子租约终态和已发布槽，然后直接返回source.ReplaceAsync的原Task。同步拒绝不接管新候选，正常返回Task即按ADR096移交；无代理、请求队列或超时取消。候选专用且未Start是调用方合同，接口没有可验证的候选SessionId/IsStarted。registry→source锁序固定；source同步入口只登记worker，不在锁内调用外部producer。
+
+**撤销不等于退出。** Unregister同gate摘表/摘槽/清token/通知Revoked；真实VideoAttachLease与registry共用gate，Complete与接纳可排序。publication Dispose、注销、Complete只能拒绝后续接纳，不撤回已接管候选；先接纳的候选仍可能在注销返回后Start，必须由未来生命周期owner主动Dispose source并完整join。控制CTS自身不与registry gate同锁，只承诺检查点的取消观察，不承诺墙钟硬截止。AttachWindow仅限制初次附着，窗口到期不拒绝合法在流换代。
+
+**调用方与后片。** 发布前ACK完整退出、初装成功及sender原worker登记是调用方前置，本原语不验证Ready/ACK，空或已关闭source也不由publisher判定。后片Router先满足前置再发布；退出先摘槽，独立通知close/cancel/source Dispose，再join原factory或初装、sender、peer、source Completion、取消和close，最后原Router最外层Complete租约。source拒绝迟到工厂候选时局部owner仍需完整回收；source终态的早期通知与唯一权威错误槽留后片，避免把Replace/sender/source同一错误重复累计。现有Router默认透传编号/sole-error顶层形状保持，优先新增内部显式装配而非静默改变旧路径。不宣称发送/显示屏障或M6 live切屏；不改网络、防护、权限、Control/UI/GDI，不重验M4/M5、不启M7。
+
+**证据。** 本片新20方法/31case；初始/恢复定向各150PASS/0FAIL/0SKIP（含既有登记表/换代来源回归），源码前后快照一致。五项生产字节变异：lease-identity删真实租约引用核对2红、withdraw漏摘槽1红、original-task以Task.WhenAll包装原Task**未击杀**（单任务WhenAll返回原Task，如实记not-killed，另以original-task-proxy换成确实不同的ContinueWith代理1红补证）、parent-cancel漏父取消1红；均完整wait/核验/精确恢复。双配置Debug/Release各5615PASS/0FAIL/0SKIP（Transport3997=3966+31），四Rebuild零警告零错误。独立核验exit0：旧5584完整四字段身份保留、+31/-0、400源码项、39TRX/22707唯一execution。测试的阻塞外部入口验证当前实现不持registry gate，未作同步外部调用回归的卡死变异或共享gate删除的独立kill，不穷举竞态。

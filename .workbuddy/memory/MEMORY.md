@@ -5,9 +5,11 @@
 > ADR `docs/DECISIONS.md`（至096：生产者换代；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-14，权威详HANDOFF§19.52/ADR096）
+## 当前续作点（2026-10-15，权威详HANDOFF§19.53/ADR097）
 
-已推代码`6363e53`/5584，完整号见HANDOFF。首装可只公告身份；已有配置allowDiscovery须唯一布尔，否则拒公告/监听。
+已推代码62afdf0/5615（完整号与应用程序集见HANDOFF）；当日早前直连github曾超时/重置致前两次push失败，第三次普通push成功并实读远端refs/heads/main一致。接手提示词见仓库根新对话接手prompt-20261015.md。
+
+**发布接缝（§19.53）。** PublishVideoSource(真lease, source)在registry同gate单次发布并返回只摘槽句柄，不接管source；ReplaceVideoProducerAsync非async、同gate后直接return source.ReplaceAsync原Task。撤销三态只拒后续接纳、不撤回已接管候选；真lease与registry共gate完成。5files/新31case，定向150/150，双配置各5615PASS，五变异2/1/0not-killed/1/1，独立exit0：+31/-0、400源。Router完整装配留下一片。
 
 **M5已收口。** 2026-10-12用户确认稳定、继续M6，撤回卡顿判断；不重查/重验/加压测。原十分钟/慢网/双方上网确认保留，不捏造数字/截图/审计。§19.29旧ZIP不覆盖/重打、不含M6（完整收据见HANDOFF）。Host默认5/50/JPEG60，显式10/15/20/30默认75/JPEG60，scale50/67/75/100、JPEG40..85；Auto禁，不写config/热切，停完整再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限非全机内存上界。
 
@@ -17,23 +19,23 @@
 
 **Client接收（§19.44）。** 唯一reader、256KiB/10秒原锚、严格host_status/单槽；父gate发布撤销、原IO/timer完整join。Reached非Task发布，WhenAny非join。
 
-**Host/Router（§19.45–47）。** 同gate发布worker、None原IO；原锚含序列化/IO/timer及Int128末检。Abort仅通知、原Task join，未知借用不清零，退出≠释放。success flush→Register→秘密finally→holding→目录；StopRequired先close/注销再join全部根，Dispose后取VideoCompletion。逐槽保原错误树；受控流非TLS。
+**Host/Router（§19.45–47）。** 同gate发布worker、None原IO；原锚含序列化/IO/timer及Int128末检。Abort仅通知、原Task join，退出≠释放。success flush→Register→秘密finally→holding→目录；StopRequired先close/注销再join全部根，Dispose后取VideoCompletion。逐槽保错误树；受控流非TLS。
 
 **Host/Client目录（§19.48–49）。** Host record共享守卫，非async外桥/原Task保错误树；委托内new GDI，10秒非硬中断，seq0仅元数据。Client原父gate只读单槽、撤销留历史；250ms timer非实时，Closing/SessionEnded/Drain前清timer/getter/token/ItemsSource，拒迟到且异常不跳Drain。5410/5434历史是单机自动化，不是双机/真人/多屏联合。
 
-**固定目标准备（§19.50）。** internal CreateForDisplayAsync完整枚举唯一ID及record匹配，无主屏回退；目标预算先于encoder，交付未Start，创建token不控制生产。共用原Task/回滚，保错误树；selected诊断。41新/5475历史，记录相等非硬件身份/拓扑锁，受控pipeline非GDI/多屏。
+**固定目标准备（§19.50）。** CreateForDisplayAsync完整枚举唯一ID及record匹配，无主屏回退；预算先于encoder，交付未Start，创建token不控制生产。共用原Task/回滚保错误树。41新/5475，记录相等非硬件拓扑锁，受控pipeline非GDI/多屏。
 
-**可选编号（§19.51）。** sender(ulong)实例写前序列，默认new()透传；Max一次，后续EOF正常/额外帧释放耗尽不回绕。writer仅改header，原owner/Task/单飞/终止保持，IO退出释放不预取。61新/5536历史；编号非发送/显示证明，owner变异为提前Dispose而非取消代理。
+**可选编号（§19.51）。** sender(ulong)实例写前序列，默认new()透传；Max一次后EOF正常、额外帧释放耗尽不回绕。writer仅改header，原owner/Task/单飞保持。61新/5536；编号非发送/显示证明。
 
-**拥有型换代（§19.52）。** internal ReplaceableVideoFrameSource单session/read/replace，正常返回Task即接管未Start候选；旧代原Start/Read及迟到owner完整结算后才新Start。Stop/Dispose/Completion锁外独立，只有同原Task去重；真错入Replace与Completion。提交帧不能收回，旧EOF不外泄；活动EOF永久终止，无active Completion自动监视。Completion先退役/Replace→settled→外层Read避免自join；回调禁等自身。48新/定向195/双配置5584，独立exit0：+48/-0、399源175原件、39TRX/22638execution，五变异1/2/1/1/2红恢复非删除join证明。3个旧帧原IO阻塞时换代完成的同sender测试通过，非TLS/GDI/实屏。
+**拥有型换代（§19.52）。** ReplaceableVideoFrameSource单session/read/replace，正常返回Task即接管未Start候选；旧代原Start/Read及迟到owner结算后才新Start。三清理入口锁外独立、只同原Task去重；提交帧不可收回，旧EOF不外泄，无active Completion自动监视。Completion先退役/Replace→settled→外层Read避免自join。48新/5584；旧帧原IO阻塞时换代完成已测，非TLS/GDI/实屏。
 
-**下一片：经认证会话内部换代接缝与装配，再live/画质。** Router仍固定source/default sender，未接新来源；换代非发送/显示屏障，单次Video租约禁重连。无双机人工前置，后续实机验收保留。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
+**下一片：Router完整生命周期装配，再live/画质。** Router仍固定source/default sender；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
-M4详§18.25，不翻绿/重跑；pin仅顺序关联、采样跨度非清理耗时，SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
+M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 
-审批按状态机接受时刻：elapsed>=budget拒，gate前计时含UI；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后终检，之前不改limiter；context loader至多一项实际store，迟到key先清零再释放准入，CTS不能硬中断同步DPAPI/gate/阻塞回调。客户端独占TLS到认证，presentedPin及grant proof验完才交会话，public无流/token/输入；hello后machine10s、challenge只收窄、独立approval60s。只消费首个终帧；DTO/TLS内部副本不保证擦除；clock变异须在被删检查之前客观固定到期，不把后置兜底误称单点覆盖。
+审批按状态机接受时刻：elapsed>=budget拒，gate前计时含UI；caller取消>截止>已观察活动>决定，校验后再查。machine覆盖MAC后终检；context loader至多一项实际store，迟到key先清零再释放准入，CTS不能硬中断同步DPAPI/gate/阻塞回调。客户端独占TLS到认证，presentedPin及grant proof验完才交会话，public无流/token/输入；hello后machine10s、challenge只收窄、独立approval60s。只消费首个终帧；DTO/TLS内部副本不保证擦除；clock变异须在被删检查之前客观固定到期。
 
-用户2026-10-12持续授权：每片验证后新提交并推送，再自主继续；仅真人/权限依赖停，不强推/改历史/跳hooks。context单WorkLease先清零归还；Host180秒自然结束、提前停作废，成功SessionId/负例四元组，采样跨度>=4s、最大/末间隔<=500ms、非强关注销才PASS。
+用户2026-10-12持续授权：每片验证后新提交并推送，再自主继续；仅真人/权限依赖停，不强推/改历史/跳hooks。context单WorkLease先清零归还；Host180秒自然结束、提前停作废，成功SessionId/负例四元组。
 
 ## 定位与硬约束
 
@@ -51,8 +53,8 @@ Windows 局域网屏幕共享/远程控制（自用）。无账号/云/穿透/UP
 中文；结构化；结论先行给证据；**严禁伪代码与伪造构建/测试结论**（没跑写「未运行」）；改动最小化。
 每里程碑 = build + test + 更新 HANDOFF（记 `Last code commit` + `Working tree at validation`，**不写 HEAD hash**）。
 外部模型只做设计红队评审（prompt 在 `docs/`）；Windows/.NET 行为一律本机实测；模型结论不直写 HANDOFF。
-**交付必须双击即 GUI**（WinExe/WPF），绝不「控制台 exe + 脚本」（用户连纠三次）。
-**2026-09-24用户重申原始需求**：同局域网中安装并运行软件的机器应自动发现；软件适应现网，只读网卡/地址并使用标准通信，不重配系统网络。A/B仅角色，不代表固定IP/实验网段；不改DHCP/静态IP/网关/DNS/路由/热点/ICS/网络类别，不自动动防火墙。发现失败应修识别/通信代码或如实诊断，不能要求用户改网配合。软件/验收均不能导致任何一端断网，短暂也不接受，UAC/可撤销不是豁免。旧lab准备停用；恢复旧改动须核对状态并单独获准，不能默认Undo。
+**交付必须双击即 GUI**（WinExe/WPF），绝不「控制台 exe + 脚本」。
+**2026-09-24用户重申原始需求**：同局域网中安装并运行软件的机器应自动发现；软件适应现网，只读网卡/地址并使用标准通信，不重配系统网络。A/B仅角色，不代表固定IP/实验网段；不改DHCP/静态IP/网关/DNS/路由/热点/ICS/网络类别，不自动动防火墙。发现失败应修识别/通信代码或如实诊断，不能要求用户改网配合。软件/验收不能导致任一端断网，UAC/可撤销不是豁免。旧lab准备停用；恢复旧改动须核对状态并单独获准，不能默认Undo。
 
 ## 命令 / 打包
 
@@ -65,7 +67,7 @@ dotnet build LanRemote.sln -c Debug && dotnet test LanRemote.sln -c Debug --no-b
 `.ps1` 必须 UTF-8 **with BOM**；`.cmd` 纯ASCII。新包不交付这些脚本。
 M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代码提交。
 
-## 里程碑（更新至2026-10-14）
+## 里程碑（更新至2026-10-15）
 
 | 阶段 | 状态 |
 | --- | --- |
@@ -75,10 +77,10 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.52内部换代来源各5584通过；Router/live/会话画质未接。 |
+| **M6** | 进行中：§19.53发布接缝已推62afdf0、双配置各5615通过；Router完整装配/live/画质未接。 |
 | M7~M11 | 未开始 |
 
-历史提交链见HANDOFF。
+提交链见HANDOFF。
 origin为public，地址/历史见HANDOFF§1，不外推当前同步。gh无需。勿裸跑helper-selector（含--help），会弹GUI/改配置。凭据selected=manager、空值+manager链已修；按持续授权逐片提交推送。
 
 ## 实测事实（别再猜）
