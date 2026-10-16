@@ -102,6 +102,9 @@ public sealed class ControlAuthSession
     private HostDisplayCatalogSendOptions? _catalogOptions;
     private TaskCompletionSource? _catalogCloseRequired;
     private HostAuthenticatedCatalogLifetime? _catalogLifetime;
+    private HostControlWriterLifetime? _controlWriterLifetime;
+    private HostControlWriter? _controlWriter;
+    internal HostControlWriterLifetime? ControlWriterLifetime => Volatile.Read(ref _controlWriterLifetime);
     private Task? _catalogHolding;
     private Exception? _catalogSetupError, _catalogOwnerError;
     private int _started;
@@ -450,11 +453,23 @@ public sealed class ControlAuthSession
                         {
                             // 原位置直接进入 holding 的同步前缀，保存原 Task；不搬读线程、不另开读者。
                             _catalogHolding = HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken);
-                            HostDisplayCatalogSendAttempt send = new(
-                                _stream, _catalogOptions.Source, Context.TimeProvider, _catalogOptions.Budget);
-                            _catalogLifetime = new(send, _catalogHolding, _catalogCloseRequired!, cancellationToken);
-                            _ = _catalogLifetime.Start();
-                            await _catalogLifetime.StopRequired.ConfigureAwait(false);
+                            if (_catalogOptions.UseSessionWriter)
+                            {
+                                _controlWriter = new(_stream, SessionId, Context.TimeProvider,
+                                    _catalogOptions.Budget, _catalogCloseRequired!);
+                                HostControlWriterLifetime lifetime = new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken);
+                                Volatile.Write(ref _controlWriterLifetime, lifetime);
+                                _ = lifetime.Start();
+                                await lifetime.StopRequired.ConfigureAwait(false);
+                            }
+                            else
+                            {
+                                HostDisplayCatalogSendAttempt send = new(
+                                    _stream, _catalogOptions.Source, Context.TimeProvider, _catalogOptions.Budget);
+                                _catalogLifetime = new(send, _catalogHolding, _catalogCloseRequired!, cancellationToken);
+                                _ = _catalogLifetime.Start();
+                                await _catalogLifetime.StopRequired.ConfigureAwait(false);
+                            }
                         }
                         catch (Exception error)
                         {
@@ -463,6 +478,7 @@ public sealed class ControlAuthSession
                         }
                         finally
                         {
+                            _controlWriter?.RequestStop();
                             _catalogCloseRequired!.TrySetResult();
                         }
                     }
@@ -550,7 +566,7 @@ public sealed class ControlAuthSession
     }
 
     private Task JoinCatalogOperationsAsync() => Task.WhenAll(
-        JoinCatalogOwnerAsync(_catalogLifetime?.Completion), JoinCatalogHoldingAsync(_catalogHolding));
+        JoinCatalogOwnerAsync(_controlWriterLifetime?.Completion ?? _controlWriter?.Completion ?? _catalogLifetime?.Completion), JoinCatalogHoldingAsync(_catalogHolding));
 
     private async Task JoinCatalogOwnerAsync(Task? completion)
     {

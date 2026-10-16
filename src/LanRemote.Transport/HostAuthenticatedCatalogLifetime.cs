@@ -16,6 +16,7 @@ internal sealed class HostDisplayCatalogSendOptions
 
     internal Func<ValueTask<DisplayCatalogFrame>> Source { get; }
     internal TimeSpan Budget { get; }
+    internal bool UseSessionWriter { get; init; }
 }
 
 /// <summary>认证后单次目录发送与原 holding 的固定生命周期所有者；不读、不关流、不拥有会话登记。</summary>

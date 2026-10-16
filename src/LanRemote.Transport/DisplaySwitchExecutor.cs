@@ -107,6 +107,17 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         }
     }
 
+    /// <summary>绑定真实会话写者；seq由其接纳时预约，UTC在其原预算内采样，不由请求线程采样。</summary>
+    internal ReplyStatus TrySendReply(RequestExecutionReceipt receipt, HostControlWriter writer,
+        out Task<ReplyResult>? reply)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(writer);
+        reply = null;
+        if (writer.SessionId != receipt.Request.SessionId) return ReplyStatus.InvalidReceipt;
+        return TrySendReply(receipt, 0, 0, writer.WriteDisplayChangedAsync, out reply);
+    }
+
     /// <summary>
     /// 仅显式回执模式可用。只从本执行器私有槽取真实代际首发，不相信外部receipt的Binding值。
     /// write须独占Control写者并完整覆盖序列化/原IO/预算；本片只接内部委托，不装配网络。

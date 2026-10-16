@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 
 namespace LanRemote.Transport;
 
-/// <summary>独立单次目录发送底座；未接产品 Host、认证、App 来源或父会话 holding。</summary>
+/// <summary>单次目录发送及可选Control载荷底座；目录路径已接认证Host，可选写者复用原预算/IO链。</summary>
 /// <remarks>
 /// 借用流且要求唯一顺序 writer；不读取、不关闭、不释放流。AbortRequired 要求外层先锁外关线并持有原关闭任务。
 /// 构造无 I/O/取时；Start 发布固定协调 Task，另一个固定操作 Task 隔离 source/write/flush 的同步前缀。
@@ -32,7 +32,10 @@ internal sealed class HostDisplayCatalogSendAttempt
     private static readonly SendOutcome SentOutcome = new(AttemptEnd.Sent);
     private readonly object _gate = new();
     private readonly Stream _stream;
-    private readonly Func<ValueTask<DisplayCatalogFrame>> _source;
+    private readonly Func<ValueTask<DisplayCatalogFrame>>? _source;
+    private readonly Func<ValueTask<byte[]>>? _payloadSource;
+    private readonly Func<DisplayCatalogFrame, byte[]>? _serializeCatalog;
+    private readonly int _maxPayloadBytes;
     private readonly SampledClock _clock;
     private readonly TimeSpan _budget;
     private readonly TaskCompletionSource _stop = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -48,14 +51,35 @@ internal sealed class HostDisplayCatalogSendAttempt
 
     internal HostDisplayCatalogSendAttempt(Stream stream, Func<ValueTask<DisplayCatalogFrame>> source,
         TimeProvider clock, TimeSpan budget)
+        : this(stream, source ?? throw new ArgumentNullException(nameof(source)), null,
+            DisplayCatalogFrame.MaxPayloadByteLength, clock, budget) { }
+
+    // 仅复用已验证的原预算/IO/Flush/清理链；source须交付独占数组，原Task返回后由本底座清零。
+    internal static HostDisplayCatalogSendAttempt CreatePayload(Stream stream, Func<ValueTask<byte[]>> source,
+        int maxPayloadBytes, TimeProvider clock, TimeSpan budget) =>
+        new(stream, null, source ?? throw new ArgumentNullException(nameof(source)), maxPayloadBytes, clock, budget);
+
+    internal static HostDisplayCatalogSendAttempt CreateCatalogPayload(Stream stream,
+        Func<ValueTask<DisplayCatalogFrame>> source, Func<DisplayCatalogFrame, byte[]> serialize,
+        TimeProvider clock, TimeSpan budget) =>
+        new(stream, source ?? throw new ArgumentNullException(nameof(source)), null,
+            DisplayCatalogFrame.MaxPayloadByteLength, clock, budget, serialize ?? throw new ArgumentNullException(nameof(serialize)));
+
+    private HostDisplayCatalogSendAttempt(Stream stream, Func<ValueTask<DisplayCatalogFrame>>? source,
+        Func<ValueTask<byte[]>>? payloadSource, int maxPayloadBytes, TimeProvider clock, TimeSpan budget,
+        Func<DisplayCatalogFrame, byte[]>? serializeCatalog = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(source);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxPayloadBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maxPayloadBytes, DisplayCatalogFrame.MaxPayloadByteLength);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentOutOfRangeException.ThrowIfLessThan(budget, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(budget, ControlFrameBudget.MaxBudget);
         _stream = stream;
         _source = source;
+        _payloadSource = payloadSource;
+        _serializeCatalog = serializeCatalog;
+        _maxPayloadBytes = maxPayloadBytes;
         _clock = new SampledClock(clock);
         _budget = budget;
     }
@@ -232,18 +256,32 @@ internal sealed class HostDisplayCatalogSendAttempt
         {
             if (!CheckStage(deadline, anchor, frequency, stage)) return false;
             prefixUnreturned = true;
-            Task<DisplayCatalogFrame> originalSource = _source().AsTask();
-            original = originalSource;
-            prefixUnreturned = false;
-            DisplayCatalogFrame frame = await originalSource.ConfigureAwait(false)
-                ?? throw new InvalidOperationException("host-catalog-source-missing");
-            original = null;
-            if (!CheckStage(deadline, anchor, frequency, stage)) return false;
-
-            stage = OperationStage.Serialize;
-            if (!CheckStage(deadline, anchor, frequency, stage)) return false;
-            payload = frame.Serialize();
-            if (payload.Length is < 1 or > DisplayCatalogFrame.MaxPayloadByteLength)
+            if (_payloadSource is { } payloadSource)
+            {
+                Task<byte[]> originalSource = payloadSource().AsTask();
+                original = originalSource;
+                prefixUnreturned = false;
+                payload = await originalSource.ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("host-control-payload-missing");
+                original = null;
+                if (!CheckStage(deadline, anchor, frequency, stage)) return false;
+                stage = OperationStage.Serialize;
+                if (!CheckStage(deadline, anchor, frequency, stage)) return false;
+            }
+            else
+            {
+                Task<DisplayCatalogFrame> originalSource = _source!().AsTask();
+                original = originalSource;
+                prefixUnreturned = false;
+                DisplayCatalogFrame frame = await originalSource.ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("host-catalog-source-missing");
+                original = null;
+                if (!CheckStage(deadline, anchor, frequency, stage)) return false;
+                stage = OperationStage.Serialize;
+                if (!CheckStage(deadline, anchor, frequency, stage)) return false;
+                payload = _serializeCatalog is { } serialize ? serialize(frame) : frame.Serialize();
+            }
+            if (payload.Length < 1 || payload.Length > _maxPayloadBytes)
                 throw new InvalidOperationException("host-catalog-payload-length-invalid");
             if (!CheckStage(deadline, anchor, frequency, stage)) return false;
 
