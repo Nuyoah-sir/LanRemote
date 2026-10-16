@@ -7,9 +7,9 @@
 
 ## 当前续作点（2026-10-16，权威详HANDOFF§19.59/ADR103）
 
-已推d99a7e0/6692。display_changed严格11字段、uint64首帧；CreateReplyExecutor保原预约到reply原Task退出，私有真代际首发生成回执。worker父/source gate终检逻辑提交，writer委托锁外原Task完整join；Stop先赢不调writer，提交先赢可物理迟到，须close/cancel/join。旧两执行器模式不变。538新/722定向/六变异红恢复、独立exit0；412源/171原件/17旧ZIP保持。默认App/真实Control写者未接。
+已推d99a7e0/6692。display_changed严格11字段、uint64首帧；CreateReplyExecutor保原预约到reply原Task退出，私有真代际首发生成回执。worker父/source gate终检逻辑提交，writer委托锁外原Task完整join；Stop先赢不调writer，提交先赢可物理迟到，须close/cancel/join。旧两执行器模式不变。538新/722定向/六变异红恢复，审计0；412源/171原件/17旧ZIP保持，611条目双回读。默认App/真实Control写者未接。
 
-§19.58/e8969f3：Request+Binding原Replace移交绑定，未移交finally null；代际FirstSend交付登记、退役封口+在途结算才无成功，旧在途可成功。历史非join/授权。§19.57/c730476：writer原Task+末预算后首/末帧单槽，会漏中间代。§19.56/35a372d：迟到候选/原Task/三清理保树；外层先stop source再join，父结束RequestStop。详HANDOFF。
+§19.58/e8969f3：Request+Binding原Replace移交绑定，未移交finally null；代际FirstSend交付登记、退役封口+在途结算才无成功，旧在途可成功。非join/授权。§19.57/c730476：writer原Task+末预算后首/末帧单槽，可漏中间代。§19.56/35a372d：迟到候选/原Task/三清理保树；外层先stop source再join，父结束RequestStop。详HANDOFF。
 
 **Router/发布（§19.53–54）。** 可选、App默认不变；ACK→factory→初装→sender→lease单次发布。先摘槽再close，writer通知StopRequired；独立cancel/Dispose完整join、外层Complete。source.Completion唯一来源错槽，sender分槽保树。Replace原Task，撤销不撤回候选。
 
