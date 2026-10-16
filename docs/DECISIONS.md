@@ -1946,3 +1946,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **实现使用约束与覆盖。** ReadOrigin只在await对应原读后消费，登记尝试由同一个拥有者调用CompleteSend；手动调用内部追踪读若遗弃结算将保持pending，不能靠Task代理掩盖。生产装配仍要求单个串行sender，元数据计数不是新队列或可无限预取接口。新测试同时覆盖真实sender路径和直接内部结算的幂等合同，后者不冒称真实wire发送；未做全调度交错穷举。结果TCS不是资源根，测试可在客观原根结束后断言其完成，不能用超时替代缺失结算的失败证据。
 
 **实际验证。** 新17方法/51case，正式初始/恢复各308PASS；begin-attempt/seal-pending/successful-send/failed-attempt/request-binding五项生产变异分别21/18/7/15/3原断言红，原任务完整退出后逐字恢复。四Rebuild零警告错误，Debug/Release各6154PASS/0FAIL/0SKIP，旧6103完整身份+51/-0。独立审计exit0，409源/159原件保持，39TRX/25385唯一execution；16旧ZIP摘要保持。代码e8969f3de6453972f92aa8617322d0ec666dad17已普通推送，原收据/交付详HANDOFF§19.58。
+
+### ADR-103 — 成功切屏回执的纯合同、占槽与逻辑提交
+
+**2026-10-16；内部显式模式，已验证。** display_changed仅定义成功载荷：type/protocol/sessionId/seq/timestampMs/requestSequence/catalogSequence/displayId/firstFrameId/width/height。Host回执seq与请求seq独立；firstFrameId为完整uint64，尺寸1..8192，不引入额外像素预算或JSON浮点缩窄。纯codec严格字段/类型/深度/编码/4096字节预算，不触stream/clock、不声明显示成功。
+
+**占槽与真来源。** 新CreateReplyExecutor显式保留原请求预约直到成功回执任务退出；旧CreateExecutor/CreateTrackedExecutor语义不变。TrySendReply只接纳本执行器私有槽中exact请求句柄，且原执行任务已成功、真实代际FirstSend已得到首个成功；不相信调用者可构造的Binding/SendReceipt。回执内容由原Request、真实FirstSend和外层提供的Host序号/时间构建。没有队列/自动重试，重复/伪造/旧句柄不释放别人的预约；原回执Task未完成仍Busy。
+
+**提交、停止与边界。** 准入/父会话/lease/publication及预约身份在registry gate核对，代际在source gate确认仍active且未关闭；worker先登记，再在相同gate终检，成功终检是逻辑提交点。外部writer委托在gate外调用且完整等待其原Task，不用取消代理代替原IO。提交先赢后停止仍可能有物理迟到字节，因此不承诺Stop后绝无写入；外层须独立close/cancel并完整join。Stop先赢则不进入writer。完成后的CurrentAtCompletion只为瞬时历史，不是未来授权。完成结果与资源释放分离，原错误树独立保留；执行器Completion包含原reply/cancel/执行根，不反等source或视频sender。
+
+**未接范围。** writer委托必须由后续唯一Control写者装配，并完整包含序列化、原IO/Flush及预算；本片未接实际Control reader/writer、超时调度、失败回执、Client显示屏障或默认产品路径，不自动装sender。未成功/失去资格由外层停止并回收，不制造成功回执。M6未整体完成，不重验M4/M5、不启M7、不改网络/权限/旧ZIP。
+
+**实际验证。** 新505 codec+33生命周期=538case，正式初始/恢复各722PASS；六生产变异44/2/1/7/1/1原断言红并精确恢复。前两变异包装器仅因xUnit自定义消息分类失败，审计依据精确方法/场景/599或605行实际Assert调用识别，不改原件。四Rebuild零警告错误，Debug/Release各6692PASS/0FAIL/0SKIP，旧6154完整身份+538/-0。独立审计exit0，412源/171原件、40TRX/27291唯一execution，17旧ZIP摘要保持。代码d99a7e0e8c779872d17e74ff041cd86a19bf7be9已普通推送，详HANDOFF§19.59。
