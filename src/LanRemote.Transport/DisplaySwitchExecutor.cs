@@ -40,6 +40,20 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         internal void Bind(ReplaceableVideoFrameSource.GenerationIdentity? generation) => _binding.TrySetResult(generation);
     }
 
+    internal enum ReplyStatus { Accepted, NotReady, Unavailable, InvalidReceipt, AlreadyCommitted }
+    internal sealed record ReplyResult(bool WriteStarted, bool WriteCompleted, bool CurrentAtCompletion);
+
+    // 权威绑定只存在本私有槽，不相信调用者可构造的receipt.Binding或SendReceipt。
+    private sealed class PendingReply(Reservation reservation, RequestExecutionReceipt receipt)
+    {
+        internal Reservation Reservation { get; } = reservation;
+        internal RequestExecutionReceipt Receipt { get; } = receipt;
+        internal ReplaceableVideoFrameSource.GenerationIdentity? Generation;
+    }
+
+    private readonly bool _replyMode;
+    private PendingReply? _pendingReply;
+    private Task<ReplyResult>? _reply;
     private readonly bool _trackSend;
     private readonly object _gate;
     private readonly Admission _admission;
@@ -52,7 +66,7 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
     private bool _stopping;
 
     internal DisplaySwitchExecutor(object gate, Admission admission,
-        Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare, bool trackSend = false)
+        Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare, bool trackSend = false, bool replyMode = false)
     {
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(admission);
@@ -60,13 +74,14 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         _gate = gate;
         _admission = admission;
         _prepare = prepare;
-        _trackSend = trackSend;
+        _replyMode = replyMode;
+        _trackSend = trackSend || replyMode;
         _completion = Task.Run(CompleteAsync);
     }
 
     internal Task StopRequired => _stop.Task;
     internal Task Completion => _completion;
-    internal bool HasActiveExecution { get { lock (_gate) return _active is { IsCompleted: false }; } }
+    internal bool HasActiveExecution { get { lock (_gate) return _active is { IsCompleted: false } || _reply is { IsCompleted: false }; } }
 
     internal Status TryExecute(DisplaySwitchRequestFrame request, out Task<ExecutionResult>? execution) =>
         TryExecute(request, out execution, out _);
@@ -84,9 +99,82 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
             Status status = _admission.TryReserveForExecutor(this, request, out Reservation? reservation);
             if (status != Status.Accepted) return status;
             RequestExecutionReceipt? accepted = _trackSend ? new(request) : null;
-            execution = _active = Task.Run(() => ExecuteAsync(reservation!, accepted));
+            PendingReply? pending = _replyMode ? new(reservation!, accepted!) : null;
+            _pendingReply = pending;
+            execution = _active = Task.Run(() => ExecuteAsync(reservation!, accepted, pending));
             receipt = accepted;
             return Status.Accepted;
+        }
+    }
+
+    /// <summary>
+    /// 仅显式回执模式可用。只从本执行器私有槽取真实代际首发，不相信外部receipt的Binding值。
+    /// write须独占Control写者并完整覆盖序列化/原IO/预算；本片只接内部委托，不装配网络。
+    /// 不可从write或其取消回调反等本执行器。Accepted只表示登记worker，不是写入成功。
+    /// </summary>
+    internal ReplyStatus TrySendReply(RequestExecutionReceipt receipt, long sequence, long timestampMs,
+        Func<DisplayChangedFrame, CancellationToken, Task> write, out Task<ReplyResult>? reply)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(write);
+        ArgumentOutOfRangeException.ThrowIfNegative(sequence);
+        ArgumentOutOfRangeException.ThrowIfNegative(timestampMs);
+        reply = null;
+        lock (_gate)
+        {
+            if (!_replyMode || _stopping || !_admission.OwnsExecutor(this)) return ReplyStatus.Unavailable;
+            if (_pendingReply is not { } pending || !ReferenceEquals(pending.Receipt, receipt))
+                return ReplyStatus.InvalidReceipt;
+            if (_reply is { IsCompleted: false }) return ReplyStatus.AlreadyCommitted;
+            if (_active is not { IsCompletedSuccessfully: true }) return ReplyStatus.NotReady;
+            if (pending.Generation is not { } generation) return ReplyStatus.Unavailable;
+            if (!generation.FirstSend.IsCompletedSuccessfully) return ReplyStatus.NotReady;
+            if (generation.FirstSend.GetAwaiter().GetResult() is not { } sent) return ReplyStatus.Unavailable;
+            if (!pending.Reservation.TryCommitReply(this, generation)) return ReplyStatus.Unavailable;
+            DisplaySwitchRequestFrame request = pending.Reservation.Request;
+            DisplayChangedFrame frame = new(request.SessionId, sequence, timestampMs, request.Sequence,
+                request.CatalogSequence, request.DisplayId, sent.FrameId, sent.Width, sent.Height);
+            reply = _reply = Task.Run(() => SendReplyAsync(pending, generation, frame, write));
+            return ReplyStatus.Accepted;
+        }
+    }
+
+    private async Task<ReplyResult> SendReplyAsync(PendingReply pending,
+        ReplaceableVideoFrameSource.GenerationIdentity generation, DisplayChangedFrame frame,
+        Func<DisplayChangedFrame, CancellationToken, Task> write)
+    {
+        Task? original = null;
+        try
+        {
+            lock (_gate)
+            {
+                // 最终逻辑提交与父/预约/代际资格同gate；不在锁内调用外部writer同步前缀。
+                // 提交先赢后仍可能物理迟到，Stop只能通知关闭/取消，必须完整join本worker及原IO。
+                if (_stopping || !ReferenceEquals(_pendingReply, pending) ||
+                    !pending.Reservation.TryCommitReply(this, generation))
+                {
+                    RequestStop();
+                    return new(false, false, false);
+                }
+            }
+            original = write(frame, _cancellation.Token)
+                ?? throw new InvalidOperationException("回执写者未返回原任务。");
+            await original.ConfigureAwait(false);
+            lock (_gate)
+                return new(true, true, !_stopping && pending.Reservation.TryCommitReply(this, generation));
+        }
+        catch (Exception caught)
+        {
+            RequestStop();
+            throw new AggregateException("切屏成功回执写入失败。", OriginalError(original, caught));
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                pending.Reservation.Dispose();
+                if (ReferenceEquals(_pendingReply, pending)) _pendingReply = null;
+            }
         }
     }
 
@@ -97,6 +185,11 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
             if (_stopping) return;
             _stopping = true;
             _admission.CloseExecutor(this);
+            if (_reply is not { IsCompleted: false } && _pendingReply is { } pending)
+            {
+                pending.Reservation.Dispose();
+                _pendingReply = null;
+            }
             _stop.TrySetResult();
             // Cancel的同步回调不得阻塞RequestStop或候选退役；原worker由Completion持有。
             _cancel = Task.Run(() => _cancellation.Cancel());
@@ -109,7 +202,7 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         return new ValueTask(_completion);
     }
 
-    private async Task<ExecutionResult> ExecuteAsync(Reservation reservation, RequestExecutionReceipt? receipt)
+    private async Task<ExecutionResult> ExecuteAsync(Reservation reservation, RequestExecutionReceipt? receipt, PendingReply? pending)
     {
         IVideoFrameProducer? owned = null;
         Task? original = null;
@@ -142,6 +235,7 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
                     original = reservation.ReplaceProducerAsync(this, owned, out generation);
                     owned = null; // 只有正常同步返回才移交；随后失败也不能本地重复清理。
                     transferred = true;
+                    if (pending is not null) pending.Generation = generation;
                     receipt?.Bind(generation);
                 }
             }
@@ -177,7 +271,15 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
                     if (observation.Error is not null) errors.Add(observation.Error);
                 }
             }
-            reservation.Dispose();
+            lock (_gate)
+            {
+                // 成功回执模式仍占原预约；只有原回执任务退出或封口才释放，旧模式不变。
+                if (pending is null || !replaced || errors.Count != 0 || _stopping)
+                {
+                    reservation.Dispose();
+                    if (ReferenceEquals(_pendingReply, pending)) _pendingReply = null;
+                }
+            }
         }
         if (errors.Count != 0)
         {
@@ -193,11 +295,11 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
     private async Task CompleteAsync()
     {
         await _stop.Task.ConfigureAwait(false);
-        Task? active, cancel;
-        lock (_gate) { active = _active; cancel = _cancel; }
+        Task? active, reply, cancel;
+        lock (_gate) { active = _active; reply = _reply; cancel = _cancel; }
         List<Exception> errors = [];
         // 原执行先join，取消worker并行运行，不被其阻塞同步回调挡住本地候选清理。
-        foreach (Task? operation in new[] { active, cancel })
+        foreach (Task? operation in new[] { active, reply, cancel })
         {
             if (operation is null) continue;
             try { await operation.ConfigureAwait(false); }

@@ -446,15 +446,20 @@ public sealed class SessionRegistry
             /// <summary>一次装配拥有型执行器；已有手动预约时拒绝，不接管该预约。</summary>
             internal DisplaySwitchExecutor CreateExecutor(
                 Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare) =>
-                CreateExecutorCore(prepare, trackSend: false);
+                CreateExecutorCore(prepare, trackSend: false, replyMode: false);
 
             /// <summary>只附带请求/代际历史句柄，不自动装配追踪sender；执行Task不等待首帧，不扩张单飞或当前权限合同。</summary>
             internal DisplaySwitchExecutor CreateTrackedExecutor(
                 Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare) =>
-                CreateExecutorCore(prepare, trackSend: true);
+                CreateExecutorCore(prepare, trackSend: true, replyMode: false);
+
+            /// <summary>显式将准入槽保留到回执原任务退出；不自动接入Control writer或产品路径。</summary>
+            internal DisplaySwitchExecutor CreateReplyExecutor(
+                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare) =>
+                CreateExecutorCore(prepare, trackSend: true, replyMode: true);
 
             private DisplaySwitchExecutor CreateExecutorCore(
-                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare, bool trackSend)
+                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare, bool trackSend, bool replyMode)
             {
                 ArgumentNullException.ThrowIfNull(prepare);
                 lock (_registration._registry._gate)
@@ -462,7 +467,7 @@ public sealed class SessionRegistry
                     if (_closed || !ReferenceEquals(_registration._entry.DisplaySwitchAdmission, this) ||
                         !_registration.IsDisplaySwitchAvailable() || _active is not null || _executor is not null)
                         throw new InvalidOperationException("切屏请求执行器不可创建。");
-                    return _executor = new DisplaySwitchExecutor(_registration._registry._gate, this, prepare, trackSend);
+                    return _executor = new DisplaySwitchExecutor(_registration._registry._gate, this, prepare, trackSend, replyMode);
                 }
             }
 
@@ -556,6 +561,15 @@ public sealed class SessionRegistry
                             throw new InvalidOperationException("切屏请求预约已失效。");
                         return _owner._registration.ReplaceVideoProducerAsync(producer, out generation);
                     }
+                }
+
+                // 调用者必须继续持有同一registry gate登记回执worker；不调用外部委托。
+                internal bool TryCommitReply(DisplaySwitchExecutor executor,
+                    ReplaceableVideoFrameSource.GenerationIdentity generation)
+                {
+                    lock (_owner._registration._registry._gate)
+                        return ReferenceEquals(_owner._executor, executor) && IsCurrent &&
+                            _owner._registration._entry.VideoSource is { } source && source.TryCommitReply(generation) && IsCurrent;
                 }
 
                 /// <summary>瞬时可继续快照，不是跨锁授权；真实Replace仍需原父gate最终校验。</summary>

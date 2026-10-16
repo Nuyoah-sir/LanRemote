@@ -39,6 +39,14 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
     // 封口即通知监督者；不等待可能仍阻塞的 Start/Read/Stop/Completion。
     internal Task Termination => _closingSignal.Task;
 
+    // 只由持有 registry gate 的回执路径调用；true 仅为当前身份匹配，并非物理写入屏障。
+    // 只有已登记回执 worker 的最终复检通过才定义逻辑提交；首检和完成检查只是快照。
+    // 后来的换代/关闭可终止传输，但不能把已接纳的发送尝试从外层完整 join 集合中撤回。
+    internal bool TryCommitReply(GenerationIdentity generation)
+    {
+        lock (_gate) return !_closing && ReferenceEquals(_active?.Identity, generation);
+    }
+
     /// <summary>同步接纳并移交所有权；只允许一个替换，不缓存后续请求。</summary>
     internal Task ReplaceAsync(IVideoFrameProducer next) => ReplaceAsync(next, out _);
 
