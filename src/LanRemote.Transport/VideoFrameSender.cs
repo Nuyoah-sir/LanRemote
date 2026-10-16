@@ -14,6 +14,19 @@ internal sealed class VideoFrameSender
     private Exception? _sendFailure;
     private Exception? _frameCleanupError;
     private Exception? _writerCleanupError;
+    private readonly ReplaceableVideoFrameSource? _trackedSource;
+    private GenerationSendSnapshot? _lastSuccessfulGeneration;
+
+    /// <summary>最多一代的首个与最新成功帧；纯元数据历史，不持有 payload/producer，不是接收或显示 ACK。</summary>
+    internal sealed record GenerationSendSnapshot(
+        Guid SessionId,
+        ReplaceableVideoFrameSource.GenerationIdentity Generation,
+        SentFrame First,
+        SentFrame Latest);
+
+    internal sealed record SentFrame(ulong FrameId, int Width, int Height);
+
+    internal GenerationSendSnapshot? LastSuccessfulGeneration => Volatile.Read(ref _lastSuccessfulGeneration);
 
     /// <summary>默认逐帧透传来源编号，包括重复、倒序与完整 ulong 范围。</summary>
     internal VideoFrameSender() { }
@@ -26,6 +39,13 @@ internal sealed class VideoFrameSender
     {
         _useSequentialFrameIds = true;
         _nextFrameId = firstFrameId;
+    }
+
+    /// <summary>显式绑定换代来源及串行 wire 编号；其他构造仍不启用成功记录。</summary>
+    internal VideoFrameSender(ulong firstFrameId, ReplaceableVideoFrameSource source) : this(firstFrameId)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        _trackedSource = source;
     }
 
     /// <summary>仅保留来源边界判定的首个真实故障，不受后续取消影响。</summary>
@@ -68,15 +88,21 @@ internal sealed class VideoFrameSender
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(clock);
             ArgumentOutOfRangeException.ThrowIfLessThan(frameWriteTimeout, TimeSpan.Zero);
+            if (_trackedSource is not null &&
+                (!ReferenceEquals(source, _trackedSource) || sessionId != _trackedSource.SessionId))
+                throw new ArgumentException("成功记录必须使用绑定来源及其原会话。", nameof(source));
 
             while (failure is null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 // 必须等待来源完成；同步前缀的 Task.Run 监督属于上层路由。
                 EncodedFrame? frame;
+                ReplaceableVideoFrameSource.ReadOrigin? origin = null;
                 try
                 {
-                    frame = await source.ReadNextAsync(sessionId, cancellationToken).ConfigureAwait(false);
+                    frame = await (_trackedSource is null
+                        ? source.ReadNextAsync(sessionId, cancellationToken)
+                        : _trackedSource.ReadForSendAsync(sessionId, cancellationToken, out origin)).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not OperationCanceledException ||
                     !cancellationToken.IsCancellationRequested)
@@ -100,10 +126,11 @@ internal sealed class VideoFrameSender
                         clock, startedAt, frameWriteTimeout, cancellationToken, cancellationToken);
                     deadline = new AuthenticationDeadline(clock, remaining, cancellationToken);
                     CheckWriteBudget(clock, startedAt, frameWriteTimeout, cancellationToken, deadline.Token);
+                    ulong frameId = frame.FrameId;
                     if (_useSequentialFrameIds)
                     {
                         // 只在串行写入前分配；即使原写出部分失败，也不复用已分配编号。
-                        ulong frameId = ReserveFrameId();
+                        frameId = ReserveFrameId();
                         await writer.WriteFrameWithIdAsync(frame, frameId, deadline.Token).ConfigureAwait(false);
                     }
                     else
@@ -111,6 +138,17 @@ internal sealed class VideoFrameSender
                         await writer.WriteFrameAsync(frame, deadline.Token).ConfigureAwait(false);
                     }
                     CheckWriteBudget(clock, startedAt, frameWriteTimeout, cancellationToken, deadline.Token);
+                    if (_trackedSource is not null)
+                    {
+                        // writer 原任务包含 header/payload/flush 与终检；本 sender 末预算检查也通过后才记历史。
+                        // 不能在这里读 source 当前代；Replace 可能已经完成，但在途帧仍属于旧代。
+                        ReplaceableVideoFrameSource.GenerationIdentity generation = origin?.Generation
+                            ?? throw new InvalidOperationException("成功写出的帧缺少所属代际。");
+                        SentFrame sent = new(frameId, frame.Width, frame.Height);
+                        GenerationSendSnapshot? previous = LastSuccessfulGeneration;
+                        SentFrame first = ReferenceEquals(previous?.Generation, generation) ? previous!.First : sent;
+                        Volatile.Write(ref _lastSuccessfulGeneration, new(sessionId, generation, first, sent));
+                    }
                 }
                 catch (Exception error)
                 {

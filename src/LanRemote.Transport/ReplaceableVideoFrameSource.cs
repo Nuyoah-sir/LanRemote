@@ -40,8 +40,12 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
     internal Task Termination => _closingSignal.Task;
 
     /// <summary>同步接纳并移交所有权；只允许一个替换，不缓存后续请求。</summary>
-    internal Task ReplaceAsync(IVideoFrameProducer next)
+    internal Task ReplaceAsync(IVideoFrameProducer next) => ReplaceAsync(next, out _);
+
+    /// <summary>返回同一个原换代 Task，另交付仅作帧归属比较的代际身份；不是授权或发送证明。</summary>
+    internal Task ReplaceAsync(IVideoFrameProducer next, out GenerationIdentity identity)
     {
+        identity = null!;
         ArgumentNullException.ThrowIfNull(next);
         lock (_gate)
         {
@@ -56,12 +60,28 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
             if (previous is not null) RetireLocked(previous);
             // 在同一 gate 发布真实 worker，再允许 Dispose 或 Read 观察状态。
             _replace = Task.Run(() => ReplaceCoreAsync(previous, candidate));
+            identity = candidate.Identity;
             PulseLocked();
             return _replace;
         }
     }
 
-    public ValueTask<EncodedFrame?> ReadNextAsync(Guid sessionId, CancellationToken cancellationToken)
+    public ValueTask<EncodedFrame?> ReadNextAsync(Guid sessionId, CancellationToken cancellationToken) =>
+        ReadNextCoreAsync(sessionId, cancellationToken, null);
+
+    /// <summary>
+    /// 每次读独占一个归属凭据；只有在同 gate 提交非空帧时填写，不另读当前活动代际。
+    /// 与普通 Read 共用原单读者/完整 join；凭据不持有帧或生产者。
+    /// </summary>
+    internal ValueTask<EncodedFrame?> ReadForSendAsync(
+        Guid sessionId, CancellationToken cancellationToken, out ReadOrigin origin)
+    {
+        origin = new ReadOrigin();
+        return ReadNextCoreAsync(sessionId, cancellationToken, origin);
+    }
+
+    private ValueTask<EncodedFrame?> ReadNextCoreAsync(
+        Guid sessionId, CancellationToken cancellationToken, ReadOrigin? origin)
     {
         if (sessionId != _sessionId) throw new ArgumentException("来源不属于此会话。", nameof(sessionId));
         cancellationToken.ThrowIfCancellationRequested();
@@ -70,7 +90,7 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
             if (_read is { IsCompleted: false }) throw new InvalidOperationException("视频来源只允许一个读取者。");
             // 终态后不再接纳工作；该读取仅等完整 Completion，不参与其 join 集合。
             if (_closing) return new ValueTask<EncodedFrame?>(ReadTerminalAsync());
-            _read = Task.Run(() => ReadCoreAsync(cancellationToken));
+            _read = Task.Run(() => ReadCoreAsync(cancellationToken, origin));
             return new ValueTask<EncodedFrame?>(_read);
         }
     }
@@ -149,7 +169,7 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
         }
     }
 
-    private async Task<EncodedFrame?> ReadCoreAsync(CancellationToken token)
+    private async Task<EncodedFrame?> ReadCoreAsync(CancellationToken token, ReadOrigin? origin)
     {
         while (true)
         {
@@ -164,7 +184,7 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
                     token.ThrowIfCancellationRequested();
                     if (_active is { } generation)
                     {
-                        generation.Read = Task.Run(() => ReadAttemptAsync(generation, token));
+                        generation.Read = Task.Run(() => ReadAttemptAsync(generation, token, origin));
                         attempt = generation.Read;
                     }
                     else changed = _changed.Task;
@@ -189,7 +209,8 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
         }
     }
 
-    private async Task<EncodedFrame?> ReadAttemptAsync(Generation generation, CancellationToken token)
+    private async Task<EncodedFrame?> ReadAttemptAsync(
+        Generation generation, CancellationToken token, ReadOrigin? origin)
     {
         Task<EncodedFrame?>? original = null;
         EncodedFrame? frame = null;
@@ -209,6 +230,7 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
                     if (frame is not null)
                     {
                         EncodedFrame delivered = frame;
+                        if (origin is not null) origin.Generation = generation.Identity;
                         frame = null; // gate 内提交；此后 Replace/Dispose 不再拥有该帧。
                         return delivered;
                     }
@@ -358,8 +380,17 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private sealed record Observation(Task? Operation, Exception? Error);
 
+    // 不含生产者、source 或帧引用；保留成功历史不会延长这些资源的所有权。
+    internal sealed class GenerationIdentity { }
+
+    internal sealed class ReadOrigin
+    {
+        internal GenerationIdentity? Generation { get; set; }
+    }
+
     private sealed class Generation(IVideoFrameProducer producer)
     {
+        internal GenerationIdentity Identity { get; } = new();
         internal IVideoFrameProducer Producer { get; } = producer;
         internal Task? Start;
         internal Task<EncodedFrame?>? Read;
