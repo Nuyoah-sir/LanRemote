@@ -18,7 +18,29 @@ namespace LanRemote.Transport;
 internal sealed class DisplaySwitchExecutor : IAsyncDisposable
 {
     // 仅本次操作的历史事实；不是wire成功、当前权限或发送/显示屏障。
-    internal sealed record ExecutionResult(bool Transferred, bool ReplacementCompleted);
+    internal sealed record ExecutionResult(bool Transferred, bool ReplacementCompleted)
+    {
+        internal RequestSendReceipt? SendReceipt { get; init; }
+    }
+
+    // 只在显式追踪执行器成功移交后返回；不缓存请求集合，不含生产者或流。
+    internal sealed record RequestSendReceipt(
+        DisplaySwitchRequestFrame Request, ReplaceableVideoFrameSource.GenerationIdentity Generation)
+    {
+        internal Task<VideoFrameSender.SentFrame?> FirstSend => Generation.FirstSend;
+    }
+
+    // 接受请求时即交给调用者；异步准备/换代失败也不丢失是否移交的真实身份。
+    internal sealed class RequestExecutionReceipt(DisplaySwitchRequestFrame request)
+    {
+        private readonly TaskCompletionSource<ReplaceableVideoFrameSource.GenerationIdentity?> _binding =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal DisplaySwitchRequestFrame Request { get; } = request;
+        internal Task<ReplaceableVideoFrameSource.GenerationIdentity?> Binding => _binding.Task;
+        internal void Bind(ReplaceableVideoFrameSource.GenerationIdentity? generation) => _binding.TrySetResult(generation);
+    }
+
+    private readonly bool _trackSend;
     private readonly object _gate;
     private readonly Admission _admission;
     private readonly Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> _prepare;
@@ -30,7 +52,7 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
     private bool _stopping;
 
     internal DisplaySwitchExecutor(object gate, Admission admission,
-        Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare)
+        Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare, bool trackSend = false)
     {
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(admission);
@@ -38,6 +60,7 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         _gate = gate;
         _admission = admission;
         _prepare = prepare;
+        _trackSend = trackSend;
         _completion = Task.Run(CompleteAsync);
     }
 
@@ -45,17 +68,24 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
     internal Task Completion => _completion;
     internal bool HasActiveExecution { get { lock (_gate) return _active is { IsCompleted: false }; } }
 
-    internal Status TryExecute(DisplaySwitchRequestFrame request, out Task<ExecutionResult>? execution)
+    internal Status TryExecute(DisplaySwitchRequestFrame request, out Task<ExecutionResult>? execution) =>
+        TryExecute(request, out execution, out _);
+
+    internal Status TryExecute(DisplaySwitchRequestFrame request, out Task<ExecutionResult>? execution,
+        out RequestExecutionReceipt? receipt)
     {
         ArgumentNullException.ThrowIfNull(request);
         execution = null;
+        receipt = null;
         lock (_gate)
         {
             if (_stopping || !_admission.OwnsExecutor(this)) return Status.Unavailable;
             // 预约在finally释放不等于原执行Task已结束；后者仍是本执行器的单飞门禁。
             Status status = _admission.TryReserveForExecutor(this, request, out Reservation? reservation);
             if (status != Status.Accepted) return status;
-            execution = _active = Task.Run(() => ExecuteAsync(reservation!));
+            RequestExecutionReceipt? accepted = _trackSend ? new(request) : null;
+            execution = _active = Task.Run(() => ExecuteAsync(reservation!, accepted));
+            receipt = accepted;
             return Status.Accepted;
         }
     }
@@ -79,11 +109,12 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         return new ValueTask(_completion);
     }
 
-    private async Task<ExecutionResult> ExecuteAsync(Reservation reservation)
+    private async Task<ExecutionResult> ExecuteAsync(Reservation reservation, RequestExecutionReceipt? receipt)
     {
         IVideoFrameProducer? owned = null;
         Task? original = null;
         bool transferred = false, replaced = false;
+        ReplaceableVideoFrameSource.GenerationIdentity? generation = null;
         List<Exception> errors = [];
         CancellationToken token = _cancellation.Token;
         try
@@ -108,9 +139,10 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
                 if (!_stopping)
                 {
                     // 预约、执行器身份与真实父资格在原registry gate内一起校验。
-                    original = reservation.ReplaceProducerAsync(this, owned);
+                    original = reservation.ReplaceProducerAsync(this, owned, out generation);
                     owned = null; // 只有正常同步返回才移交；随后失败也不能本地重复清理。
                     transferred = true;
+                    receipt?.Bind(generation);
                 }
             }
             if (transferred)
@@ -129,6 +161,8 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         }
         finally
         {
+            // 未移交的路径也必须结算绑定；这不是本地候选清理已退出的证明。
+            receipt?.Bind(null);
             if (owned is not null)
             {
                 // 不串行调用外部Stop/Dispose/getter；任何同步阻塞都不阻止另外两个通知。
@@ -150,7 +184,10 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
             RequestStop();
             throw new AggregateException("切屏请求执行失败。", errors);
         }
-        return new(transferred, replaced);
+        return new(transferred, replaced)
+        {
+            SendReceipt = _trackSend && transferred ? new(reservation.Request, generation!) : null,
+        };
     }
 
     private async Task CompleteAsync()

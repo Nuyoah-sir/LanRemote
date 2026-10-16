@@ -102,7 +102,7 @@ internal sealed class VideoFrameSender
                 {
                     frame = await (_trackedSource is null
                         ? source.ReadNextAsync(sessionId, cancellationToken)
-                        : _trackedSource.ReadForSendAsync(sessionId, cancellationToken, out origin)).ConfigureAwait(false);
+                        : _trackedSource.ReadForSendAsync(sessionId, cancellationToken, out origin, settleSend: true)).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not OperationCanceledException ||
                     !cancellationToken.IsCancellationRequested)
@@ -148,6 +148,7 @@ internal sealed class VideoFrameSender
                         GenerationSendSnapshot? previous = LastSuccessfulGeneration;
                         SentFrame first = ReferenceEquals(previous?.Generation, generation) ? previous!.First : sent;
                         Volatile.Write(ref _lastSuccessfulGeneration, new(sessionId, generation, first, sent));
+                        origin!.CompleteSend(sent);
                     }
                 }
                 catch (Exception error)
@@ -157,6 +158,8 @@ internal sealed class VideoFrameSender
                 }
                 finally
                 {
+                    // 到这里原 writer 已退出或尚未启动；失败尝试结算不替代后续资源清理 join。
+                    origin?.CompleteSend(null);
                     try
                     {
                         deadline?.Dispose();

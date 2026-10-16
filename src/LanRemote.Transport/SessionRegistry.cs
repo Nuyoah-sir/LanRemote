@@ -366,8 +366,12 @@ public sealed class SessionRegistry
         /// 同步核对父资格并交给已发布来源；正常返回原 Task 即候选已移交，异步失败不返还。
         /// 同步拒绝不接管新对象。仅 internal 接缝，无排队、超时代理、网络消息或帧屏障。
         /// </summary>
-        internal Task ReplaceVideoProducerAsync(IVideoFrameProducer next)
+        internal Task ReplaceVideoProducerAsync(IVideoFrameProducer next) => ReplaceVideoProducerAsync(next, out _);
+
+        internal Task ReplaceVideoProducerAsync(IVideoFrameProducer next,
+            out ReplaceableVideoFrameSource.GenerationIdentity generation)
         {
+            generation = null!;
             ArgumentNullException.ThrowIfNull(next);
             lock (_registry._gate)
             {
@@ -377,7 +381,7 @@ public sealed class SessionRegistry
                     _entry.VideoSource is not { } source)
                     throw new InvalidOperationException("父会话未持有活动的视频换代入口。");
                 // 来源仅在自身 gate 发布 worker，不会同步调用外部生产者；锁序为 registry → source。
-                return source.ReplaceAsync(next);
+                return source.ReplaceAsync(next, out generation);
             }
         }
 
@@ -441,7 +445,16 @@ public sealed class SessionRegistry
 
             /// <summary>一次装配拥有型执行器；已有手动预约时拒绝，不接管该预约。</summary>
             internal DisplaySwitchExecutor CreateExecutor(
-                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare)
+                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare) =>
+                CreateExecutorCore(prepare, trackSend: false);
+
+            /// <summary>只附带请求/代际历史句柄，不自动装配追踪sender；执行Task不等待首帧，不扩张单飞或当前权限合同。</summary>
+            internal DisplaySwitchExecutor CreateTrackedExecutor(
+                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare) =>
+                CreateExecutorCore(prepare, trackSend: true);
+
+            private DisplaySwitchExecutor CreateExecutorCore(
+                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare, bool trackSend)
             {
                 ArgumentNullException.ThrowIfNull(prepare);
                 lock (_registration._registry._gate)
@@ -449,7 +462,7 @@ public sealed class SessionRegistry
                     if (_closed || !ReferenceEquals(_registration._entry.DisplaySwitchAdmission, this) ||
                         !_registration.IsDisplaySwitchAvailable() || _active is not null || _executor is not null)
                         throw new InvalidOperationException("切屏请求执行器不可创建。");
-                    return _executor = new DisplaySwitchExecutor(_registration._registry._gate, this, prepare);
+                    return _executor = new DisplaySwitchExecutor(_registration._registry._gate, this, prepare, trackSend);
                 }
             }
 
@@ -528,15 +541,20 @@ public sealed class SessionRegistry
                 internal DisplayInfo Target { get; }
 
                 /// <summary>同一父gate核预约/执行器/父资格并移交；返回原Task，不调用外部生产者。</summary>
-                internal Task ReplaceProducerAsync(DisplaySwitchExecutor executor, IVideoFrameProducer producer)
+                internal Task ReplaceProducerAsync(DisplaySwitchExecutor executor, IVideoFrameProducer producer) =>
+                    ReplaceProducerAsync(executor, producer, out _);
+
+                internal Task ReplaceProducerAsync(DisplaySwitchExecutor executor, IVideoFrameProducer producer,
+                    out ReplaceableVideoFrameSource.GenerationIdentity generation)
                 {
+                    generation = null!;
                     ArgumentNullException.ThrowIfNull(executor);
                     ArgumentNullException.ThrowIfNull(producer);
                     lock (_owner._registration._registry._gate)
                     {
                         if (!ReferenceEquals(_owner._executor, executor) || !IsCurrent)
                             throw new InvalidOperationException("切屏请求预约已失效。");
-                        return _owner._registration.ReplaceVideoProducerAsync(producer);
+                        return _owner._registration.ReplaceVideoProducerAsync(producer, out generation);
                     }
                 }
 

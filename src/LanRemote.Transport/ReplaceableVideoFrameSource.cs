@@ -71,12 +71,13 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
 
     /// <summary>
     /// 每次读独占一个归属凭据；只有在同 gate 提交非空帧时填写，不另读当前活动代际。
-    /// 与普通 Read 共用原单读者/完整 join；凭据不持有帧或生产者。
+    /// 与普通 Read 共用原单读者/完整 join；凭据不持有帧或生产者，须 await 原读后消费。
+    /// settleSend 仅由显式 sender 使用；提交的尝试必须在原写入结束后 CompleteSend，不能遗弃。
     /// </summary>
     internal ValueTask<EncodedFrame?> ReadForSendAsync(
-        Guid sessionId, CancellationToken cancellationToken, out ReadOrigin origin)
+        Guid sessionId, CancellationToken cancellationToken, out ReadOrigin origin, bool settleSend = false)
     {
-        origin = new ReadOrigin();
+        origin = new ReadOrigin(settleSend);
         return ReadNextCoreAsync(sessionId, cancellationToken, origin);
     }
 
@@ -230,7 +231,7 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
                     if (frame is not null)
                     {
                         EncodedFrame delivered = frame;
-                        if (origin is not null) origin.Generation = generation.Identity;
+                        if (origin is not null) origin.Commit(generation.Identity);
                         frame = null; // gate 内提交；此后 Replace/Dispose 不再拥有该帧。
                         return delivered;
                     }
@@ -282,6 +283,8 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
 
     private void RetireLocked(Generation generation)
     {
+        // 与交付共用 source gate，封口后不可能再登记该代尝试；不等待已经交给 sender 的帧。
+        generation.Identity.Seal();
         // 此标记与读/Start 发布共用 gate。Task.Run 委托内也先取 gate，禁止发布前外部重入。
         generation.Retirement ??= Task.Run(() => RetireAsync(generation));
     }
@@ -381,11 +384,61 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
     private sealed record Observation(Task? Operation, Exception? Error);
 
     // 不含生产者、source 或帧引用；保留成功历史不会延长这些资源的所有权。
-    internal sealed class GenerationIdentity { }
-
-    internal sealed class ReadOrigin
+    internal sealed class GenerationIdentity
     {
-        internal GenerationIdentity? Generation { get; set; }
+        private readonly object _gate = new();
+        private readonly TaskCompletionSource<VideoFrameSender.SentFrame?> _firstSend =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _pending;
+        private bool _sealed;
+
+        // 原任务仅统计 settleSend:true 登记的尝试；非空为其首个整帧成功，null为封口且登记尝试均无成功。
+        // sender 停止但来源未封口可继续等待；外层须封交付并让原发送退出，不以取消通知代替 join。
+        // 不是当前权限、资源完整释放或错误传播槽；不等任何 source/sender 生命周期根。
+        internal Task<VideoFrameSender.SentFrame?> FirstSend => _firstSend.Task;
+
+        internal void BeginSend()
+        {
+            lock (_gate) _pending++;
+        }
+
+        internal void CompleteSend(VideoFrameSender.SentFrame? sent)
+        {
+            lock (_gate)
+            {
+                _pending--;
+                if (sent is not null) _firstSend.TrySetResult(sent);
+                if (_sealed && _pending == 0) _firstSend.TrySetResult(null);
+            }
+        }
+
+        internal void Seal()
+        {
+            lock (_gate)
+            {
+                _sealed = true;
+                if (_pending == 0) _firstSend.TrySetResult(null);
+            }
+        }
+    }
+
+    internal sealed class ReadOrigin(bool settleSend)
+    {
+        private int _completed;
+        internal GenerationIdentity? Generation { get; private set; }
+
+        internal void Commit(GenerationIdentity generation)
+        {
+            if (settleSend) generation.BeginSend();
+            Generation = generation;
+        }
+
+        // 幂等且不调外部回调；成功后 finally(null) 不得再次减少在途数。
+        internal void CompleteSend(VideoFrameSender.SentFrame? sent)
+        {
+            if (settleSend && Generation is { } generation && Interlocked.Exchange(ref _completed, 1) == 0)
+                generation.CompleteSend(sent);
+        }
     }
 
     private sealed class Generation(IVideoFrameProducer producer)
