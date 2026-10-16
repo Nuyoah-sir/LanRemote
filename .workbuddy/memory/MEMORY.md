@@ -1,21 +1,21 @@
 # LanRemote 项目长期记忆
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
-> **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至101：发送边界；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> **2026-10-10用户选B：只支持新版双方，旧端拒绝并提示两端升级；无legacy单屏兼容/静默降级。产品政策不能冒充实际接线完成。**
+> ADR `docs/DECISIONS.md`（至102：请求结算；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-16，权威详HANDOFF§19.57/ADR101）
+## 当前续作点（2026-10-16，权威详HANDOFF§19.58/ADR102）
 
-已推c730476/6103。显式sender绑定source，逐读代际在原交付gate填写；writer原Task+sender末预算通过后单槽首/末wire帧历史。旧在途仍属旧代，历史非授权/ACK/显示，单槽不保证逐请求事件；默认Router/App未启用。38新/233定向/五变异红恢复，独立exit0；408源/157原件/15旧ZIP保持，590条目双回读。
+已推e8969f3/6154。接纳即原Request+Binding任务，父gate原Replace同步移交后绑定代际，未移交finally null。每代FirstSend：交付gate登记，退役封口+在途全部结算才无成功；旧在途仍可成功。51新/308定向/五变异21/18/7/15/3红恢复，独立exit0，409源/159原件/16旧ZIP保持。source/执行器不反等sender，结果非资源join/授权/ACK，原单飞未扩为回执占槽；默认App不启用。
 
-§19.56执行器35a372d/6065：真Admission一次装配、原Task单飞、迟到候选归属、同父gate最终Replace、三清理/取消完整join；外层先stop source再join，父结束RequestStop。原收据详HANDOFF。
+§19.57发送边界c730476/6103：writer原Task+sender末预算后单槽首/末wire帧历史，逐读代际原gate填写；单槽会漏中间代。§19.56执行器35a372d/6065：迟到候选/原Task/三清理保树；外层先stop source再join，父结束RequestStop。原收据见HANDOFF。
 
 **Router（§19.54/ADR098）。** 可选、App默认不变；ACK→factory→初装→sender→lease发布。共享gate先摘槽再close，writer通知StopRequired；独立cancel/Dispose完整join、外层Complete。source.Completion唯一来源错槽，sender分槽保树；历史见HANDOFF。
 
 **发布接缝（§19.53）。** 真lease同gate单次发布，仅摘槽；Replace返回原Task，撤销不撤回候选。
 
-**M5已收口。** 2026-10-12用户确认稳定、继续M6，撤回卡顿判断；不重查/重验/加压测。原十分钟/慢网/双方上网确认保留，不捏造数字/截图/审计。§19.29旧ZIP不覆盖/重打、不含M6（完整收据见HANDOFF）。Host默认5/50/JPEG60，显式10/15/20/30默认75/JPEG60，scale50/67/75/100、JPEG40..85；Auto禁，不写config/热切，停完整再开。16,777,216像素预分配预算；32MiB仅JPEG payload上限非全机内存上界。
+**M5收口。** 2026-10-12用户确认稳定并撤回卡顿判断，不重验/加压测；原十分钟/慢网/双方上网确认保留，不捏造数字或审计。§19.29旧ZIP不覆盖、不含M6。Host默认5/50/JPEG60；显式10/15/20/30默认75/JPEG60；scale50/67/75/100、JPEG40..85；禁Auto/config热写，停完整再开。预分配≤16,777,216像素；32MiB仅payload上限，非全机内存。
 
 **M6认证V2-only已接，非整体收口。** 两Host/Client：TLS/pinning→Hello2→Challenge2→Offer/Accept→clientProofV2→真实审批→serverProofV2→父资格。同session agreement非授权，绝对deadline/单读者/close/join保留。仅合法V1/未知版声明提示升级，UI标未经认证；EOF/timeout/畸形不确诊旧端，身份/pin/proof/密码/审批错误优先；无fallback。VideoHello/ACK protocol1、VIDEO-V1/83字节transcript、第二TLS/LRVF不变。
 
@@ -27,13 +27,13 @@
 
 **目录（§19.48–49）。** Host record共享守卫、非async外桥/原Task保树；委托内new GDI，10秒非硬中断，seq0仅元数据。Client父gate只读单槽、撤销留历史；250ms非实时，Closing/SessionEnded/Drain前清timer/getter/token/ItemsSource，拒迟到且异常不跳Drain。仅单机自动化非双机/真人/多屏。
 
-**固定目标准备（§19.50）。** CreateForDisplayAsync完整枚举唯一ID及record匹配，无主屏回退；预算先于encoder，交付未Start，创建token不控制生产。共用原Task/回滚保错误树。41新/5475，记录相等非硬件拓扑锁，受控pipeline非GDI/多屏。
+**固定目标准备（§19.50）。** CreateForDisplayAsync完整枚举唯一ID/record匹配，无主屏回退；先预算再encoder，交付未Start，创建token不控制生产；原Task/回滚保树。记录相等非拓扑锁，受控pipeline非GDI/多屏。
 
-**可选编号（§19.51）。** sender(ulong)实例写前序列，默认new()透传；Max一次后EOF正常、额外帧释放耗尽不回绕。writer仅改header，原owner/Task/单飞保持。61新/5536；编号非发送/显示证明。
+**可选编号（§19.51）。** sender(ulong)写前编号，默认new()透传；Max一次后EOF正常、额外帧释放耗尽不回绕。writer仅改header，原owner/Task/单飞不变；编号非发送/显示。
 
 **拥有型换代（§19.52）。** 单session/read/replace，返回Task即接管未Start候选；旧代Start/Read/迟到owner结算后才新Start。三清理独立，仅同原Task去重；提交帧不收回，无active Completion监视。Completion先退役/Replace→settled→外层Read避免自join，详ADR096。
 
-**下一片：请求/代际可靠结算与Control回执，再Client显示屏障/产品接线/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
+**下一片：Control回执合同/占槽与父资格，再唯一读写接线/显示屏障/产品/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 
@@ -81,7 +81,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.57本地发送边界已推c730476、双配置各6103通过；Control回执/显示屏障/live/画质未接。 |
+| **M6** | 进行中：§19.58请求代际结算已推e8969f3、双配置各6154通过；Control回执/显示屏障/live/画质未接。 |
 | M7~M11 | 未开始 |
 
 提交链见HANDOFF。

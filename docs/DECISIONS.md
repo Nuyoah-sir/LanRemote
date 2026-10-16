@@ -1934,3 +1934,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **换代、停止与局限。** 旧帧已提交给sender后，Replace完成或source关闭不能收回它；其后本地写入成功仍记旧身份，新代实际成功帧才替换快照，零成功帧的中间代不伪造记录。历史快照不是当前资格、接收ACK、对端解码或UI显示证明；末检后发生取消不反向抹去历史。单槽不保证消费者观察到每一个历史代际，后续Control协调必须先绑定具体请求/代际并建立自身屏障，而不能轮询当前值冒充可靠事件交付。默认sender/Router/App不启用该能力，不改Core帧、LRVF格式、权限/认证或单次Video租约，不接Control回执/Client显示屏障/画质。
 
 **验证收据。** 新38case、正式初始及恢复定向各233PASS；early-publication/final-budget/stale-generation/first-overwrite/source-frame-id五项唯一生产字节变异分别24/2/3/4/15原断言红，原进程完整退出后精确恢复。旧身份6065全保留、新增38/删除0；四Rebuild零警告错误，Debug/Release各6103PASS/0FAIL/0SKIP。独立核验原进程exit0，408源/157观察原件、39TRX/24992唯一execution及十五旧ZIP摘要保持。只验证本片和固定6065基线，不递归重审全部历史；受控Task/Stream非TLS、GDI、双机或物理多屏验收。原件及完整提交/交付收据见HANDOFF§19.57。
+
+### ADR-102 — 请求绑定的代际首发结果与无成功结算
+
+**2026-10-16；内部显式底座，已验证。** 不轮询最近成功代际单槽，不增无界事件队列；每个真实接纳的代际持有一个异步continuation的原FirstSend任务。显式追踪sender交付帧时在source交付gate登记尝试，sender原writer退出并通过末预算检查才记首个成功；失败尝试在原操作退出后的finally结算。source退役在同交付gate封口，封口且没有未结算尝试才得到null；封口时已有旧帧在途仍可迟到成功，不能抢先记null。已有成功永不撤销，后续成功不能覆盖首帧。
+
+**生命周期与范围。** FirstSend只携带本地wire帧元数据或null，不传播原生命周期异常，不拥有producer/frame/source。它不是sender/source完整join、当前权限或远端接收/显示ACK。source退役和Completion从不等待FirstSend或sender；外层仍须独立停止并完整join来源、发送器、执行器及物理关闭。发送失败但来源尚未封口时仍可未结算，不以“暂未成功”猜测永久失败。普通读取/未追踪sender不计入这项发送事实，null只表示没有已登记的追踪发送成功。
+
+**请求绑定。** Registry→Reservation→Executor在原父gate使用Replace原Task及out代际身份，禁止完成后查询当前代。显式追踪执行器接纳时同步交付RequestExecutionReceipt，Binding原任务在原Replace正常同步返回并移交owner后绑定真实代际；未移交路径在finally完成null，异步换代失败不丢已移交身份，原错误仍归原执行Task。成功ExecutionResult另附相同请求/代际的SendReceipt。不把接受请求、Replace完成或执行器停止当首帧成功。原执行器任务不等待FirstSend，原单飞只覆盖执行生命周期；后续Control协调仍须定义准入到回执的整体占槽与停止资格。默认CreateExecutor/Router/App不开启，不改wire/Core/认证/权限或单次Video租约。本片不是完整Control回执协议或产品live接线。
+
+**实现使用约束与覆盖。** ReadOrigin只在await对应原读后消费，登记尝试由同一个拥有者调用CompleteSend；手动调用内部追踪读若遗弃结算将保持pending，不能靠Task代理掩盖。生产装配仍要求单个串行sender，元数据计数不是新队列或可无限预取接口。新测试同时覆盖真实sender路径和直接内部结算的幂等合同，后者不冒称真实wire发送；未做全调度交错穷举。结果TCS不是资源根，测试可在客观原根结束后断言其完成，不能用超时替代缺失结算的失败证据。
+
+**实际验证。** 新17方法/51case，正式初始/恢复各308PASS；begin-attempt/seal-pending/successful-send/failed-attempt/request-binding五项生产变异分别21/18/7/15/3原断言红，原任务完整退出后逐字恢复。四Rebuild零警告错误，Debug/Release各6154PASS/0FAIL/0SKIP，旧6103完整身份+51/-0。独立审计exit0，409源/159原件保持，39TRX/25385唯一execution；16旧ZIP摘要保持。代码e8969f3de6453972f92aa8617322d0ec666dad17已普通推送，原收据/交付详HANDOFF§19.58。
