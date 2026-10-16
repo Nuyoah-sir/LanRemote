@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-10-16，权威详HANDOFF§19.60/ADR104）
 
-已推7968725/6729。UseSessionWriter init默认false、保options两参构造；auth目录/回执同流单槽writer，seq不回绕；UTC/序列化复用原预算/IO/timer，成功Ready+实际Catalog，holding先关线撤销后join。37新/157定向/六变异红恢复，审计0；415源/295原件/18旧ZIP保持。警告5/反射3失败已修重验。默认App/请求reader未接。
+已推7968725/6729。UseSessionWriter init默认false、保options两参构造；auth目录/回执同流单槽writer，seq不回绕；UTC/序列化复用原预算/IO/timer，成功Ready+实际Catalog，holding先关线撤销后join。37新/157定向/六变异红恢复；415源/295原件/18旧ZIP保持，748条目双回读。警告5/反射3已修重验。App/请求reader未接。
 
 §19.59：11字段/uint64首帧，预约到reply Task退出；私有真代际首发、父/source逻辑提交。Stop先赢不写，提交先赢可物理迟到，须close/cancel/join。§19.58：Request/Binding原Replace移交绑定，未移交finally null；FirstSend封口+在途结算才无成功，非join/授权。§19.57：writer原Task+末预算后首/末帧单槽，可漏代。§19.56：迟到候选/原Task/三清理保树；外层先stop source再join，父结束RequestStop。详HANDOFF。
 
