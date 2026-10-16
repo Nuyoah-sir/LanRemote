@@ -1958,3 +1958,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **未接范围。** writer委托必须由后续唯一Control写者装配，并完整包含序列化、原IO/Flush及预算；本片未接实际Control reader/writer、超时调度、失败回执、Client显示屏障或默认产品路径，不自动装sender。未成功/失去资格由外层停止并回收，不制造成功回执。M6未整体完成，不重验M4/M5、不启M7、不改网络/权限/旧ZIP。
 
 **实际验证。** 新505 codec+33生命周期=538case，正式初始/恢复各722PASS；六生产变异44/2/1/7/1/1原断言红并精确恢复。前两变异包装器仅因xUnit自定义消息分类失败，审计依据精确方法/场景/599或605行实际Assert调用识别，不改原件。四Rebuild零警告错误，Debug/Release各6692PASS/0FAIL/0SKIP，旧6154完整身份+538/-0。独立审计exit0，412源/171原件、40TRX/27291唯一execution，17旧ZIP摘要保持。代码d99a7e0e8c779872d17e74ff041cd86a19bf7be9已普通推送，详HANDOFF§19.59。
+
+### ADR-104 — 显式认证后Control会话唯一写者与原预算复用
+
+**2026-10-16；内部显式装配已验证。** §19.59之前不存在通用会话writer，只有认证栈顺序写和单次目录sender的唯一写约定。新增HostControlWriter绑定单session/借用stream，以单个原写任务持槽、Busy同步拒绝无排队。接纳时预约非负long seq；Busy/参数拒绝不消费，已接纳失败不回收，MaxValue可发一次，下一次永久封口。该序列只覆盖显式post-auth目录及display_changed，不覆盖Hello或认证握手。UTC元数据和序列化在source前锚定的原绝对预算内，seq的本地预约早于该锚。
+
+**原预算而非新计时器方案。** HostDisplayCatalogSendAttempt保持原构造路径，新增有界payload来源和目录序列化适配入口，复用原source/Write/Flush/ControlFrameBudget原任务及timer完整释放后末检。目录原source返回后先按旧CheckStage检查，再调用写者UTC与序列化，拒绝后的迟到source不得增加UTC根。源同步前缀/AsTask未返回的未知退出、写借用未证明退出时不清零、原错误树均保持。caller注册释放属于独立完整join，不宣称其额外调度耗时已被原attempt预算硬中断。
+
+**真实可选装配。** HostDisplayCatalogSendOptions的UseSessionWriter=true显式init选项在ControlAuthSession的success完整写出/登记/秘密finally/原holding之后装配新writer；同流目录先经它写出，成功后才发布Ready和实际重编号Catalog。原配置默认false，App不启用此模式。DisplaySwitchExecutor的窄writer重载把真实请求首发资格接到该writer，重建只改Host seq/time，其余关联字段不变。仍未增加Host request_display reader或Client display_changed消费方；Ready仅历史入口，不是持续授权，写者停止后旧引用不可写。
+
+**停止与错误。** 原closeRequired通知Router既有close监督，writer的Abort/holding结束/hostStop先封口关线并通知父撤销，后完整join原attempt/holding/写者/caller及host取消注册，不让视频来源反等回执。ControlAuthSession保存writer字段，owner建造/启动失败仍通知停止并兜底join。纯无原故障合作停止：当次write可Canceled，writer.Completion正常；来源/IO/时钟真实OCE先进入原故障树，仍Faulted，不能以取消豁免吞错。Lifetime只在初次写入尚未返回Task且相同host token已取消时窄豁免同步准入OCE；原异步异常由writer.Completion唯一报告到AddCatalogErrors。
+
+**界限。** 唯一性依赖显式装配独占stream，不宣称抵御程序集内任意代码直接写流；发送成功是本地预算内原IO/Flush完成，不是远端接收/显示。停止晚于逻辑提交仍可物理迟到，外层必须关线和完整join。无网络/防护/权限修改，不重验M4/M5、不启M7、不覆盖旧ZIP，尚无M6产品包。
+
+**验证与兼容修复。** 新29 writer+8真实认证组合=37case，最终树初始v3/恢复v2各157PASS；最终六生产变异1/1/2/1/1/1原断言红恢复。首次v1构建5个xUnit1031警告触门禁、未测；首次全量3个旧Acceptance反射构造器参数不匹配，未改旧测试，恢复options唯一两参构造并以init开关选新写者。修复后重新定向/六变异/双配置全量，四Rebuild零警告错误、Debug/Release各6729PASS/0FAIL/0SKIP。独立审计exit0、旧6692完整身份+37/-0，415源/295观察原件、56TRX/34213唯一execution，18旧ZIP保持；全部旧轮及首组六变异保留为历史并核字节逆桥，不当最终证据。代码7968725b264481a08e7a84ef5f83554ac4672c85已普通推送。詳HANDOFF§19.60。

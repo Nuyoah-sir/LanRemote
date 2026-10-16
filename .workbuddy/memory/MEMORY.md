@@ -2,14 +2,14 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：只支持新版双方，旧端拒绝并提示两端升级；无legacy单屏兼容/静默降级。产品政策不能冒充实际接线完成。**
-> ADR `docs/DECISIONS.md`（至103：回执占槽；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至104：会话写者；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-16，权威详HANDOFF§19.59/ADR103）
+## 当前续作点（2026-10-16，权威详HANDOFF§19.60/ADR104）
 
-已推d99a7e0/6692。display_changed严格11字段、uint64首帧；CreateReplyExecutor保原预约到reply原Task退出，私有真代际首发生成回执。worker父/source gate终检逻辑提交，writer委托锁外原Task完整join；Stop先赢不调writer，提交先赢可物理迟到，须close/cancel/join。旧两执行器模式不变。538新/722定向/六变异红恢复，审计0；412源/171原件/17旧ZIP保持，611条目双回读。默认App/真实Control写者未接。
+已推7968725/6729。UseSessionWriter init默认false、保options两参构造；auth目录/回执同流单槽writer，seq不回绕；UTC/序列化复用原预算/IO/timer，成功Ready+实际Catalog，holding先关线撤销后join。37新/157定向/六变异红恢复，审计0；415源/295原件/18旧ZIP保持。警告5/反射3失败已修重验。默认App/请求reader未接。
 
-§19.58/e8969f3：Request+Binding原Replace移交绑定，未移交finally null；代际FirstSend交付登记、退役封口+在途结算才无成功，旧在途可成功。非join/授权。§19.57/c730476：writer原Task+末预算后首/末帧单槽，可漏中间代。§19.56/35a372d：迟到候选/原Task/三清理保树；外层先stop source再join，父结束RequestStop。详HANDOFF。
+§19.59：11字段/uint64首帧，预约到reply Task退出；私有真代际首发、父/source逻辑提交。Stop先赢不写，提交先赢可物理迟到，须close/cancel/join。§19.58：Request/Binding原Replace移交绑定，未移交finally null；FirstSend封口+在途结算才无成功，非join/授权。§19.57：writer原Task+末预算后首/末帧单槽，可漏代。§19.56：迟到候选/原Task/三清理保树；外层先stop source再join，父结束RequestStop。详HANDOFF。
 
 **Router/发布（§19.53–54）。** 可选、App默认不变；ACK→factory→初装→sender→lease单次发布。先摘槽再close，writer通知StopRequired；独立cancel/Dispose完整join、外层Complete。source.Completion唯一来源错槽，sender分槽保树。Replace原Task，撤销不撤回候选。
 
@@ -31,7 +31,7 @@
 
 **换代（§19.52）。** 单session/read/replace，原Task返回即接管未Start候选；旧Start/Read/迟到owner结算后才新Start。三清理独立、同Task去重；提交帧不收回，无active Completion监视。退役/Replace→settled→外层Read避免自join。
 
-**下一片：唯一Control写者/预算/停止监督，再reader/显示屏障/产品/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
+**下一片：Host唯一请求reader/执行停止协调，再Client回执/显示屏障/产品/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 
@@ -79,7 +79,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.59回执纯合同/占槽已推d99a7e0、双配置各6692通过；真实Control读写/显示屏障/live/画质未接。 |
+| **M6** | 进行中：§19.60显式会话写者已推7968725、双配置各6729通过；请求reader/显示屏障/live/画质未接。 |
 | M7~M11 | 未开始 |
 
 提交链见HANDOFF。
