@@ -2,14 +2,16 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：新协议只支持新版双方连接，旧端明确拒绝并要求两端升级；不保留legacy单屏兼容分支，不静默降级。此为产品政策，旧v1拒绝的实际接线不能在未实现时宣称完成。**
-> ADR `docs/DECISIONS.md`（至100：请求执行器；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至101：发送边界；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-15，权威详HANDOFF§19.56/ADR100）
+## 当前续作点（2026-10-16，权威详HANDOFF§19.57/ADR101）
 
-已推35a372d/6065。真Admission一次装配执行器，原Task单飞；factory迟到候选归属、同父gate最终Replace移交、本地三清理/取消worker完整join。新66/定向181/五变异各1红恢复，独立exit0；历史编译失败及180绿字节桥核实。原wait链详HANDOFF。外层先stop source再join，父结束RequestStop；目录seq非拓扑锁。612条目双回读/14旧包保持。
+已推c730476/6103。显式sender绑定source，逐读代际在原交付gate填写；writer原Task+sender末预算通过后单槽首/末wire帧历史。旧在途仍属旧代，历史非授权/ACK/显示，单槽不保证逐请求事件；默认Router/App未启用。新38/定向233/五变异24/2/3/4/15红恢复，独立exit0，408源/157原件/15旧ZIP保持。
 
-**Router装配（§19.54/ADR098）。** 显式可选，App默认不变；ACK→factory→初装→sender worker→真lease发布。共享gate先摘槽再close，writer beforeClose发StopRequired，两WhenAny消费。独立cancel/Dispose后完整join，外层Complete；source.Completion唯一来源错槽，sender分槽保树。5651/三变异1红，历史失败与完整收据见HANDOFF；非双机/GDI/多屏。
+§19.56执行器35a372d/6065：真Admission一次装配、原Task单飞、迟到候选归属、同父gate最终Replace、三清理/取消完整join；外层先stop source再join，父结束RequestStop。原收据详HANDOFF。
+
+**Router（§19.54/ADR098）。** 可选、App默认不变；ACK→factory→初装→sender→lease发布。共享gate先摘槽再close，writer通知StopRequired；独立cancel/Dispose完整join、外层Complete。source.Completion唯一来源错槽，sender分槽保树；历史见HANDOFF。
 
 **发布接缝（§19.53）。** 真lease同gate单次发布，仅摘槽；Replace返回原Task，撤销不撤回候选。
 
@@ -23,7 +25,7 @@
 
 **Host/Router（§19.45–47）。** 同gate发布worker、None原IO；原锚含序列化/IO/timer及Int128末检。Abort仅通知、原Task join，退出≠释放。success flush→Register→秘密finally→holding→目录；StopRequired先close/注销再join全部根，Dispose后取VideoCompletion。逐槽保错误树；受控流非TLS。
 
-**Host/Client目录（§19.48–49）。** Host record共享守卫，非async外桥/原Task保错误树；委托内new GDI，10秒非硬中断，seq0仅元数据。Client原父gate只读单槽、撤销留历史；250ms timer非实时，Closing/SessionEnded/Drain前清timer/getter/token/ItemsSource，拒迟到且异常不跳Drain。5410/5434历史是单机自动化，不是双机/真人/多屏联合。
+**目录（§19.48–49）。** Host record共享守卫、非async外桥/原Task保树；委托内new GDI，10秒非硬中断，seq0仅元数据。Client父gate只读单槽、撤销留历史；250ms非实时，Closing/SessionEnded/Drain前清timer/getter/token/ItemsSource，拒迟到且异常不跳Drain。仅单机自动化非双机/真人/多屏。
 
 **固定目标准备（§19.50）。** CreateForDisplayAsync完整枚举唯一ID及record匹配，无主屏回退；预算先于encoder，交付未Start，创建token不控制生产。共用原Task/回滚保错误树。41新/5475，记录相等非硬件拓扑锁，受控pipeline非GDI/多屏。
 
@@ -31,7 +33,7 @@
 
 **拥有型换代（§19.52）。** 单session/read/replace，返回Task即接管未Start候选；旧代Start/Read/迟到owner结算后才新Start。三清理独立，仅同原Task去重；提交帧不收回，无active Completion监视。Completion先退役/Replace→settled→外层Read避免自join，详ADR096。
 
-**下一片：真实整帧发送成功边界及换代关联，再Control回执/Client显示屏障/产品接线/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
+**下一片：请求/代际可靠结算与Control回执，再Client显示屏障/产品接线/画质。** Router可选装配已接，App默认未启用；换代非发送/显示屏障，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL及AUTH/GRANT-V2不变。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 
@@ -79,7 +81,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 | **M3.1** | 完成，2dee00c双配置601绿/零警告；8s provisional信封、HelloTimeout、停机报告及B15/16/18/19/20见§18.4 A。 |
 | **M4** | **完成（2026-09-29）**。`2596357`双配置各1433 PASS/Python14，实屏明确确认配齐，原DoD/21步收口见HANDOFF§18.25；不重跑已通过项。 |
 | **M5** | 已按2026-10-12用户稳定反馈收口；§19.29原包保留，不重复人工验收。 |
-| **M6** | 进行中：§19.56请求执行器已推35a372d、双配置各6065通过；发送屏障/live/画质未接。 |
+| **M6** | 进行中：§19.57本地发送边界已推c730476、双配置各6103通过；Control回执/显示屏障/live/画质未接。 |
 | M7~M11 | 未开始 |
 
 提交链见HANDOFF。

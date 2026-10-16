@@ -1924,3 +1924,13 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **外层责任及非目标。** 不自动监听父会话退出，不拥有source/lease/流。外层在父关闭或StopRequired时必须独立停止相关source等依赖，再join本执行器，避免在途Replace等待原代际导致自join；factory、生产者及取消回调也不得等待本执行器。状态检查与锁外factory进入不是硬中断边界。错误采用原Task树逐操作保留；后续Router若汇总还须明确source与执行器传播错误去重合同。本片不接Control唯一reader/writer、成功回执、发送首帧边界、Client显示屏障、App默认路径或画质；不宣称完整M6或双机/物理多屏通过。
 
 **实际验证。** 正式初始v3与恢复定向各181PASS；新增66case。五生产字节变异（预约最终有效性/移交owner清空/原清理Task去重/原错误树/原执行Task单飞）各1原断言红，完整等待后精确恢复。原Task单飞用例仅测试反射释放预约以隔离门禁，非自然调度窗口证明。首轮3warning/2编译error且test未运行、v2历史180绿保留，固定测试SHA逆向字节桥核实；最终Drain直接等待原根，超时只用于正文诊断。四Rebuild零警告错误、Debug/Release各6065PASS，5999旧身份全部保留；独立审计原进程exit0及主线程wait0，407源/40TRX/24680execution/195观察原件保持。全量原launcher收据证实worker/六dotnet完整wait0，但本轮主shell后台句柄丢失，未伪造该句柄回收结果。详HANDOFF§19.56。
+
+### ADR-101 — 本地整帧写入成功边界与提交帧的代际归属
+
+**2026-10-16；内部显式能力，已验证。** ReplaceableVideoFrameSource增加带out身份的ReplaceAsync重载，保持同一个原换代Task及同步所有权判据。身份是无producer/source/frame引用的不透明对象，既不是序号也不是授权。逐次ReadForSendAsync凭据与普通Read共用单读者与原Task链；只在原帧交付gate内写入该帧真实所属代际，迟到旧帧被释放或EOF不产生交付身份。不能在写完时读取“当前活动代”反推在途帧归属。
+
+**成功边界。** VideoFrameSender显式构造(firstFrameId, source)绑定来源引用与原会话并启用既有串行wire编号。只有原writer任务正常完成（40字节头、有效payload、Flush及writer终态检查全部返回），且sender原绝对写预算/caller取消末检通过，才以单次Volatile发布不可变元数据快照。快照最多保留最近成功代际的首帧与最新帧wire编号/宽高，不含payload或producer、不新增队列/订阅/独立worker。取帧、编码、编号分配、Replace完成或仅写完payload都不是成功。部分失败/到期/取消不发布新成功、不重试或回绕；frame/timer清理随后失败不撤回已经成立的写入历史。
+
+**换代、停止与局限。** 旧帧已提交给sender后，Replace完成或source关闭不能收回它；其后本地写入成功仍记旧身份，新代实际成功帧才替换快照，零成功帧的中间代不伪造记录。历史快照不是当前资格、接收ACK、对端解码或UI显示证明；末检后发生取消不反向抹去历史。单槽不保证消费者观察到每一个历史代际，后续Control协调必须先绑定具体请求/代际并建立自身屏障，而不能轮询当前值冒充可靠事件交付。默认sender/Router/App不启用该能力，不改Core帧、LRVF格式、权限/认证或单次Video租约，不接Control回执/Client显示屏障/画质。
+
+**验证收据。** 新38case、正式初始及恢复定向各233PASS；early-publication/final-budget/stale-generation/first-overwrite/source-frame-id五项唯一生产字节变异分别24/2/3/4/15原断言红，原进程完整退出后精确恢复。旧身份6065全保留、新增38/删除0；四Rebuild零警告错误，Debug/Release各6103PASS/0FAIL/0SKIP。独立核验原进程exit0，408源/157观察原件、39TRX/24992唯一execution及十五旧ZIP摘要保持。只验证本片和固定6065基线，不递归重审全部历史；受控Task/Stream非TLS、GDI、双机或物理多屏验收。原件及完整提交/交付收据见HANDOFF§19.57。
