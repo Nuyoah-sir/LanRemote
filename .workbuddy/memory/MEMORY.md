@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-10-16，权威详HANDOFF§19.58/ADR102）
 
-已推e8969f3/6154。接纳即原Request+Binding任务，父gate原Replace同步移交后绑定代际，未移交finally null。每代FirstSend：交付gate登记，退役封口+在途全部结算才无成功；旧在途仍可成功。51新/308定向/五变异21/18/7/15/3红恢复，独立exit0，409源/159原件/16旧ZIP保持。source/执行器不反等sender，结果非资源join/授权/ACK，原单飞未扩为回执占槽；默认App不启用。
+已推e8969f3/6154。接纳即原Request+Binding任务，父gate原Replace同步移交后绑定代际，未移交finally null。每代FirstSend：交付gate登记，退役封口+在途全部结算才无成功；旧在途仍可成功。51新/308定向/五变异红恢复、独立exit0；409源/159原件/16旧ZIP保持，591条目双回读。source/执行器不反等sender，结果非资源join/授权/ACK，原单飞未扩为回执占槽；默认App不启用。
 
 §19.57发送边界c730476/6103：writer原Task+sender末预算后单槽首/末wire帧历史，逐读代际原gate填写；单槽会漏中间代。§19.56执行器35a372d/6065：迟到候选/原Task/三清理保树；外层先stop source再join，父结束RequestStop。原收据见HANDOFF。
 
