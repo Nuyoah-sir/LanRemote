@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-10-16，权威详HANDOFF§19.57/ADR101）
 
-已推c730476/6103。显式sender绑定source，逐读代际在原交付gate填写；writer原Task+sender末预算通过后单槽首/末wire帧历史。旧在途仍属旧代，历史非授权/ACK/显示，单槽不保证逐请求事件；默认Router/App未启用。新38/定向233/五变异24/2/3/4/15红恢复，独立exit0，408源/157原件/15旧ZIP保持。
+已推c730476/6103。显式sender绑定source，逐读代际在原交付gate填写；writer原Task+sender末预算通过后单槽首/末wire帧历史。旧在途仍属旧代，历史非授权/ACK/显示，单槽不保证逐请求事件；默认Router/App未启用。38新/233定向/五变异红恢复，独立exit0；408源/157原件/15旧ZIP保持，590条目双回读。
 
 §19.56执行器35a372d/6065：真Admission一次装配、原Task单飞、迟到候选归属、同父gate最终Replace、三清理/取消完整join；外层先stop source再join，父结束RequestStop。原收据详HANDOFF。
 
