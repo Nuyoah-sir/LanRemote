@@ -124,7 +124,22 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
     /// 不可从write或其取消回调反等本执行器。Accepted只表示登记worker，不是写入成功。
     /// </summary>
     internal ReplyStatus TrySendReply(RequestExecutionReceipt receipt, long sequence, long timestampMs,
-        Func<DisplayChangedFrame, CancellationToken, Task> write, out Task<ReplyResult>? reply)
+        Func<DisplayChangedFrame, CancellationToken, Task> write, out Task<ReplyResult>? reply) =>
+        TrySendReplyCore(receipt, sequence, timestampMs, write, false, out reply);
+
+    // 自动协调装配：Faulted写入由writer.Completion唯一报告；取消与同步调用错误仍由executor持有。
+    internal ReplyStatus TrySendOwnedReply(RequestExecutionReceipt receipt, HostControlWriter writer,
+        out Task<ReplyResult>? reply)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(writer);
+        reply = null;
+        if (writer.SessionId != receipt.Request.SessionId) return ReplyStatus.InvalidReceipt;
+        return TrySendReplyCore(receipt, 0, 0, writer.WriteDisplayChangedAsync, true, out reply);
+    }
+
+    private ReplyStatus TrySendReplyCore(RequestExecutionReceipt receipt, long sequence, long timestampMs,
+        Func<DisplayChangedFrame, CancellationToken, Task> write, bool writerOwnsFault, out Task<ReplyResult>? reply)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(write);
@@ -145,14 +160,14 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
             DisplaySwitchRequestFrame request = pending.Reservation.Request;
             DisplayChangedFrame frame = new(request.SessionId, sequence, timestampMs, request.Sequence,
                 request.CatalogSequence, request.DisplayId, sent.FrameId, sent.Width, sent.Height);
-            reply = _reply = Task.Run(() => SendReplyAsync(pending, generation, frame, write));
+            reply = _reply = Task.Run(() => SendReplyAsync(pending, generation, frame, write, writerOwnsFault));
             return ReplyStatus.Accepted;
         }
     }
 
     private async Task<ReplyResult> SendReplyAsync(PendingReply pending,
         ReplaceableVideoFrameSource.GenerationIdentity generation, DisplayChangedFrame frame,
-        Func<DisplayChangedFrame, CancellationToken, Task> write)
+        Func<DisplayChangedFrame, CancellationToken, Task> write, bool writerOwnsFault)
     {
         Task? original = null;
         try
@@ -177,6 +192,7 @@ internal sealed class DisplaySwitchExecutor : IAsyncDisposable
         catch (Exception caught)
         {
             RequestStop();
+            if (writerOwnsFault && original is { IsFaulted: true }) return new(true, false, false);
             throw new AggregateException("切屏成功回执写入失败。", OriginalError(original, caught));
         }
         finally

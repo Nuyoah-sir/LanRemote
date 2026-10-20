@@ -29,6 +29,8 @@ internal sealed class FirstFrameRouter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(timeouts);
         ArgumentNullException.ThrowIfNull(frames);
+        if (context.DisplayCatalogSend?.DisplayRequestPrepare is not null)
+            throw new ArgumentException("自动切屏协调需要生产者工厂路由。", nameof(context));
         _context = context;
         _timeouts = timeouts;
         _frames = frames;
@@ -46,13 +48,16 @@ internal sealed class FirstFrameRouter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(timeouts);
         ArgumentNullException.ThrowIfNull(factory);
-        if (!enableProducerReplacement && firstFrameId is not null)
+        bool coordinated = context.DisplayCatalogSend?.DisplayRequestPrepare is not null;
+        if (coordinated && (context.DisplayCatalogSend?.UseSessionWriter != true || context.DisplayCatalogSend.DisplayRequestHandler is not null))
+            throw new ArgumentException("自动切屏必须独占同一会话写者和请求处理器。", nameof(context));
+        if (!enableProducerReplacement && !coordinated && firstFrameId is not null)
             throw new ArgumentException("发送编号仅适用于显式启用的生产者换代装配。", nameof(firstFrameId));
         _context = context;
         _timeouts = timeouts;
         _factory = factory;
         _options = options ?? new VideoSessionOptions();
-        _enableProducerReplacement = enableProducerReplacement;
+        _enableProducerReplacement = enableProducerReplacement || coordinated;
         _firstFrameId = firstFrameId;
     }
 
@@ -459,7 +464,9 @@ internal sealed class FirstFrameRouter
         using CancellationTokenRegistration stopRegistration = hostToken.Register(
             static state => ((TaskCompletionSource)state!).TrySetResult(), stopped);
         ReplaceableVideoFrameSource source = new(lease.SessionId);
-        VideoFrameSender sender = _firstFrameId is { } first ? new(first) : new();
+        VideoFrameSender sender = _context.DisplayCatalogSend?.DisplayRequestPrepare is not null
+            ? new(_firstFrameId ?? 0UL, source)
+            : _firstFrameId is { } first ? new(first) : new();
         object gate = videoLifetime.Gate;
         Task? sending = null;
         Task<int> peer = Task.Run(() => ReadVideoPeerAsync(connection.Stream, lifetime.Token));

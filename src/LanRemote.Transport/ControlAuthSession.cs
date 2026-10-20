@@ -105,6 +105,7 @@ public sealed class ControlAuthSession
     private HostControlWriterLifetime? _controlWriterLifetime;
     private HostControlWriter? _controlWriter;
     private HostDisplayRequestReader? _requestReader;
+    private HostDisplayRequestCoordinator? _requestCoordinator;
     private Task<byte?>? _requestFirstRead;
     internal HostControlWriterLifetime? ControlWriterLifetime => Volatile.Read(ref _controlWriterLifetime);
     private Task? _catalogHolding;
@@ -165,8 +166,10 @@ public sealed class ControlAuthSession
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(closeRequired);
-        if (options.DisplayRequestHandler is not null && !options.UseSessionWriter)
+        if ((options.DisplayRequestHandler is not null || options.DisplayRequestPrepare is not null) && !options.UseSessionWriter)
             throw new ArgumentException("请求读取必须显式绑定同一会话写者。", nameof(options));
+        if (options.DisplayRequestHandler is not null && options.DisplayRequestPrepare is not null)
+            throw new ArgumentException("请求处理器与自动协调准备工厂不能同时配置。", nameof(options));
         lock (_catalogBindingGate)
         {
             if (_started != 0 || _catalogOptions is not null)
@@ -456,7 +459,13 @@ public sealed class ControlAuthSession
                         try
                         {
                             // 原位置直接进入 holding 的同步前缀，保存原 Task；不搬读线程、不另开读者。
-                            if (_catalogOptions.DisplayRequestHandler is { } handler)
+                            var handler = _catalogOptions.DisplayRequestHandler;
+                            if (_catalogOptions.DisplayRequestPrepare is { } prepare)
+                            {
+                                _requestCoordinator = new(registration!, prepare, _catalogCloseRequired!, cancellationToken);
+                                handler = DispatchCoordinatedRequest;
+                            }
+                            if (handler is not null)
                             {
                                 OwnedControlActivityRead first = pendingRead ?? new(_stream, cancellationToken);
                                 _pendingRead ??= first;
@@ -494,6 +503,7 @@ public sealed class ControlAuthSession
                         }
                         finally
                         {
+                            _requestCoordinator?.RequestStop();
                             _requestReader?.RequestStop();
                             _controlWriter?.RequestStop();
                             _catalogCloseRequired!.TrySetResult();
@@ -532,6 +542,10 @@ public sealed class ControlAuthSession
             }
         }
     }
+
+    private Task DispatchCoordinatedRequest(SessionRegistry.SessionRegistration registration,
+        HostControlWriter writer, DisplayCatalogFrame catalog, DisplaySwitchRequestFrame request, CancellationToken token) =>
+        _requestCoordinator!.Handle(writer, catalog, request, token);
 
     private Func<DisplaySwitchRequestFrame, CancellationToken, Task> CreateRequestDispatch(
         SessionRegistry.SessionRegistration registration,
@@ -600,6 +614,7 @@ public sealed class ControlAuthSession
     {
         ArgumentNullException.ThrowIfNull(errors);
         Add("request-reader", _requestReader?.Error);
+        Add("request-coordinator", _requestCoordinator?.Error);
         Add("setup", _catalogSetupError);
         Add("owner-completion", _catalogOwnerError);
         if (_catalogLifetime is not { } lifetime) return;
@@ -624,7 +639,8 @@ public sealed class ControlAuthSession
 
     private Task JoinCatalogOperationsAsync() => Task.WhenAll(
         JoinCatalogOwnerAsync(_controlWriterLifetime?.Completion ?? _controlWriter?.Completion ?? _catalogLifetime?.Completion),
-        JoinCatalogHoldingAsync(_catalogHolding), JoinRequestFirstAsync());
+        JoinCatalogHoldingAsync(_catalogHolding), JoinRequestFirstAsync(),
+        _requestCoordinator?.Completion ?? Task.CompletedTask);
 
     private async Task JoinRequestFirstAsync()
     {

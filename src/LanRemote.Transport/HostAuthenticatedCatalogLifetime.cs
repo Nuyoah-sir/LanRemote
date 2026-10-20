@@ -17,6 +17,9 @@ internal sealed class HostDisplayCatalogSendOptions
     internal Func<ValueTask<DisplayCatalogFrame>> Source { get; }
     internal TimeSpan Budget { get; }
     internal bool UseSessionWriter { get; init; }
+    // 自动协调模式仅注入专用未Start候选的准备工厂；与原handler模式互斥。
+    internal Func<LanRemote.Core.Models.DisplayInfo, CancellationToken, Task<LanRemote.Core.Abstractions.IVideoFrameProducer>>?
+        DisplayRequestPrepare { get; init; }
     // 显式请求接缝；返回原处理任务，必须覆盖业务操作/回执的完整生命周期，不可反等reader。
     internal Func<SessionRegistry.SessionRegistration, HostControlWriter, DisplayCatalogFrame,
         DisplaySwitchRequestFrame, CancellationToken, Task>? DisplayRequestHandler { get; init; }
