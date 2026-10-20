@@ -1998,3 +1998,19 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **范围。** 内部自动装配与受控真实协议链，非默认App切屏、Client显示屏障、TLS/GDI/双机验收；未新增公共API。下一步Client唯一reader回执消费及显示屏障，之后产品live与每会话画质。不重验M4/M5、不启M7、不改网络/防护/权限/旧包。
 
 **验证。** 新20核心+12真实自动协议组合=32case，定向初始/恢复各191PASS；四生产变异fault-owner/reply-frame-id/null-first-send/frames-router分别1/2/1/1原断言红恢复。四Rebuild零警告错误、Debug/Release各6812PASS/0FAIL/0SKIP，原6780身份+32/-0；421源/176观察原件、39TRX/27762execution，独立审计v2退出0。首次构建4警告、十个新测试Reason断言错误、审计v1误将历史测试要求冻结均保留为失败历史，未修改旧用例或伪作最终证据。代码b4055c68f7c632a525ee132283d704740dc6a150已普通推送；详HANDOFF§19.62。
+
+### ADR-107 — Client真实切屏请求与严格回执关联先于显示屏障
+
+**2026-10-20；内部真实sender与严格回执关联已验证，视频/UI屏障未接。** Client此前没有认证后请求发送者，必须先有真实sender，不能用fake Arm伪造请求资格。故本片先补internal EnableDisplaySwitching/RequestDisplayAsync/LatestDisplayChange，保原public面与默认App。启用必须在真实认证最终交付后、视频附着/唯一monitor启动前；请求必须有当前已交付视频、有效原monitor、实际目录及唯一目标。单请求槽从0递增、long.MaxValue仅一次，Busy不消费编号、不排队。
+
+**发送及关联。** 复用HostDisplayCatalogSendAttempt通用payload链（类名不意味着增加Host服务）：4KiB、10秒原发送预算，UTC/序列化/Write/Flush/原timer清理在同一预算内。原Control monitor扩展严格host_status/display_changed分派，无新读者、空闲无timer；目录256KiB旧合同保持，回执codec再限4KiB，解析仍做原10秒锚点末检。回执必须绑定真实本会话pending request seq/catalog seq/display、Host seq大于目录及已收序号，无pending/重复/错关联即fail-close。每次仅一个earlyACK，不阻塞reader等发送。
+
+**发布。** ACK及原发送成功后只生成局部候选，必须caller注册完整退出，再在父gate复核并唯一发布回执；此前不得暴露Latest。新请求接纳即隐藏旧回执。目录实例冻结，pending或已有回执后换目录（即使同样数字/载荷）fail-close；默认未启用模式仍允许原目录降序/替换。
+
+**停止。** 父或视频子撤销在原gate立即清回执/停止信号，随后独立关闭两流，原sender及caller注册纳入CloseAndJoin/LifetimeErrors/DisposalEvidence。停止通知不是原IO退出，发送失败不伪成功；各独立异常槽保完整树。
+
+**边界。** LatestDisplayChange仅是可撤销查询的已关联回执元数据，先前返回对象是历史，非视频/解码/UI许可。等待ACK无额外空闲timer，依赖EOF/取消或caller停止；未接视频FrameId过滤、解码队列及WPF提交，更不是真机显示证明。下一片必须贯穿这些环节，采用首帧下界语义（允许后续更大帧而不声称精确F已显示），并处理回执/视频双向乱序和旧decode迟到。未新增public API、默认App未启；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。
+
+**最终验证。** 新增35case，最终v3/恢复v1定向各208/208。16:54:54–16:59:02+08:00四Rebuild零warning/error，六dotnet及worker/launcher完整wait0；Debug/Release各6847PASS/0FAIL/0SKIP（Transport5229，其它原项目数不变）。summary10471字节/SHA `6e274bff21fd02ce8c05c234bfe8240bfb9a6385c334b23e98fbe8bbb0555450`。四mutation request-sequence/write-budget/reply-correlation/operation-error分别1/1/3/1原Assert红恢复。custom Assert.False消息不含Assert，触driver assert中断；独立audit以固定源1016/原栈/原消息认证真实Assert，未为误分类改测试或伪造timeout。早期新测试编译/握手常量失败保留，不能冒充最终证据。
+
+**审计与提交。** audit-v1因合法旧格式outer receipt无log字段触KeyError，失败保留；audit-v2仍要求日志逐行等于launcher，有log字段则核SHA。17:00:49–17:00:53+08:00原31532/外层/主线程exit0，report341948字节/SHA `1b016873c74014e2dbb13deafb7b600883b0a9c3200ea2de2b6344a7c51fcf64`；423source/175observed/39TRX/27948execution，旧6812完整四字段身份+35/-0，前片3deliverable保持。代码`842a53ffd34b0f90201565fc59e7b84e0943f98a`已push并核remote一致，6files/+1578/-8；详HANDOFF§19.63。
