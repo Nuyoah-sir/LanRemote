@@ -177,6 +177,8 @@ internal sealed class HostControlWriterLifetime
     internal HostControlWriterLifetime(HostControlWriter writer, Func<ValueTask<DisplayCatalogFrame>> catalogSource,
         Task holding, CancellationToken hostToken)
     { _writer = writer; _catalogSource = catalogSource; _holding = holding; _hostToken = hostToken; }
+    private static readonly Task NoInputStop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+    internal Task InputStopRequired { get; init; } = NoInputStop;
     internal Task StopRequired => _stop.Task;
     internal Task<HostControlWriter?> Ready => _ready.Task;
     private readonly object _gate = new();
@@ -201,16 +203,16 @@ internal sealed class HostControlWriterLifetime
         try
         {
             registration = _hostToken.Register(static state => ((TaskCompletionSource)state!).TrySetResult(), hostStop);
-            if (_holding.IsCompleted || _hostToken.IsCancellationRequested) return;
+            if (_holding.IsCompleted || _hostToken.IsCancellationRequested || InputStopRequired.IsCompleted) return;
             try { sending = _writer.WriteCatalogAsync(_catalogSource, _hostToken); }
             catch (OperationCanceledException cancelled) when (sending is null &&
                 _hostToken.IsCancellationRequested && cancelled.CancellationToken == _hostToken)
             { return; } // 仅未取得原写入Task的本地取消准入；来源/IO异步错误不得在此豁免。
-            await Task.WhenAny(sending, _holding, hostStop.Task, _writer.StopRequired).ConfigureAwait(false);
-            if (!sending.IsCompletedSuccessfully || _holding.IsCompleted || _hostToken.IsCancellationRequested || _writer.StopRequired.IsCompleted) return;
+            await Task.WhenAny(sending, _holding, hostStop.Task, _writer.StopRequired, InputStopRequired).ConfigureAwait(false);
+            if (!sending.IsCompletedSuccessfully || _holding.IsCompleted || _hostToken.IsCancellationRequested || _writer.StopRequired.IsCompleted || InputStopRequired.IsCompleted) return;
             Catalog = sending.Result.Catalog;
             _ready.TrySetResult(_writer);
-            await Task.WhenAny(_holding, hostStop.Task, _writer.StopRequired).ConfigureAwait(false);
+            await Task.WhenAny(_holding, hostStop.Task, _writer.StopRequired, InputStopRequired).ConfigureAwait(false);
         }
         catch (Exception caught) { errors.Add(caught); }
         finally

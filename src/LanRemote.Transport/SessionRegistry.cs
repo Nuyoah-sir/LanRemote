@@ -350,6 +350,14 @@ public sealed class SessionRegistry
         /// <summary>本句柄对应的会话 id。</summary>
         public Guid SessionId => _sessionId;
 
+        // 仅父身份检查点；不是跨锁授权，具体切屏仍须原admission/Replace最终门禁。
+        internal bool CheckCurrent()
+        {
+            lock (_registry._gate)
+                return _released == 0 && !_entry.ControlCancellationToken.IsCancellationRequested &&
+                    _registry._sessions.TryGetValue(_sessionId, out Entry? current) && ReferenceEquals(current, _entry);
+        }
+
         /// <summary>本句柄预约的视频子连接；未预约时已完成，预约后返回同一个完成任务。</summary>
         internal Task VideoCompletion
         {

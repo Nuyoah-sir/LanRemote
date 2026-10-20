@@ -104,6 +104,8 @@ public sealed class ControlAuthSession
     private HostAuthenticatedCatalogLifetime? _catalogLifetime;
     private HostControlWriterLifetime? _controlWriterLifetime;
     private HostControlWriter? _controlWriter;
+    private HostDisplayRequestReader? _requestReader;
+    private Task<byte?>? _requestFirstRead;
     internal HostControlWriterLifetime? ControlWriterLifetime => Volatile.Read(ref _controlWriterLifetime);
     private Task? _catalogHolding;
     private Exception? _catalogSetupError, _catalogOwnerError;
@@ -163,6 +165,8 @@ public sealed class ControlAuthSession
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(closeRequired);
+        if (options.DisplayRequestHandler is not null && !options.UseSessionWriter)
+            throw new ArgumentException("请求读取必须显式绑定同一会话写者。", nameof(options));
         lock (_catalogBindingGate)
         {
             if (_started != 0 || _catalogOptions is not null)
@@ -452,12 +456,24 @@ public sealed class ControlAuthSession
                         try
                         {
                             // 原位置直接进入 holding 的同步前缀，保存原 Task；不搬读线程、不另开读者。
-                            _catalogHolding = HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken);
+                            if (_catalogOptions.DisplayRequestHandler is { } handler)
+                            {
+                                OwnedControlActivityRead first = pendingRead ?? new(_stream, cancellationToken);
+                                _pendingRead ??= first;
+                                _requestFirstRead = TakeRequestFirstByteAsync(first);
+                                _requestReader = new(_stream, _requestFirstRead, SessionId, Context.TimeProvider,
+                                    TimeSpan.FromSeconds(10), CreateRequestDispatch(registration!, handler),
+                                    _catalogCloseRequired!, cancellationToken);
+                                _catalogHolding = _requestReader.Start();
+                            }
+                            else _catalogHolding = HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken);
                             if (_catalogOptions.UseSessionWriter)
                             {
                                 _controlWriter = new(_stream, SessionId, Context.TimeProvider,
                                     _catalogOptions.Budget, _catalogCloseRequired!);
-                                HostControlWriterLifetime lifetime = new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken);
+                                HostControlWriterLifetime lifetime = _requestReader is { } reader
+                                    ? new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken) { InputStopRequired = reader.StopRequired }
+                                    : new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken);
                                 Volatile.Write(ref _controlWriterLifetime, lifetime);
                                 _ = lifetime.Start();
                                 await lifetime.StopRequired.ConfigureAwait(false);
@@ -478,6 +494,7 @@ public sealed class ControlAuthSession
                         }
                         finally
                         {
+                            _requestReader?.RequestStop();
                             _controlWriter?.RequestStop();
                             _catalogCloseRequired!.TrySetResult();
                         }
@@ -516,6 +533,40 @@ public sealed class ControlAuthSession
         }
     }
 
+    private Func<DisplaySwitchRequestFrame, CancellationToken, Task> CreateRequestDispatch(
+        SessionRegistry.SessionRegistration registration,
+        Func<SessionRegistry.SessionRegistration, HostControlWriter, DisplayCatalogFrame, DisplaySwitchRequestFrame, CancellationToken, Task> handler) =>
+        (request, token) => DispatchDisplayRequest(registration, handler, request, token);
+
+    private Task DispatchDisplayRequest(SessionRegistry.SessionRegistration registration,
+        Func<SessionRegistry.SessionRegistration, HostControlWriter, DisplayCatalogFrame, DisplaySwitchRequestFrame, CancellationToken, Task> handler,
+        DisplaySwitchRequestFrame request, CancellationToken token)
+    {
+        // 非async桥直接交付用户原Task；Ready为目录已发送历史，不等待、不缓存提前到达的请求。
+        HostControlWriterLifetime? lifetime = Volatile.Read(ref _controlWriterLifetime);
+        if (token.IsCancellationRequested || !registration.CheckCurrent() || lifetime is null ||
+            !lifetime.Ready.IsCompletedSuccessfully || lifetime.Ready.GetAwaiter().GetResult() is not { } writer ||
+            writer.StopRequired.IsCompleted || lifetime.Catalog is not { } catalog)
+            throw new FrameProtocolException("request-display-before-ready-or-stopped");
+        return handler(registration, writer, catalog, request, token)
+            ?? throw new InvalidOperationException("请求处理器未返回原任务。");
+    }
+
+    private static async Task<byte?> TakeRequestFirstByteAsync(OwnedControlActivityRead read)
+    {
+        try { await read.Activity.ConfigureAwait(false); }
+        catch (Exception caught)
+        {
+            Exception error = read.OriginalError ?? (read.Activity.Exception is not { } tree ? caught
+                : tree.InnerExceptions.Count == 1 ? tree.InnerExceptions[0] : tree);
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+            throw;
+        }
+        if (!read.TryTakeCompleted(out byte? firstByte))
+            throw new FrameProtocolException("request-display-first-read-invalid");
+        return firstByte;
+    }
+
     // Router 在 RunAsync 结束（含异常）并由 Host 关流后调用；不延迟原失败返回，也不另开读者。
     internal async Task JoinPendingReadAsync()
     {
@@ -529,9 +580,14 @@ public sealed class ControlAuthSession
         {
             _ = await pendingRead.Activity.ConfigureAwait(false);
         }
+        catch (Exception) when (_requestReader?.Completion is { } readerCompletion)
+        {
+            // 首读已由请求读者接管；完整join其唯一错误槽后不在Router重复报告同一原根。
+            await readerCompletion.ConfigureAwait(false);
+        }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
         {
-            // 正常断连/取消都等原读真正结束；意外异常留给 Host 做有界诊断。
+            // 旧holding/接管失败保原分类；正常断连/取消仍等待原读真正结束。
         }
         finally
         {
@@ -543,6 +599,7 @@ public sealed class ControlAuthSession
     internal void AddCatalogErrors(List<Exception> errors)
     {
         ArgumentNullException.ThrowIfNull(errors);
+        Add("request-reader", _requestReader?.Error);
         Add("setup", _catalogSetupError);
         Add("owner-completion", _catalogOwnerError);
         if (_catalogLifetime is not { } lifetime) return;
@@ -566,7 +623,15 @@ public sealed class ControlAuthSession
     }
 
     private Task JoinCatalogOperationsAsync() => Task.WhenAll(
-        JoinCatalogOwnerAsync(_controlWriterLifetime?.Completion ?? _controlWriter?.Completion ?? _catalogLifetime?.Completion), JoinCatalogHoldingAsync(_catalogHolding));
+        JoinCatalogOwnerAsync(_controlWriterLifetime?.Completion ?? _controlWriter?.Completion ?? _catalogLifetime?.Completion),
+        JoinCatalogHoldingAsync(_catalogHolding), JoinRequestFirstAsync());
+
+    private async Task JoinRequestFirstAsync()
+    {
+        if (_requestFirstRead is null) return;
+        try { await _requestFirstRead.ConfigureAwait(false); }
+        catch (Exception) { /* 原首读由reader.Error或原pending-read路径报告，这里只补足建造失败的join。 */ }
+    }
 
     private async Task JoinCatalogOwnerAsync(Task? completion)
     {
@@ -792,13 +857,25 @@ public sealed class ControlAuthSession
         }
 
         internal Task<int> Activity { get; }
+        internal Exception? OriginalError { get; private set; }
 
         private async Task<int> ReadAsync(Stream stream, CancellationToken cancellationToken)
         {
             // 分配与流的同步前缀仍在 async 方法内，异常捕获进原形状的包装 Task。
             byte[] buffer = new byte[1];
             _buffer = buffer;
-            return await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            Task<int>? original = null;
+            try
+            {
+                original = stream.ReadAsync(buffer.AsMemory(), cancellationToken).AsTask();
+                return await original.ConfigureAwait(false);
+            }
+            catch (Exception caught)
+            {
+                OriginalError = original?.Exception is not { } tree ? caught
+                    : tree.InnerExceptions.Count == 1 ? tree.InnerExceptions[0] : tree;
+                throw; // 旧Activity保原await异常形状，仅显式请求移交读取完整原错误槽。
+            }
         }
 
         /// <summary>只移交已成功原读的历史结果：null 表示 EOF，0x00 仍是数据。</summary>
