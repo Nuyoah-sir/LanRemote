@@ -2014,3 +2014,21 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **最终验证。** 新增35case，最终v3/恢复v1定向各208/208。16:54:54–16:59:02+08:00四Rebuild零warning/error，六dotnet及worker/launcher完整wait0；Debug/Release各6847PASS/0FAIL/0SKIP（Transport5229，其它原项目数不变）。summary10471字节/SHA `6e274bff21fd02ce8c05c234bfe8240bfb9a6385c334b23e98fbe8bbb0555450`。四mutation request-sequence/write-budget/reply-correlation/operation-error分别1/1/3/1原Assert红恢复。custom Assert.False消息不含Assert，触driver assert中断；独立audit以固定源1016/原栈/原消息认证真实Assert，未为误分类改测试或伪造timeout。早期新测试编译/握手常量失败保留，不能冒充最终证据。
 
 **审计与提交。** audit-v1因合法旧格式outer receipt无log字段触KeyError，失败保留；audit-v2仍要求日志逐行等于launcher，有log字段则核SHA。17:00:49–17:00:53+08:00原31532/外层/主线程exit0，report341948字节/SHA `1b016873c74014e2dbb13deafb7b600883b0a9c3200ea2de2b6344a7c51fcf64`；423source/175observed/39TRX/27948execution，旧6812完整四字段身份+35/-0，前片3deliverable保持。代码`842a53ffd34b0f90201565fc59e7b84e0943f98a`已push并核remote一致，6files/+1578/-8；详HANDOFF§19.63。
+
+### ADR-108 — 内部可选视频/JPEG/WPF同父提交屏障
+
+**2026-10-20；内部真实视频/JPEG/STA Image.Source逻辑提交屏障验证通过，默认App仍未启。** 三参internal RemoteVideoPresenter(video,image,control)绑定已启用切屏且尚无读取/请求的真实child，默认public两参/App服务不启用。Transport桥与App三个worker共享父gate：真实读取终检签发私有owner/epoch的stamp，真实请求接纳换epoch，真实发送/回执及caller注册清理完成才安装F下界；撤销同锁失效。
+
+**真实管线。** 原VideoFrameReader完整读入后签发，专用projection仍归原child读槽完整join，不增加reader或payload owner。新模式严格ulong帧号递增；原未绑定模式不收紧。单encoded/单decoded、后台复用真实baseline JPEG预检和WPF OnLoad/Freeze，帧身份贯穿，拒绝旧epoch/倒退候选挤新。回执F是下界，允许最新帧大于F；实际解码尺寸须同时匹配帧头和回执。帧先回执后保留最新bitmap，回执自身信号能唤醒，不依赖下一帧。
+
+**UI提交/停止。** 一次最多一个原Dispatcher操作且renderer await其原Task；callback在父gate复核当前epoch/候选、pending/F/尺寸后写Image.Source，再复检setter重入，成功才记录LastPresented。旧回调不清新槽；停止先封口/撤销，原解码/owner释放/Dispatcher仍须退出。收尾并行通知父两线关闭与取消，再join三个worker及原取消；不在gate内解码/Dispose/网络/等待。LastPresented仅逻辑提交历史，不证明物理scanout，保存旧快照不授未来资格。
+
+**可见性/范围。** 只为实际内部接线增加Transport→App/Acceptance.Tests、App→Acceptance.Tests友元，未新增public协议API。fixture合成已认证parent并真实跑request/ACK/LRVF/JPEG/STA Image.Source，已不再仅回执元数据，但不是完整TLS/serverProof/审批/双机live。默认App仍未启，LastPresented不代表物理scanout。
+
+**失败与中间历史。** initial-v1新测试4warning（2个CS4014、2个xUnit）触门禁未测；v2在活动WhenAny阶段错误强求直接await原Flush→request链导致watchdog，修新测试行为断言，原停止join另测，非放宽生产。v3定向35PASS与首轮frame-floor/pending-gate/receipt-size/monotonic-id变异1/1/1/2原Assert红恢复均为history，不能代替最终同源证据。final-v1 Debug通过、Release 1FAIL源于fixtureEntered先于LastFlush引用发布；仅改新fixture为FlushPublished TCS<Task>交付真实原Task引用，生产未改，然后完整重跑最终定向/四变异/恢复/双配置全量。全部失败与原件保留。
+
+**最终验证。** initial-v4/restored-v2定向各35PASS；新增22全部Acceptance，原13默认呈现测试保持。四最终mutation frame-floor/pending-gate/receipt-size/monotonic-id分别1/1/1/2原Assert红恢复。final-v2于19:20:23–19:24:28+08:00四Rebuild零警告错误，六dotnet及worker/launcher完整wait0；Debug/Release各6869PASS/0FAIL/0SKIP（Acceptance543、Transport5229，其它项目不变）。summary10453字节/SHA `aed523d3963a82a861514d7af2420398ffcfd9f080c830e16df12e071859a41b`。
+
+**独立审计与提交。** 19:24:59–19:25:05+08:00原audit进程60052/外层/主线程exit0；report394170字节/SHA `1c5ca69d747b29969c285797a0e116613ef7f52911d475066d84ffdbe63c7993`，426源/285观察原件/61TRX/41361execution，旧6847完整四字段身份+22/-0，前片三成品保持。代码`7757298396686201a272cb61e6f61bbb855d53bc`已普通push并核remote一致，8files/+1731/-5；详HANDOFF§19.64。package交付数字由主线程后置回填，本条不预填。
+
+**下一片。** 不是仅按钮：GdiScreenCaptureBackend当前仅主屏，须补实际非主屏枚举/采集及Sessions目标准备到App的接缝；Host启用session writer/prepare，Client在认证交付后attach前enable并使用三参Presenter，窗口补请求/忙状态/停止解绑。目录仍每连接单发、无动态刷新。随后Host/Client联调、每会话画质和M6真机双端验收；当前无需人工前置，不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧包。

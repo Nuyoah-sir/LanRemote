@@ -2,14 +2,18 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：只支持新版双方，旧端拒绝并提示两端升级；无legacy单屏兼容/静默降级。产品政策不能冒充实际接线完成。**
-> ADR `docs/DECISIONS.md`（至107：Client真实请求/回执关联；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至108：内部真实视频/JPEG/WPF提交屏障；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-20，权威详HANDOFF§19.63/ADR107）
+## 当前续作点（2026-10-20，权威详HANDOFF§19.64/ADR108）
 
-§19.63已推842a53f并核remote，6files/+1578/-8。Client真实sender登记pending，不fake Arm；4KiB/10s原写预算，唯一reader严格关联/冻结目录实例。earlyACK不挡EOF，发送及caller注册退出后父gate发布Latest，新请求/停止清资格；仅元数据非视频/UI许可，无新public API、默认App未启。
+§19.64/7757298已普通push核remote一致。真实视频/JPEG/STA Image.Source逻辑提交屏障已接，非仅元数据；同父gate私有owner/请求epoch/ulong单调FrameId、单encoded/decoded。F仅下界、核尺寸、回执独立唤醒，Source前/重入后复检；LastPresented非物理scanout/未来授权。先撤销/close/cancel再完整join原IO/解码/Dispatcher；默认App未启、无新public API，合成parent非TLS/审批/双机。
 
-最终v3/恢复v1各208/208、新35；16:54:54–16:59:02+08:00四Rebuild零warning/error，六dotnet及worker/launcher wait0，双配置各6847PASS/0FAIL/0SKIP，Transport5229其余不变。summary10471字节；四mutation request-sequence/write-budget/reply-correlation/operation-error为1/1/3/1原Assert红恢复。custom Assert.False消息无Assert误触driver中断，独立audit凭固定源1016/栈/消息认证真Assert，未改测试/伪timeout。audit-v1合法旧outer receipt缺log字段KeyError失败保留；v2逐行核日志=launcher，有log则核SHA。17:00:49–17:00:53原31532/外层/主线程exit0，report341948字节，423源/175原件/39TRX/27948execution，旧6812四字段身份+35/-0、前片3成品保持。完整提交/SHA见§19.63。
+最终initial-v4/restored-v2各35PASS（新22全Acceptance、原13默认呈现保持）；四最终变异1/1/1/2原Assert红恢复，首轮仅history。final-v2双配置各6869PASS/0FAIL/0SKIP、四Rebuild零警告错误、全部进程wait0、独立audit通过。旧6847四身份+22/-0、前片三成品保持；完整数字/时窗/SHA见§19.64，package主线程后置。
+
+失败保留：v1新4warning，v2错求活动WhenAny直接await致watchdog；final-v1 Debug绿/Release1FAIL为fixtureEntered先于LastFlush。仅新fixture改FlushPublished TCS<Task>后重跑定向/变异/全量，生产未改。
+
+§19.63历史（验证/失败/交付详HANDOFF/ADR107）：真实sender登记pending，禁fake Arm；4KiB/10s/唯一reader/严格关联/冻结目录，earlyACK不挡EOF；发送及caller注册退出才父gate发布Latest，新请求/停止撤销。Latest仍仅元数据。
 
 §19.62历史：prepare互斥handler、需writer；自动admission/executor→Replace→真实首发→回执，Router tracked sender。无source拒绝不等，先父撤销再join。OwnedReply故障写者唯一报，取消/同步错保留，旧回执不变。§19.61原首读4KiB/10s、持续读+单handler、忙槽关闭，首读错唯一报。
 
@@ -35,7 +39,7 @@
 
 **换代（§19.52）。** 单session/read/replace，原Task返回即接管未Start候选；旧Start/Read/迟到owner结算后才新Start。三清理独立、同Task去重；提交帧不收回，无active Completion监视。退役/Replace→settled→外层Read避免自join。
 
-**下一片：视频/解码/UI屏障，再产品/画质。** Client须真实sender不可fake Arm，internal前置已接；session/请求epoch/FrameId贯穿队列/解码/Dispatcher，Image.Source前父gate复检，回执F仅下界。Router可选/App默认未启，换代非显示，单次Video租约禁重连。无M6包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL、AUTH/GRANT-V2不变。
+**下一片不是仅按钮。** GDI后端仍仅主屏，须实际非主屏枚举/采集、Sessions目标准备App接缝；Host writer/prepare，Client认证交付后attach前enable/三参Presenter，窗口请求/忙状态/停止解绑。目录每连接单发、无动态刷新。无需当前人工前置，后续live/画质及M6双端验收保留。换代非显示，单次Video租约禁重连。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL、AUTH/GRANT-V2不变。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 
@@ -75,7 +79,7 @@ M4现网包：264 files / raw132.5MiB / zip57.5MiB，全扁平，程序集含代
 
 ## 里程碑（2026-10-20）
 
-M0–M5完成；M2/M3两机历史及机械INVALID_RUN见HANDOFF§9/§15，M3.1信封/停机见§18.4 A。M4实屏/DoD于9月29日配齐见§18.25；M5按10月12日稳定反馈收口，§19.29原包保留，两者不重验。M6见当前续作点，屏障/live/画质仍未接；M7–M11未开始。旧提交/计数仅归HANDOFF。
+M0–M5完成、M6进行中、M7–M11未开始。两机/INVALID_RUN及收口历史见HANDOFF§9/§15/§18.4 A/§18.25/§19.29，M4/M5不重验、旧包保留。M6屏障已验证，默认live/画质未接。
 origin为public，地址/历史见HANDOFF§1，不外推当前同步。gh无需。勿裸跑helper-selector（含--help），会弹GUI/改配置。凭据selected=manager、空值+manager链已修；按持续授权逐片提交推送。
 
 ## 实测事实（别再猜）
