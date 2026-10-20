@@ -1984,3 +1984,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **归属与兼容。** 非async桥返回handler原Task，read/handler/取消多根错误逐槽保留到reader.Error，再经原AddCatalogErrors唯一request-reader槽报告；不吞Faulted OCE、不Flatten或按引用去重。审批首读Task转换独立保有fallback join；首读底层原Task多故障只供显式移交消费，旧Activity保持原异常形状。原登记两个只读属性保持，父检查用CheckCurrent()方法；handler闭包由独立CreateRequestDispatch构造，避免把原RunAsync的registration局部移进闭包而破坏既有反射夹具。默认App不启用此接缝，无新产品包，不改网络/防护/权限、不重验M4/M5、不启M7。
 
 **验证。** 新51case，最终定向196/196，四生产变异各1原Assert红恢复，双配置各6780PASS/0FAIL/0SKIP、四Rebuild零警告错误。原6729完整身份全保留；闭包布局与登记属性白名单回归保持旧测试修复，watchdog-only旧变异不计kill。独立审计exit0，418源/312原件/58TRX/34950execution，前片四成品保持。代码4bf84587d751ad3b470ad7c37d8aabeffdab7558已普通推送，详HANDOFF§19.61。
+
+### ADR-106 — 显式每会话自动切屏协调与真实首发回执
+
+**2026-10-20；内部自动协调装配已验证。** 在原options两参构造上新增internal DisplayRequestPrepare init，必须UseSessionWriter=true且与DisplayRequestHandler互斥；默认App不设置此选项。Auth创建唯一会话协调器，原request reader经既有Ready/父检查直接派发本次处理Task，自动完成真实admission→reply executor→prepare→Replace→真实generation.FirstSend→同一writer回执。协调器Completion是稳定会话owner，成功请求不结束owner；不得返回owner Task代替单次Task。
+
+**来源与路由。** admission惰性创建，只有实际视频source已由Router发布时可创建；目录Ready不等于视频可切换，无source的首个请求立即fail-close，不等待/轮询/重试。工厂Router发现prepare配置自动启用原换代路径，并用tracked VideoFrameSender(_firstFrameId??0, source)，首帧成功来自真实header/payload/Flush与最后预算终检，不能凭Replace或生产者Start宣布成功。frames-only Router拒绝不兼容配置，旧factory/frames与编号路径不变。
+
+**停止与归属。** coordinator.Handle只拥有一个当前原请求worker，内部原execution/reply完整join；FirstSend仅是结果promise，停止后不反等它，source/sender资源由原父VideoCompletion监督。任何close/Host取消/coordinator错误先封口、通知executor.Stop，Auth先撤销父登记、视频Router独立停止source，再完整join协调器/reader/writer/video，不等reader取消回调才关闭。迟到未移交候选仍归executor本地三路清理，移交后不重复Dispose。
+
+**错误唯一报告。** Handle及owner不向reader重复传播业务错误，coordinator.Error由Auth唯一request-coordinator槽报告；execution/reply故障仅经executor.Completion收一次。新增窄TrySendOwnedReply接缝只在自动协调装配使用：已取得且Faulted的writer原Task仍完整join/封口，但诊断只交writer.Completion；同步调用失败、Canceled原Task、独立取消回调错误仍由executor持有。旧TrySendReply合同不变，不按异常引用全局去重、不Flatten。
+
+**范围。** 内部自动装配与受控真实协议链，非默认App切屏、Client显示屏障、TLS/GDI/双机验收；未新增公共API。下一步Client唯一reader回执消费及显示屏障，之后产品live与每会话画质。不重验M4/M5、不启M7、不改网络/防护/权限/旧包。
+
+**验证。** 新20核心+12真实自动协议组合=32case，定向初始/恢复各191PASS；四生产变异fault-owner/reply-frame-id/null-first-send/frames-router分别1/2/1/1原断言红恢复。四Rebuild零警告错误、Debug/Release各6812PASS/0FAIL/0SKIP，原6780身份+32/-0；421源/176观察原件、39TRX/27762execution，独立审计v2退出0。首次构建4警告、十个新测试Reason断言错误、审计v1误将历史测试要求冻结均保留为失败历史，未修改旧用例或伪作最终证据。代码b4055c68f7c632a525ee132283d704740dc6a150已普通推送；详HANDOFF§19.62。
