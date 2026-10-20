@@ -3822,4 +3822,6 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 
 **最终证据/提交。** 15:21:46–15:25:48+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，双配置各6812PASS/0FAIL/0SKIP（Transport5194）；原6780完整身份+32/-0，summary10579字节/SHA `179e72a308ee3e13876518f6c19bcf11ebf8bd2ed5e2a691ce349fe3c3b46114`。审计v1错误地要求修复前历史新测试与最终字节一致而失败，原报告/进程完整保留；v2仅要求正式/变异冻结，历史仅允许两新增测试变更，旧测试不得变。15:28:52–15:28:56原审计进程44180/外层/主线程exit0，报告272690字节/SHA `03ac968cab4092e8b6239c761ace80826da64e35520be8b464a82525fcdce971`；421源/176观察原件/39TRX/27762execution，前片三成品保持，不递归更早ZIP。代码b4055c68f7c632a525ee132283d704740dc6a150已普通push并核远端一致，7files/+2031/-9。
 
+**交付收据。** 验证文档a52eb83d12cfdef233fabeb63e5366a85afd4a92已普通推送。15:37:54–15:37:56原打包进程52348/外层/主线程退出0；新包`outputs/LanRemote-M6-自动切屏协调与首发回执-验证证据-20261020.zip`含198条目，8224453字节/SHA `29e97eca67e24990c38ec6c245a6410ed9fdfdb5c2f04ac3fc742202c13669dc`。生成器及主线程独立全条目SHA256/CRC/包外原件回读通过，421源与前片三成品保持。验收TXT4823字节/SHA `3867b09af79b7f364c6f54eb18643a5354589b421e9518c9dc4b55e98d90bfad`，另附SHA收据。后置仅交付文档记账，不重打/覆盖证据包。
+
 **限制与下一片。** 仅internal opt-in与受控流，不是实际TLS/GDI/双机/GUI切屏或远端画面接受证明。下一片Client同一reader消费display_changed并构建视频显示屏障，再默认产品路径和画质；无M6产品包，不重验M4/M5、不启M7、不改网/防护/权限或旧ZIP。
