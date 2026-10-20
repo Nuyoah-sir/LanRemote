@@ -3805,4 +3805,6 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 
 **最终验证与提交。** 最终初始v6/恢复v2定向各196PASS，四生产变异各1原Assert红恢复。11:12:43–11:16:54+08:00四Rebuild零警告错误，六dotnet/worker/launcher完整wait0、主线程回收；Debug/Release各6780PASS/0FAIL/0SKIP，原6729完整身份+51/-0（Transport5162，其余项目保持）。summary10474字节/SHA `103b3f7198f41be947472c9b4ed2afe3b5da3e76b7a176305935cc81417f898f`。11:17:49–11:17:56独立审计原进程57500/外层/主线程exit0，418源/312原件、58TRX/34950execution，报告396216字节/SHA `7b46af3cda3271e62260efdfe2a59395e2365a589c7c5e033f7afbad7f4f073d`；前片四交付当前摘要保持，不重开更早18ZIP、不递归历史。代码4bf84587d751ad3b470ad7c37d8aabeffdab7558已普通推送并核远端，7files/+1749/-9。证据包改为本轮变更源码与原日志/TRX/报告，不嵌套旧ZIP。
 
+**交付收据。** 验证文档b99a2787ac235a9e4b7dcf5eb3e6d7ea55272881已普通推送。11:26:10–11:26:12原打包进程57124完整wait0，主线程独立全条目SHA256/CRC及包外原件复核通过：346条目、新ZIP10582386字节/SHA `136604a711400e66220b5470e6620f3b25f87d691f986b1ab2e0f2fc81f2d9d3`，路径`outputs/LanRemote-M6-Host请求读取与停止监督-验证证据-20261020.zip`。验收TXT4776字节/SHA `ea3398a376bc8c21f15c4eb8e4821b16309cab939ca42c9707ebb096ab876f14`，另附SHA256收据。旧四交付和418源保持，后置仅交付文档记账，不重打包。
+
 **后续。** 继续将handler装为真实单会话DisplaySwitchExecutor协调器，准备/首发/回执与父停止整体join，然后Client回执消费/显示屏障、产品live/画质。当前Busy为fail-close，不声称支持排队或可恢复错误回执。无M6产品包，不重验M4/M5，不启动M7，不改网络/防护/权限/Undo或旧ZIP。
