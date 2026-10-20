@@ -111,14 +111,21 @@ public sealed partial class AuthenticatedControlSession
                         break;
                     }
                     original = null; // 后续错误不可借上一已成功Task解释。
-                    DisplayCatalogFrame? catalog = await ReadCatalogAsync(stream, first[0]).ConfigureAwait(false);
-                    if (catalog is null) { end = ControlMonitorEnd.SkippedLocalStop; break; }
+                    ControlMessage? message = await ReadCatalogAsync(stream, first[0]).ConfigureAwait(false);
+                    if (message is null) { end = ControlMonitorEnd.SkippedLocalStop; break; }
                     lock (parent._gate)
                     {
                         // 帧时限只证明读取历史；业务发布还须同父gate检查真实交付和当前有效性。
                         if (parent._connection is null || !parent._deliveryCommitted)
                         { end = ControlMonitorEnd.SkippedLocalStop; break; }
-                        parent._latestDisplayCatalog = catalog; // 单槽替换，无队列/回调/自动选屏。
+                        if (message.Catalog is { } catalog)
+                        {
+                            parent._displaySwitch?.CatalogUnderGate(catalog);
+                            parent._latestDisplayCatalog = catalog; // 默认目录单槽和降序兼容不变。
+                        }
+                        else if (message.Change is { } change && parent._displaySwitch is { } switching)
+                            switching.AcceptUnderGate(change); // 只关联真实登记，绝不等发送而挡住EOF。
+                        else throw new FrameProtocolException("control-unexpected-data");
                     }
                 }
             }
@@ -145,7 +152,9 @@ public sealed partial class AuthenticatedControlSession
             child?.RequestStop();
         }
 
-        private async Task<DisplayCatalogFrame?> ReadCatalogAsync(Stream stream, byte firstByte)
+        private sealed record ControlMessage(DisplayCatalogFrame? Catalog, DisplayChangedFrame? Change);
+
+        private async Task<ControlMessage?> ReadCatalogAsync(Stream stream, byte firstByte)
         {
             lock (parent._gate)
                 if (parent._connection is null) return null;
@@ -191,6 +200,11 @@ public sealed partial class AuthenticatedControlSession
                     throw new FrameProtocolException("control-catalog-read-rejected");
                 }
                 bool parsed = DisplayCatalogFrame.TryParse(payload, out DisplayCatalogFrame? catalog, out _);
+                DisplayChangedFrame? change = null;
+                bool switchingEnabled;
+                lock (parent._gate) switchingEnabled = parent._displaySwitch is not null;
+                if (!parsed && switchingEnabled)
+                    parsed = DisplayChangedFrame.TryParse(payload, parent.SessionId, out change, out _);
                 // 原组合成功不是未来消费许可；合法/非法载荷都先按原观察锚点复核截止。
                 _ = clock.TimestampFrequency;
                 long now = clock.GetTimestamp();
@@ -200,7 +214,7 @@ public sealed partial class AuthenticatedControlSession
                     elapsed * TimeSpan.TicksPerSecond >= (Int128)CatalogReadBudget.Ticks * frequency)
                     throw new TimeoutException("control-catalog-deadline-expired");
                 if (!parsed) throw new FrameProtocolException("control-unexpected-data");
-                return catalog;
+                return new(catalog, change);
             }
             finally
             {

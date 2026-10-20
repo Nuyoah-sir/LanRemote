@@ -74,7 +74,8 @@ public sealed partial class AuthenticatedControlSession
             Task videoJoin = _videoLifetime?.StopAndJoinAsync() ?? Task.CompletedTask;
             Task monitor = _controlMonitor?.Worker ?? Task.CompletedTask;
             // 所有分支都必须退出；不能因某项 fault 而跳过另一项原操作的等待。
-            return _closeAndJoin = Task.WhenAll(controlClose, videoJoin, monitor);
+            Task switching = _displaySwitch?.Completion ?? Task.CompletedTask;
+            return _closeAndJoin = Task.WhenAll(controlClose, videoJoin, monitor, switching);
         }
     }
 
@@ -87,6 +88,7 @@ public sealed partial class AuthenticatedControlSession
             lock (_gate)
             {
                 if (_controlMonitor?.Snapshot.Error is { } monitorError) AddErrors(errors, [monitorError]);
+                if (_displaySwitch?.Error is { } switchError) AddErrors(errors, [switchError]);
                 if (_videoLifetime is not null) AddErrors(errors, _videoLifetime.LifetimeErrors);
             }
             return errors.AsReadOnly();
@@ -326,7 +328,13 @@ public sealed partial class AuthenticatedControlSession
                 throw new InvalidOperationException("视频会话不属于当前父会话。");
         }
 
-        internal void MarkStoppedUnderGate() => _stopped = true;
+        internal bool CanSwitchUnderGate => _delivered && !_stopped && _parent._connection is not null;
+
+        internal void MarkStoppedUnderGate()
+        {
+            _stopped = true;
+            _parent._displaySwitch?.RevokeUnderGate();
+        }
 
         internal void RequestStop()
         {
