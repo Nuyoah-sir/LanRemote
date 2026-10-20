@@ -124,6 +124,7 @@ public sealed partial class AuthenticatedControlSession
         private readonly TaskScheduler _joinScheduler;
         private readonly Operation _attach = new();
         private Operation? _read;
+        private EncodedFrame? _presentationCandidate;
         private TlsConnection? _connection;
         private VideoFrameReader? _reader;
         private bool _stopped;
@@ -233,11 +234,36 @@ public sealed partial class AuthenticatedControlSession
             {
                 CheckActive(cancellationToken);
                 if (!_delivered) throw new InvalidOperationException("视频会话尚未交付。");
+                if (_parent._displayPresentation is not null)
+                    throw new InvalidOperationException("视频会话已绑定显示提交桥，必须使用其唯一读取入口。");
                 if (_read?.Worker is { IsCompleted: false })
                     throw new InvalidOperationException("视频会话不允许重叠读取。");
                 Operation operation = new();
                 _read = operation;
                 Task<EncodedFrame?> worker = Task.Run(() => ReadCoreAsync(operation, cancellationToken));
+                operation.Worker = worker;
+                return worker;
+            }
+        }
+
+        internal Task<PresentationFrame?> ReadPresentationFrameAsync(ClientDisplayPresentation bridge, CancellationToken token)
+        {
+            lock (Gate)
+            {
+                if (bridge is null || !ReferenceEquals(_parent._displayPresentation, bridge))
+                    throw new InvalidOperationException("显示提交桥不属于当前父会话。");
+                CheckActive(token);
+                if (!_delivered) throw new InvalidOperationException("视频会话尚未交付。");
+                if (_read?.Worker is { IsCompleted: false })
+                    throw new InvalidOperationException("视频会话不允许重叠读取。");
+                Operation operation = new();
+                _read = operation;
+                Task<PresentationFrame?> worker = Task.Run(async () =>
+                {
+                    EncodedFrame? frame = await ReadCoreAsync(operation, token).ConfigureAwait(false);
+                    return frame is null ? null : new PresentationFrame(frame, operation.PresentationStamp!);
+                });
+                // 原 read 槽跟踪完整投影；父/child join 不能只等到内部 ReadCoreAsync 返回。
                 operation.Worker = worker;
                 return worker;
             }
@@ -261,6 +287,13 @@ public sealed partial class AuthenticatedControlSession
                     CheckActive(caller);
                     if (!ReferenceEquals(_read, operation))
                         throw new InvalidOperationException("视频读取槽身份失效。");
+                    if (uncommitted is not null && _parent._displayPresentation is not null)
+                    {
+                        // 只在终检内短暂借用，既不新增 owner，也不给外部回调伪造签发的窗口。
+                        _presentationCandidate = uncommitted;
+                        try { operation.PresentationStamp = _parent._displayPresentation?.StampUnderGate(uncommitted); }
+                        finally { _presentationCandidate = null; }
+                    }
                     operation.Committed = true;
                     if (eof) MarkStoppedUnderGate();
                 }
@@ -329,6 +362,9 @@ public sealed partial class AuthenticatedControlSession
         }
 
         internal bool CanSwitchUnderGate => _delivered && !_stopped && _parent._connection is not null;
+        internal bool CanBindPresentationUnderGate => _delivered && !_stopped && _read is null;
+        internal bool IsPresentationCandidateUnderGate(EncodedFrame frame) =>
+            frame is not null && ReferenceEquals(_presentationCandidate, frame) && _read is { Committed: false };
 
         internal void MarkStoppedUnderGate()
         {
@@ -519,6 +555,7 @@ public sealed partial class AuthenticatedControlSession
         private sealed class Operation
         {
             internal Task? Worker;
+            internal FrameStamp? PresentationStamp;
             internal bool Committed;
             internal bool RegistrationDisposed;
             internal Exception? Error;

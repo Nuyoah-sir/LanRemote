@@ -13,6 +13,7 @@ public sealed class RemoteVideoPresenter
 {
     private readonly AuthenticatedVideoSession _video;
     private readonly Image _image;
+    private readonly FencedVideoPresenter? _fenced;
     private readonly BoundedFrameQueue<EncodedFrame> _queue = new(1);
     private readonly CancellationTokenSource _stop = new();
     private readonly object _gate = new();
@@ -38,7 +39,22 @@ public sealed class RemoteVideoPresenter
         Completion = Task.WhenAll(_reader, _decoder);
     }
 
-    /// <summary>读帧与解码两条原 worker 的联合完成；会话所有者必须等待。</summary>
+    internal RemoteVideoPresenter(AuthenticatedVideoSession video, Image image, AuthenticatedControlSession control)
+    {
+        // 此路径不启动旧管线；连参数验证或绑定失败也不遗留其初始化资源。
+        _queue.Dispose();
+        _stop.Dispose();
+        _video = video ?? throw new ArgumentNullException(nameof(video));
+        _image = image ?? throw new ArgumentNullException(nameof(image));
+        ArgumentNullException.ThrowIfNull(control);
+        AuthenticatedControlSession.ClientDisplayPresentation binding = control.BindDisplayPresentation(video);
+        _fenced = new(binding, image);
+        _reader = _fenced.Completion;
+        _decoder = Task.CompletedTask;
+        Completion = _fenced.Completion;
+    }
+
+    /// <summary>所有原 worker 的联合完成；会话所有者必须等待。</summary>
     public Task Completion { get; }
 
     private async Task ReadFramesAsync()
@@ -172,7 +188,7 @@ public sealed class RemoteVideoPresenter
 
     private void MarkReleaseFailure() => Interlocked.Exchange(ref _releaseFailed, 1);
 
-    private static BitmapSource DecodeJpeg(EncodedFrame frame)
+    internal static BitmapSource DecodeJpeg(EncodedFrame frame)
     {
         if (frame.Codec != VideoCodec.Jpeg || !DimensionsAllowed(frame.Width, frame.Height))
         {
@@ -318,6 +334,7 @@ public sealed class RemoteVideoPresenter
     /// <summary>拒绝旧代次 UI 回调，并完整等待原 reader/decode；网络连接由 service 同时释放。</summary>
     public Task StopAndDisposeAsync()
     {
+        if (_fenced is not null) return _fenced.StopAndDisposeAsync();
         lock (_gate)
         {
             if (_shutdown is not null) return _shutdown;
@@ -331,6 +348,7 @@ public sealed class RemoteVideoPresenter
     /// <summary>等待同一原收尾任务，再只依据独占根成功释放取得证据，不消费原异常。</summary>
     internal Task<PresenterDrainEvidence> GetDisposalEvidenceAsync()
     {
+        if (_fenced is not null) return _fenced.GetDisposalEvidenceAsync();
         Task original = StopAndDisposeAsync();
         lock (_gate)
             return _disposalEvidence ??= ObserveDisposalAsync(original);

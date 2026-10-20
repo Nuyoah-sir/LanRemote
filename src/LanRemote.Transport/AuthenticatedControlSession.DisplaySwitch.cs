@@ -94,6 +94,9 @@ public sealed partial class AuthenticatedControlSession
             }
         }
 
+        internal bool CanBindPresentationUnderGate => !_stopped && _active is null;
+        internal bool HasPendingRequestUnderGate => !_stopped && _pending is not null && _receipt is null;
+
         internal DisplayChangedFrame? ReceiptUnderGate =>
             parent._connection is not null && parent._deliveryCommitted && !_stopped ? _receipt : null;
 
@@ -119,6 +122,7 @@ public sealed partial class AuthenticatedControlSession
             _receipt = null; // 新请求接纳即隐藏旧 fence，不等待新发送开始。
             _attempt = null;
             _original = null;
+            parent._displayPresentation?.BeginRequestUnderGate();
             Task<DisplayChangedFrame?> worker = Task.Run(() => RunAsync(pending, caller));
             _active = worker;
             return worker;
@@ -148,6 +152,7 @@ public sealed partial class AuthenticatedControlSession
         {
             _stopped = true;
             _receipt = null;
+            parent._displayPresentation?.RevokeUnderGate();
             _stop.TrySetResult();
             _attempt?.RequestStop();
         }
@@ -270,7 +275,11 @@ public sealed partial class AuthenticatedControlSession
                         result = null;
                         stopAfterCleanup = true;
                     }
-                    if (result is not null) _receipt = result; // 原发送与caller注册都退出后的唯一发布点。
+                    if (result is not null)
+                    {
+                        _receipt = result; // 原发送与caller注册都退出后的唯一发布点。
+                        parent._displayPresentation?.AcceptReceiptUnderGate(result);
+                    }
                     if (ReferenceEquals(_pending, pending)) _pending = null;
                 }
                 if (stopAfterCleanup) Stop();

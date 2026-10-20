@@ -28,6 +28,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="LanRemote.Acceptance.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
     <ProjectReference Include="..\LanRemote.Discovery\LanRemote.Discovery.csproj" />
     <ProjectReference Include="..\LanRemote.Transport\LanRemote.Transport.csproj" />
