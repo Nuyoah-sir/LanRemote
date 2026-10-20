@@ -1971,4 +1971,16 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 
 **界限。** 唯一性依赖显式装配独占stream，不宣称抵御程序集内任意代码直接写流；发送成功是本地预算内原IO/Flush完成，不是远端接收/显示。停止晚于逻辑提交仍可物理迟到，外层必须关线和完整join。无网络/防护/权限修改，不重验M4/M5、不启M7、不覆盖旧ZIP，尚无M6产品包。
 
-**验证与兼容修复。** 新29 writer+8真实认证组合=37case，最终树初始v3/恢复v2各157PASS；最终六生产变异1/1/2/1/1/1原断言红恢复。首次v1构建5个xUnit1031警告触门禁、未测；首次全量3个旧Acceptance反射构造器参数不匹配，未改旧测试，恢复options唯一两参构造并以init开关选新写者。修复后重新定向/六变异/双配置全量，四Rebuild零警告错误、Debug/Release各6729PASS/0FAIL/0SKIP。独立审计exit0、旧6692完整身份+37/-0，415源/295观察原件、56TRX/34213唯一execution，18旧ZIP保持；全部旧轮及首组六变异保留为历史并核字节逆桥，不当最终证据。代码7968725b264481a08e7a84ef5f83554ac4672c85已普通推送。詳HANDOFF§19.60。
+**验证与兼容修复。** 新29 writer+8真实认证组合=37case，最终树初始v3/恢复v2各157PASS；最终六生产变异1/1/2/1/1/1原断言红恢复。首次v1构建5个xUnit1031警告触门禁、未测；首次全量3个旧Acceptance反射构造器参数不匹配，未改旧测试，恢复options唯一两参构造并以init开关选新写者。修复后重新定向/六变异/双配置全量，四Rebuild零警告错误、Debug/Release各6729PASS/0FAIL/0SKIP。独立审计exit0、旧6692完整身份+37/-0，415源/295观察原件、56TRX/34213唯一execution，18旧ZIP保持；全部旧轮及首组六变异保留为历史并核字节逆桥，不当最终证据。代码7968725b264481a08e7a84ef5f83554ac4672c85已普通推送。详HANDOFF§19.60。
+
+### ADR-105 — 显式Host请求读取与单处理槽停止监督
+
+**2026-10-20；内部显式接线已验证。** 保持原options两参构造，新增internal DisplayRequestHandler init，必须同时UseSessionWriter=true才可绑定。默认handler=null沿旧holding。认证成功后的原审批/holding首字节Task移交reader，不重新读取或并行启动首读；0字节是长度前缀数据、null为EOF。后续唯一reader复用ControlReadAhead及ControlFrameReadAttempt，request_display限制4096字节、首字节本地观察起10秒绝对预算，解析末检仍使用原锚点/频率/单调高水位。
+
+**处理与关闭。** reader不能等待业务处理后才继续读，否则不合作prepare/首帧等待会阻塞EOF检测。每次完整帧通过解析后登记至多一个Task.Run处理worker，内部锁外调用并完整等待原handler Task；reader持续唯一读。第二完整请求若原handler尚未完整退出，则fail-close，不排队、不编造失败回执。EOF或读错误先触StopRequired/closeRequired及独立取消，再完整join原read/attempt/handler/cancelcallback；通知不是退出。writerLifetime在目录前后同时监听InputStopRequired，因此不会等reader完整结束才撤销父资格，避免业务等待与父join形成循环。
+
+**派发检查点。** 非async dispatcher只在派发时检查真实父registration.CheckCurrent()、同会话writer未停止、Ready成功与实际Catalog；未Ready立即拒绝，不等结果、不缓存请求、不刷新帧预算。Ready是历史结果，不保证物理到达时刻或长期授权；业务handler仍须走具体执行器原父/代际门禁。本片未自动装配固定目标准备、切屏执行器或Client回执消费；handler返回的原Task是可信内部装配合同，不抵抗任意内部代码伪造完成。
+
+**归属与兼容。** 非async桥返回handler原Task，read/handler/取消多根错误逐槽保留到reader.Error，再经原AddCatalogErrors唯一request-reader槽报告；不吞Faulted OCE、不Flatten或按引用去重。审批首读Task转换独立保有fallback join；首读底层原Task多故障只供显式移交消费，旧Activity保持原异常形状。原登记两个只读属性保持，父检查用CheckCurrent()方法；handler闭包由独立CreateRequestDispatch构造，避免把原RunAsync的registration局部移进闭包而破坏既有反射夹具。默认App不启用此接缝，无新产品包，不改网络/防护/权限、不重验M4/M5、不启M7。
+
+**验证。** 新51case，最终定向196/196，四生产变异各1原Assert红恢复，双配置各6780PASS/0FAIL/0SKIP、四Rebuild零警告错误。原6729完整身份全保留；闭包布局与登记属性白名单回归保持旧测试修复，watchdog-only旧变异不计kill。独立审计exit0，418源/312原件/58TRX/34950execution，前片四成品保持。代码4bf84587d751ad3b470ad7c37d8aabeffdab7558已普通推送，详HANDOFF§19.61。
