@@ -166,9 +166,11 @@ public sealed class ControlAuthSession
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(closeRequired);
-        if ((options.DisplayRequestHandler is not null || options.DisplayRequestPrepare is not null) && !options.UseSessionWriter)
+        if ((options.DisplayRequestHandler is not null || options.DisplayRequestPrepare is not null ||
+            options.SessionDisplayRequestPrepare is not null) && !options.UseSessionWriter)
             throw new ArgumentException("请求读取必须显式绑定同一会话写者。", nameof(options));
-        if (options.DisplayRequestHandler is not null && options.DisplayRequestPrepare is not null)
+        if (options.DisplayRequestHandler is not null &&
+            (options.DisplayRequestPrepare is not null || options.SessionDisplayRequestPrepare is not null))
             throw new ArgumentException("请求处理器与自动协调准备工厂不能同时配置。", nameof(options));
         lock (_catalogBindingGate)
         {
@@ -460,9 +462,17 @@ public sealed class ControlAuthSession
                         {
                             // 原位置直接进入 holding 的同步前缀，保存原 Task；不搬读线程、不另开读者。
                             var handler = _catalogOptions.DisplayRequestHandler;
-                            if (_catalogOptions.DisplayRequestPrepare is { } prepare)
+                            if (_catalogOptions.DisplayRequestPrepare is not null ||
+                                _catalogOptions.SessionDisplayRequestPrepare is not null)
                             {
-                                _requestCoordinator = new(registration!, prepare, _catalogCloseRequired!, cancellationToken);
+                                // 会话感知工厂在此绑定本连接实际登记的 SessionId；协调器只见到目标与令牌。
+                                // 身份按登记表快照取值，闭包只持有该值，不把登记对象本身提升到闭包里。
+                                Guid preparedSessionId = registration!.SessionId;
+                                Func<DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> coordinatorPrepare =
+                                    _catalogOptions.SessionDisplayRequestPrepare is { } sessionAware
+                                        ? (target, token) => sessionAware(preparedSessionId, target, token)
+                                        : _catalogOptions.DisplayRequestPrepare!;
+                                _requestCoordinator = new(registration!, coordinatorPrepare, _catalogCloseRequired!, cancellationToken);
                                 handler = DispatchCoordinatedRequest;
                             }
                             if (handler is not null)

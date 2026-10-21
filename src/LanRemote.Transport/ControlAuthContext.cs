@@ -99,6 +99,34 @@ public sealed record ControlAuthContext
         return new DisplayCatalogFrame(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), displays);
     }
 
+    /// <summary>
+    /// 在已装配目录来源的基础上启用自动切屏协调：同一会话写者发送目录与回执，
+    /// 并按每个真实认证会话的身份准备目标显示器生产者。
+    /// </summary>
+    /// <remarks>
+    /// 返回装配副本，不调用工厂、时钟或 I/O。prepare 收到的 sessionId 是本 Host 实际登记的认证会话身份，
+    /// 由 Transport 在协调器内从登记表原样传入；调用方不得共享或伪造该标识。
+    /// 目录仍为每连接单次发送，不增加动态刷新；与显式请求处理器互斥，只能装配一次。
+    /// </remarks>
+    internal ControlAuthContext WithSessionDisplayRequestPrepare(
+        Func<Guid, DisplayInfo, CancellationToken, Task<IVideoFrameProducer>> prepare)
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        HostDisplayCatalogSendOptions options = DisplayCatalogSend
+            ?? throw new InvalidOperationException("必须先装配显示目录来源，才能启用切屏协调。");
+        if (options.DisplayRequestHandler is not null)
+            throw new ArgumentException("请求处理器与自动协调准备工厂不能同时配置。", nameof(prepare));
+        if (options.DisplayRequestPrepare is not null || options.SessionDisplayRequestPrepare is not null)
+            throw new InvalidOperationException("切屏协调准备工厂只能装配一次。");
+        // 选项为普通类而非记录；同一 Source/Budget 显式重建，不共享可变态。
+        HostDisplayCatalogSendOptions coordinated = new(options.Source, options.Budget)
+        {
+            UseSessionWriter = true,
+            SessionDisplayRequestPrepare = prepare,
+        };
+        return this with { DisplayCatalogSend = coordinated };
+    }
+
     /// <summary>本机设备号（进 challenge 的 <c>serverDeviceId</c>，同时是 transcript 素材）。</summary>
     public required Guid ServerDeviceId { get; init; }
 

@@ -13,6 +13,8 @@
   <ItemGroup>
     <ProjectReference Include="..\LanRemote.Core\LanRemote.Core.csproj" />
     <InternalsVisibleTo Include="LanRemote.Sessions.Tests" />
+    <!-- 仅向 App 开放内部固定目标准备，供产品 Host 按真实会话装配；不增加公开 API。 -->
+    <InternalsVisibleTo Include="LanRemote.App" />
   </ItemGroup>
 
 </Project>

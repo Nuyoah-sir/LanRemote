@@ -304,10 +304,16 @@ public sealed class HostRuntimeService
             context = context.WithDisplayCatalogSource(
                 () => ValueTask.FromResult<IReadOnlyList<DisplayInfo>>(new GdiDisplayCatalog().GetDisplays()),
                 TimeSpan.FromSeconds(10));
+            // 多屏采集后端：初始主屏与切屏目标共用实际设备枚举标识；预览档位仍由本轮冻结。
             FramePipelineVideoProducerFactory factory = new(
-                () => new GdiScreenCaptureBackend(),
+                () => GdiScreenCaptureBackend.CreateMultiDisplay(),
                 () => new WpfJpegFrameEncoder(),
                 settings: previewSettings);
+            // 自动切屏协调：目录与回执共用同一会话写者；每个真实认证会话按目标 DisplayInfo 准备生产者，
+            // 会话标识由 Transport 从登记表原样传入，不共享字段也不伪造；目录仍每连接单发、无动态刷新。
+            context = context.WithSessionDisplayRequestPrepare(
+                (sessionId, expectedDisplay, token) =>
+                    factory.CreateForDisplayAsync(sessionId, expectedDisplay, token).AsTask());
             TransportHost host = TransportHost.CreateWithVideo(
                 addresses, _subnetPolicy, certificate.Certificate, context, factory);
             Task? startupDispose = null;

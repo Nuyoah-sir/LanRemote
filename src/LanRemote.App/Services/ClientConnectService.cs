@@ -268,6 +268,9 @@ public sealed class ClientConnectService
                 CryptographicOperations.ZeroMemory(key);
             }
             attempt.Control = await connect.ConfigureAwait(false);
+            // 产品路径：认证最终交付后、视频附着与唯一 Control 读者启动前启用切屏；
+            // 启用失败按业务错误进入 Drain，不影响后续资源收尾。
+            attempt.Control.EnableDisplaySwitching();
             // success 原 payload 收齐时就开始倒计时。此 continuation 不等待 UI、Dispatcher 或开窗。
             attempt.Video = await attempt.Control.AttachVideoAsync(attempt.Stop.Token).ConfigureAwait(false);
         }
@@ -275,6 +278,10 @@ public sealed class ClientConnectService
         {
             CryptographicOperations.ZeroMemory(key);
         }
+
+        // 窗口切屏请求：真实登记、发送与回执等待都在 Control 会话内；null 表示未确认、被拒或已停止。
+        async Task<DisplayChangedFrame?> RequestDisplaySwitch(DisplayId displayId, CancellationToken cancellationToken) =>
+            await attempt.Control!.RequestDisplayAsync(displayId, cancellationToken).ConfigureAwait(false);
 
         Task show = attempt.Owner.Dispatcher.InvokeAsync(() =>
         {
@@ -286,10 +293,13 @@ public sealed class ClientConnectService
             };
             attempt.View = view;
             view.StartDisplayCatalog(attempt.Control!.GetDisplayCatalogSnapshot, attempt.Stop.Token);
+            // 切屏请求经同一 Control 会话真实发送并等待回执；窗口只管理忙状态与状态文本。
+            view.StartDisplaySwitching(RequestDisplaySwitch, attempt.Stop.Token);
             view.Show();
             attempt.Dialog.Hide();
             attempt.PresenterInvoked = true;
-            attempt.Presenter = new RemoteVideoPresenter(attempt.Video!, view.VideoImage);
+            // 三参构造把视频读取、JPEG 解码与 Image.Source 提交并入请求代际屏障；先绑定再启动读取。
+            attempt.Presenter = new RemoteVideoPresenter(attempt.Video!, view.VideoImage, attempt.Control!);
         }, DispatcherPriority.Normal, attempt.Stop.Token).Task;
         await show.ConfigureAwait(false);
         // 取消只提前退出等待层；Drain 随后才真正取消并 join 原读帧/解码/两条 TLS。

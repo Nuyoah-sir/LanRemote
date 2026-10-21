@@ -29,7 +29,7 @@ internal sealed class FirstFrameRouter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(timeouts);
         ArgumentNullException.ThrowIfNull(frames);
-        if (context.DisplayCatalogSend?.DisplayRequestPrepare is not null)
+        if (IsCoordinated(context))
             throw new ArgumentException("自动切屏协调需要生产者工厂路由。", nameof(context));
         _context = context;
         _timeouts = timeouts;
@@ -48,7 +48,7 @@ internal sealed class FirstFrameRouter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(timeouts);
         ArgumentNullException.ThrowIfNull(factory);
-        bool coordinated = context.DisplayCatalogSend?.DisplayRequestPrepare is not null;
+        bool coordinated = IsCoordinated(context);
         if (coordinated && (context.DisplayCatalogSend?.UseSessionWriter != true || context.DisplayCatalogSend.DisplayRequestHandler is not null))
             throw new ArgumentException("自动切屏必须独占同一会话写者和请求处理器。", nameof(context));
         if (!enableProducerReplacement && !coordinated && firstFrameId is not null)
@@ -65,6 +65,11 @@ internal sealed class FirstFrameRouter
     internal VideoAttachStatus? AttachStatus { get; private set; }
     internal int AttachAttempts { get; private set; }
     internal ControlAuthSession? CatalogAuthSession { get; private set; }
+
+    // 两种准备工厂都代表自动切屏协调；与原 handler 模式互斥，装配校验见 ControlAuthSession.BindCatalogLifetime。
+    private static bool IsCoordinated(ControlAuthContext context) =>
+        context.DisplayCatalogSend is { } options &&
+        (options.DisplayRequestPrepare is not null || options.SessionDisplayRequestPrepare is not null);
 
     internal async Task RunAsync(AcceptedConnection connection, CancellationToken cancellationToken)
     {
@@ -464,7 +469,7 @@ internal sealed class FirstFrameRouter
         using CancellationTokenRegistration stopRegistration = hostToken.Register(
             static state => ((TaskCompletionSource)state!).TrySetResult(), stopped);
         ReplaceableVideoFrameSource source = new(lease.SessionId);
-        VideoFrameSender sender = _context.DisplayCatalogSend?.DisplayRequestPrepare is not null
+        VideoFrameSender sender = IsCoordinated(_context)
             ? new(_firstFrameId ?? 0UL, source)
             : _firstFrameId is { } first ? new(first) : new();
         object gate = videoLifetime.Gate;

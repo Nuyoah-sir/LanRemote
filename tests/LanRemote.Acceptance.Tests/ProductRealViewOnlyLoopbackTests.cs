@@ -200,8 +200,8 @@ public sealed partial class ProductRealViewOnlyLoopbackTests
                 }
                 await WaitOnUiAsync(() => items.Items.Count == 2, client);
                 Assert.Equal(catalogDisplays, items.Items.Cast<DisplayInfo>());
-                Assert.Contains("只读", ((TextBlock)view.FindName("CatalogStatusText")).Text);
-                Assert.Contains("非当前视频选屏状态", ((TextBlock)view.FindName("CatalogStatusText")).Text);
+                Assert.Contains("可请求切换", ((TextBlock)view.FindName("CatalogStatusText")).Text);
+                Assert.Contains("回执不等同物理输出", ((TextBlock)view.FindName("CatalogStatusText")).Text);
                 Assert.Equal(1, Volatile.Read(ref catalogCalls));
             }
             BitmapSource image = Assert.IsAssignableFrom<BitmapSource>(view.VideoImage.Source);

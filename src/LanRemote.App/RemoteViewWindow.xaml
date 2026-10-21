@@ -19,20 +19,30 @@
         </DockPanel>
         <StackPanel Grid.Row="1" Background="#FFF3F4F6">
             <TextBlock x:Name="CatalogStatusText" Margin="12,5" Foreground="#FF24292F"
-                       Text="等待远端屏幕目录（只读，尚不支持切换屏幕）。" TextWrapping="Wrap" />
+                       Text="等待远端屏幕目录（可请求切换屏幕；回执不等于物理输出）。" TextWrapping="Wrap" />
+            <TextBlock x:Name="SwitchStatusText" Margin="12,0,12,5" Foreground="#FF57606A"
+                       Text="切换：未请求。" TextWrapping="Wrap" />
             <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <ItemsControl x:Name="DisplayCatalogItems" Margin="12,0,12,5">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock Foreground="#FF24292F" TextWrapping="Wrap">
-                                <Run Text="屏幕 " /><Run Text="{Binding Id.Value, Mode=OneWay}" />
-                                <Run Text=" · " /><Run Text="{Binding Name, Mode=OneWay}" />
-                                <Run Text=" · " /><Run Text="{Binding Width, Mode=OneWay}" />
-                                <Run Text=" × " /><Run Text="{Binding Height, Mode=OneWay}" />
-                                <Run Text=" · 原点 (" /><Run Text="{Binding X, Mode=OneWay}" />
-                                <Run Text=", " /><Run Text="{Binding Y, Mode=OneWay}" /><Run Text=")" />
-                                <Run Text=" · 主屏：" /><Run Text="{Binding IsPrimary, Mode=OneWay}" />
-                            </TextBlock>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Foreground="#FF24292F" TextWrapping="Wrap" VerticalAlignment="Center">
+                                    <Run Text="屏幕 " /><Run Text="{Binding Id.Value, Mode=OneWay}" />
+                                    <Run Text=" · " /><Run Text="{Binding Name, Mode=OneWay}" />
+                                    <Run Text=" · " /><Run Text="{Binding Width, Mode=OneWay}" />
+                                    <Run Text=" × " /><Run Text="{Binding Height, Mode=OneWay}" />
+                                    <Run Text=" · 原点 (" /><Run Text="{Binding X, Mode=OneWay}" />
+                                    <Run Text=", " /><Run Text="{Binding Y, Mode=OneWay}" /><Run Text=")" />
+                                    <Run Text=" · 主屏：" /><Run Text="{Binding IsPrimary, Mode=OneWay}" />
+                                </TextBlock>
+                                <Button Grid.Column="1" Content="切换" Margin="10,0,0,0" Padding="10,1"
+                                        IsEnabled="False" Click="OnSwitchDisplayClick" />
+                            </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
