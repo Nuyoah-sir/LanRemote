@@ -2,34 +2,34 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：只支持新版双方，旧端拒绝并提示两端升级；无legacy单屏兼容/静默降级。产品政策不能冒充实际接线完成。**
-> ADR `docs/DECISIONS.md`（至109：内部显式多屏GDI采集；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至110：按真实认证会话装配的产品侧切屏接线；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-21，权威详HANDOFF§19.65/ADR109）
+## 当前续作点（2026-10-21，权威详HANDOFF§19.66/ADR110）
 
-**Last code commit：1028888b768b351384e239afd1d6f86b0a4efad5**，已普通push核remote一致；5files/+1389/-19（2production改+2新test+1旧test单同步行）。internal CreateMultiDisplay多屏枚举/采集已实现，默认primary API/App仍旧，非M6整体收口。本次仅三文档回填，不dotnet、不commit、不新建文件。
+**Last code commit：93d72e2027a257157628b31633b3cebc88971038**，13files/+227/-28（9生产改+2新test+1旧test两行受控更新）；本地已提交，push三次均schannel TLS握手失败，未核remote一致，须在可联网环境补推。产品侧切屏接线完成：App经Capture/Sessions友元用多屏GDI目标准备，Host按真实认证会话装配prepare与同一会话写者，Client交付后attach前enable并用三参Presenter，窗口接真实请求/busy/停止与请求解绑。默认公开行为与目录每连接单发不变，非M6收口。
 
-**Validation。** 新53（45合成native+8真实offscreen），三轮定向各231PASS；四正式target-dc/post-snapshot-final/pre-stability/pixel-budget为3/21/1/1原Assert红恢复。原post-snapshot因CS8602 warning gate未测，不算kill。final-v2于11:22:49–11:26:54+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6922PASS/0FAIL/0SKIP（Capture296/Transport5229/Acceptance543，其它原同）。summary10518字节/SHA `fd1d4036b66f7963cb61c6c880ab8003f4c5681120d543dd05edb3f7742b8b71`。
+**Validation。** 新18（回环2+窗口16），首轮及两次恢复定向各45PASS；四正式session-identity/busy-flag/unbind-flag/client-target各1个原Assert红并精确恢复。final-v1于17:11:59–17:16:30+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6940PASS/0FAIL/0SKIP（Acceptance561/Transport5229/Capture296/Sessions285/Core197/Security66/Protocol303/Integration3）。summary10626字节/SHA `1c6094be1365b3c4982edc5be65420ac08a20c6d79ab739589034a62648aff63`。
 
-audit-v2于11:30:13–11:30:17+08:00原4552/外层/主线程exit0，report1177362字节/SHA `805e61ef3de63184677a5862d2300825e62cc28368dcbed7d10b7a5624dd06d6`；428源/214原件/55TRX/42151execution，旧6869完整身份+53/-0。audit-v1用Gdi substring跨项目误计Acceptance一测试为Capture定向；v2按原argv project/storage边界筛，旧失败保留。
+audit-v2于17:18:28–17:18:33+08:00原59376/外层/主线程exit0，report1001213字节/SHA `3b8cf265d0db882ea973c59583c0107f87ba90ed63ccd12f50c0141832026f4b`；430源/168原件/39TRX/27863execution，旧6922完整身份+18/-0。audit-v1因旧测试逆变换针脚漏写16空格缩进失败，原报告保留不覆盖。
 
-**唯一旧test例外。** final-v1 Debug6922绿，Release旧HostDisplayRequestReaderTests.IdleReadAhead...在line277 Requests为空：独立handler与heldEntered无happens-before。仅补`await f.Dispatched.Task.WaitAsync(Guard);`54字节，原断言/身份保留、Transport生产不改；固定hash唯一逆变换认证，Capture生产与测试真正冻结，不能笼统称所有旧test不变。
+**唯一旧test例外。** 目录状态文本由“只读目录”改为“可请求切换屏幕（回执不等同物理输出）”，旧ProductRealViewOnlyLoopbackTests两条Assert.Contains期望随之更新；仅替换两个期望子串，身份/断言形式/目标表达式不变，完整两行块唯一逆替换逐字恢复固定OLD hash（34204字节 / a62f618a…）。
 
-**采集合同。** 所选DeviceName DC、本地0,0，负桌面坐标仅元数据；采前/清理后均完整双遍stable snapshots，核全部有序Observation，不是只核目标。仅target限8192及16,777,216像素，DC/DIB/租用前拒；无目标/变化无fallback。原单飞/原Task/取消等待/BGRA/alpha/清零归还/独立清理错误树复用。快照非原子拓扑/ABA保证；真实offscreen非真实副屏/混合DPI/热插拔/双机验收。
+**真实身份与闭包坑（必记）。** 协调器准备闭包只能持登记表SessionId的**快照值**：直接捕获registration会让编译器把该局部提升到闭包类，异步状态机不再有<registration>5__N字段，25个旧Transport反射断言全红；旧测试不可改时改生产，语义上也更贴合“装配时绑定真实身份”。FirstFrameRouter用统一IsCoordinated覆盖两种prepare工厂。
 
-**§19.64历史/失败/交付见HANDOFF。** 真实视频/JPEG/Source同父gate私有owner/epoch/ulong FrameId，单encoded/decoded；F仅下界、核尺寸、回执唤醒、Source前/重入后复检。LastPresented非scanout/授权；先撤销/close/cancel再join原IO/解码/UI，合成parent非TLS/审批/双机。
+**变异纪律补充。** 不能被原Assert杀死的变异不得计入正式：移除EnableDisplaySwitching会由BindDisplayPresentation先抛InvalidOperationException（Guard非Assert）；HostRuntimeService多屏后端在本机单显示下改回主屏无可观测差异、无测试可捕获。整仓并行负载下DisplayPresentationTests.EarlyAck与HostDisplayRequestReaderTests.StopBefore…会抖动（单独/整项目/排除新增后均绿），最终证据以重跑后的全量stage为准。
 
-**§19.53–63详HANDOFF。** 真实sender建pending禁fake Arm；4KiB/10s唯一reader，earlyACK不挡EOF，发送/caller注册退出才父gate发布Latest，新请求/停止撤销。prepare互斥handler且需writer，无source拒绝不等；首读不重读、忙槽关闭。原预算/seq不回绕/错误逐槽保树，私有代际预约到reply退出。Stop先赢不写，提交先赢可迟到须close/cancel/join；FirstSend非join/授权，先停source再join，迟到候选三清理。Router ACK/初装/sender登记后发布，先摘槽再close。
+**§19.65（多屏GDI，已交付）简记。** internal CreateMultiDisplay多屏枚举/采集，默认primary仍旧；三轮定向231PASS，四变异3/21/1/1，final-v2 6922双配置全绿，代码1028888已push；唯一旧test同步54字节例外。快照非原子拓扑/ABA保证，真实offscreen非真实副屏/混合DPI/热插拔/双机。
 
-**M5收口见§19.29。** 2026-10-12用户确认稳定、撤回卡顿；不重验/加压测，原十分钟/慢网/双方上网确认保留，不造数字/审计。旧ZIP不覆盖、不含M6。Host默认5/50/JPEG60；显式10/15/20/30用75/JPEG60；scale50/67/75/100、JPEG40..85。禁Auto/config热写，停完整再开；预分配≤16,777,216像素，32MiB仅payload非全机内存。
+**§19.64详HANDOFF。** 真实视频/JPEG/Source同父gate私有owner/epoch/ulong FrameId，单encoded/decoded；F仅下界、核尺寸、回执唤醒、Source前/重入后复检。LastPresented非scanout/授权；先撤销/close/cancel再join原IO/解码/UI，合成parent非TLS/审批/双机。
 
-**M6 V2-only已接、未收口。** TLS/pinning→Hello2→Challenge2→Offer/Accept→clientProofV2→真实审批→serverProofV2→父资格；同session agreement非授权，绝对deadline/单读者/close/join。仅合法V1/未知版声明提示升级且UI标未认证；EOF/timeout/畸形不确诊旧端，身份/pin/proof/密码/审批错优先，无fallback。VideoHello/ACK protocol1、VIDEO-V1/83字节transcript、第二TLS/LRVF不变。
+**§19.53–63详HANDOFF。** 真实sender建pending禁fake Arm；4KiB/10s唯一reader，earlyACK不挡EOF，发送/caller注册退出才父gate发布Latest。prepare互斥handler且需writer；首读不重读、忙槽关闭。原预算/seq不回绕/错误逐槽保树，私有代际预约到reply退出。Router ACK/初装/sender登记后发布，先摘槽再close。
 
-§19.43 Accept单删仍绿，不称单点kill。
+**M5收口见§19.29。** 2026-10-12用户确认稳定、撤回卡顿；不重验/加压测。旧ZIP不覆盖、不含M6。Host默认5/50/JPEG60；显式10/15/20/30用75/JPEG60；scale50/67/75/100、JPEG40..85。禁Auto/config热写，停完整再开；预分配≤16,777,216像素。
 
-**§19.44–52详HANDOFF。** 唯一reader256KiB/10秒原锚，Reached非发布/WhenAny非join。success flush→Register→秘密finally→holding→目录；先close/注销再join全部根，Dispose后取VideoCompletion，Abort非退出。目录seq非授权/拓扑世代；Closing/SessionEnded/Drain前清timer/getter/token/ItemsSource，拒迟到且异常不跳Drain。固定目标唯一ID/record、无回退、先预算再encoder、交付未Start。编号Max一次不回绕且非发送/显示；Replace接管候选，旧Start/Read/迟到owner结算后新Start，三清理及防自join、提交帧不撤回。
+**M6 V2-only已接、未收口。** TLS/pinning→Hello2→Challenge2→Offer/Accept→clientProofV2→真实审批→serverProofV2→父资格；同session agreement非授权。仅合法V1/未知版声明提示升级且UI标未认证。VideoHello/ACK protocol1、VIDEO-V1/83字节transcript、第二TLS/LRVF不变。
 
-**Next：App接线，非重写GDI。** 接Capture/Sessions internal friend与固定目标准备；Host每个真实认证会话prepare/writer，禁共享lastSessionId或临时Guid假认证身份，接口缺session须内部传递。Client认证最终交付后attach/monitor前enable、三参Presenter，窗口真实请求/busy/停止与请求解绑。冻结settings；目录每连接单发、无动态刷新。无需当前人工前置，后续live/画质及M6双端验收保留。换代非显示，单次Video租约禁重连。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。16字段/15NUL/无尾NUL、AUTH/GRANT-V2不变。
+**Next：产品联调，非再接线。** 真实Host/Client双机TLS联调、每会话画质与M6真机双端验收；当前无需人工前置。回执仍是逻辑下界，不等于物理scanout或真人验收。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 

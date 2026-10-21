@@ -2046,3 +2046,23 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **独立审计与提交。** audit-v1错误地按Gdi substring跨项目匹配，把Acceptance一项用例计入Capture定向，旧失败保留；audit-v2按原argv project/storage边界正确筛选。11:30:13–11:30:17+08:00原进程4552/外层/主线程exit0，report1177362字节/SHA `805e61ef3de63184677a5862d2300825e62cc28368dcbed7d10b7a5624dd06d6`；428源/214原件/55TRX/42151execution，旧6869完整身份+53/-0，旧测试字节差异仅上述固定hash逆变换认证的同步例外。代码`1028888b768b351384e239afd1d6f86b0a4efad5`已普通push并核remote一致，5files/+1389/-19（2production改+2新test+1旧test单同步行）；详HANDOFF§19.65。本次仅文档回填，未重新运行dotnet、未提交。
 
 **下一片。** internal CreateMultiDisplay多屏枚举/采集已实现，不再笼统称GDI无副屏能力；默认primary API及App原主屏路径保留。下一片接App→Capture/Sessions internal friend和固定目标准备；Host每个真实认证会话装配prepare/writer，禁共享lastSessionId或临时Guid假认证身份，若接口缺session须沿内部接缝传递。Client在认证最终交付后、attach/monitor前EnableDisplaySwitching并使用三参RemoteVideoPresenter，窗口补真实请求/busy/停止与请求解绑。冻结settings，目录仍每连接单发、无动态刷新。随后Host/Client联调、每会话画质和M6真机双端验收；真实offscreen不是实际副屏/混合DPI/热插拔验收。当前无需人工前置，不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧包，无M6产品包。
+
+### ADR-110 — 按真实认证会话装配的产品侧切屏接线
+
+**2026-10-21；产品侧切屏已接线，默认公开行为与目录发送节奏不变。** e82ccb73/6922起。App经Capture/Sessions的InternalsVisibleTo使用多屏GDI后端与固定目标准备工厂；Host按每个真实认证会话装配prepare与同一会话写者；Client在认证最终交付后、attach/monitor前EnableDisplaySwitching并用三参RemoteVideoPresenter；窗口目录项接真实请求、忙状态与停止解绑。不改网络、防护、权限、Undo或旧ZIP，冻结预览settings，目录仍每连接单发、无动态刷新。
+
+**真实身份必须逐会话传递。** HostDisplayCatalogSendOptions新增internal SessionDisplayRequestPrepare(Guid, DisplayInfo, CancellationToken)，与DisplayRequestHandler互斥且只能装配一次；ControlAuthContext.WithSessionDisplayRequestPrepare须先有目录来源并以UseSessionWriter=true重建选项。ControlAuthSession以登记表真实SessionId的快照值包装协调器准备闭包，禁共享lastSessionId或临时Guid冒充；闭包只持值不持登记对象——首轮直接捕获registration使编译器把该局部提升到闭包类，异步状态机不再有<registration>5__N字段，25个旧Transport反射断言失败，改为快照取值后旧测试零改动恢复。FirstFrameRouter用统一IsCoordinated覆盖两种准备工厂。
+
+**Client与窗口。** connect返回后先EnableDisplaySwitching再AttachVideoAsync，再以三参Presenter绑定请求代际屏障；窗口StartDisplaySwitching把请求接到同一Control会话真实登记/发送/回执等待，null表示未确认/被拒/已停止。按钮XAML默认禁用，绑定后才刷新；统一门禁（已停/关闭中/会话结束/忙/未绑定/取消/目标不在当前目录快照）与分类状态文本；StopDisplayCatalog/SessionEnded同目录解绑并清stop与回调，纳入DisconnectHandlerReleased证据。回执为逻辑下界，非物理scanout或远端授权。
+
+**受控旧测试两行例外。** 产品目录状态文本由“只读目录”改为“可请求切换屏幕（回执不等同物理输出）”，旧ProductRealViewOnlyLoopbackTests两条Assert.Contains期望随之更新；仅替换两个期望子串，身份/断言形式/目标表达式不变，完整两行块唯一逆替换逐字恢复固定OLD原hash（34204字节 / SHA `a62f618aecc0f850d4c6d94920e387c21040806a6ffbc1c98b0c613d05c21353`）。审计仅此路径规范化比较，其余测试与生产严格逐字冻结。
+
+**变异与未采用项。** 四正式变异session-identity / busy-flag / unbind-flag / client-target各1/1/1/1原Assert红并精确恢复。HostRuntimeService多屏后端选择未设变异（本机单显示、无测试经HostRuntimeService真实切屏，改回主屏无可观测差异，该选择已在ADR-109四变异验证）；移除EnableDisplaySwitching的变异未采用（BindDisplayPresentation先抛InvalidOperationException，属Guard非原Assert，时序由回环Fact A全链覆盖）。
+
+**失败与中间历史。** 首轮final-v1暴露25个Transport状态机字段失败（上述闭包捕获问题，已修生产）。修复后两轮final-v1另有旧DisplayPresentationTests.EarlyAck与HostDisplayRequestReaderTests.StopBefore…在整仓并行负载下抖动；单独、Acceptance整项目及排除新增测试后的整仓复跑均全绿，本片未改其逻辑；两轮与被修复final不同源且审计history仅支持构建门禁形态，故删除后整体重跑并在此显式记录。audit-v1因旧测试逆变换针脚漏写16空格缩进失败，原报告保留；audit-v2通过。
+
+**最终验证。** 新18项（回环2+窗口16），首轮及两次恢复定向各45PASS。final-v1于17:11:59–17:16:30+08:00四Rebuild零警告错误，六dotnet及worker/launcher完整wait0；Debug/Release各6940PASS/0FAIL/0SKIP（Acceptance561、Transport5229，Capture296/Sessions285/Core197/Security66/Protocol303/Integration3）。旧6922完整四字段身份+18/-0。summary10626字节/SHA `1c6094be1365b3c4982edc5be65420ac08a20c6d79ab739589034a62648aff63`。
+
+**独立审计与提交。** 17:18:28–17:18:33+08:00原审计进程59376/外层/主线程exit0；report.json 1001213字节/SHA `3b8cf265d0db882ea973c59583c0107f87ba90ed63ccd12f50c0141832026f4b`，430源/168观察原件/39TRX/27863execution，前片三成品摘要保持。代码`93d72e2027a257157628b31633b3cebc88971038`已本地提交，13files/+227/-28（9生产改+2新test+1旧test两行受控更新）；`git push`三次均schannel TLS握手失败，未核远端一致，须在可联网环境补推；详HANDOFF§19.66。
+
+**下一片。** 产品侧仅完成进程内接线：真实TLS回环、协调器装配与窗口交互已贯通，但不等于双机TLS联调、物理scanout或真人验收；回执仍是逻辑下界。下一步真实Host/Client产品联调、每会话画质与M6真机双端验收，当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。

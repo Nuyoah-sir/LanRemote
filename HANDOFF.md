@@ -3886,3 +3886,27 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 **独立审计。** audit-v1因Gdi substring跨项目匹配，误把Acceptance的一项测试计入Capture定向而失败；旧失败原件保留。audit-v2按原argv的project/storage边界正确筛选，不放宽项目身份。11:30:13–11:30:17+08:00原审计进程4552/外层/主线程exit0，report1177362字节/SHA `805e61ef3de63184677a5862d2300825e62cc28368dcbed7d10b7a5624dd06d6`；428源/214原件/55TRX/42151execution，旧6869完整身份+53/-0。身份保持与字节冻结分开表述，上述唯一旧测试54字节同步例外通过固定hash唯一逆变换认证。
 
 **限制与下一步。** 双遍/采前采后一致仅检测实际观察到的变化，不保证原子拓扑、ABA检测或未来设备身份；原索引不是持久授权，工厂prepare与捕获间不存在跨调用拓扑锁。internal CreateMultiDisplay已具备显式多屏枚举/采集能力，不再将后端笼统称为无副屏能力；默认primary API和App仍走旧主屏路径。本片未读真实副屏，offscreen不等于真实副屏/混合DPI/热插拔或双机验收。下一片为App接通Capture/Sessions internal friend与固定目标准备，Host按每个真实认证会话装配prepare/writer，禁止共享lastSessionId或临时Guid冒充认证身份；若接口缺session须内部传递真实身份。Client认证最终交付后、attach/monitor前enable并用三参Presenter，窗口接真实请求/busy/停止与请求解绑。冻结settings，目录仍每连接单发、无动态刷新；随后产品联调、每会话画质和M6双端验收，当前无需人工前置。无M6产品包，不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。
+
+### 19.66 M6 产品侧切屏接线（2026-10-21）
+
+**起点/范围（ADR110）。** e82ccb73/6922继续，把上一片备好的多屏采集与目标准备接进产品链路。本片仅修改9个生产文件并新增两个Acceptance测试类；不改网络、防护、权限、Undo或旧ZIP，不重验M4/M5、不启M7，冻结预览settings，目录仍每连接单发、无动态刷新。App接通Capture/Sessions internal friend（两个csproj的InternalsVisibleTo）后使用多屏GDI后端与固定目标准备工厂；Host按每个真实认证会话装配prepare与同一会话写者；Client在认证最终交付后、attach/monitor前enable并用三参屏障Presenter；窗口目录项接真实请求、忙状态与停止解绑。
+
+**会话感知目标准备。** HostDisplayCatalogSendOptions新增internal SessionDisplayRequestPrepare(Guid, DisplayInfo, CancellationToken)，与DisplayRequestHandler互斥且只能装配一次；ControlAuthContext.WithSessionDisplayRequestPrepare要求先有目录来源并以UseSessionWriter=true重建选项，不共享可变态。ControlAuthSession.BindCatalogLifetime把会话写者强制纳入校验；协调器准备闭包以登记表真实SessionId的**快照值**包装（Guid preparedSessionId = registration!.SessionId），闭包不持有登记对象本身——首轮实现直接捕获registration，编译器把该局部提升到闭包类而非异步状态机，25个旧Transport测试反射读取<registration>5__N的断言全部失效；改为快照取值后旧测试零改动恢复，语义上也在装配时即绑定真实身份，禁止共享lastSessionId或临时Guid冒充认证身份。FirstFrameRouter以统一IsCoordinated检测两种准备工厂，sender选择与构造校验一致。
+
+**Client与窗口。** ClientConnectService在connect返回后、AttachVideoAsync前调用EnableDisplaySwitching，随后用view.StartDisplaySwitching(RequestDisplaySwitch, stop)把窗口请求接到同一Control会话的真实登记、发送与回执等待，最后以三参RemoteVideoPresenter绑定请求代际屏障。RemoteViewWindow目录项新增切换按钮，XAML默认禁用，绑定后才刷新启用；请求核心统一门禁（已停止/关闭中/会话已结束/忙/未绑定/取消/目标不在当前目录快照）并分类状态文本（回执/未完成/已取消/被拒绝/失败）；StopDisplayCatalog与SessionEnded和目录同一时机解绑切屏并清空stop与回调字段，DisconnectHandlerReleased纳入解绑证据。
+
+**测试与定向。** 新增18项：ProductDisplaySwitchLoopbackTests 2项（真实Control TLS回环，验证回执DisplayId与尺寸、回执及准备工厂的SessionId都等于本Host实际登记的认证会话身份、切屏后呈现新一代红帧且50轮空转不被旧代覆盖、目录外请求在发送前被拒且不结束会话、忙时第二请求不叠加发送）与ProductDisplaySwitchWindowTests 16项（STA窗口交互生命周期）。首轮及两次恢复定向各45 PASS / 0 FAIL / 0 SKIP。
+
+**受控旧测试两行例外。** 产品目录状态文本由“只读目录”改为“可请求切换屏幕（回执不等同物理输出）”，旧ProductRealViewOnlyLoopbackTests的两条Assert.Contains期望随之更新；只替换两个期望子串，测试身份、断言形式与目标表达式不变，完整两行块唯一逆替换逐字恢复固定OLD原hash（34204字节 / SHA `a62f618aecc0f850d4c6d94920e387c21040806a6ffbc1c98b0c613d05c21353`）。审计仅对该路径做old→new规范化比较，其余测试与生产严格逐字冻结。
+
+**变异与未采用项。** 四项正式变异session-identity（准备工厂收到伪造Guid.Empty身份）/ busy-flag（忙标志永不置位）/ unbind-flag（停止解绑标志不置位）/ client-target（窗口真实目标不透传，固定default）分别1 / 1 / 1 / 1个原Assert红，原进程退出后精确恢复。HostRuntimeService的多屏后端选择未设变异：本机单显示且无任何测试经HostRuntimeService执行真实切屏，改回主屏后端无可观测差异、无测试可捕获，该选择已在§19.65以四项变异验证。移除EnableDisplaySwitching调用的变异未采用：生产守卫BindDisplayPresentation会先抛InvalidOperationException，属Guard而非测试原Assert，不能作为kill；该启用时序由回环Fact A全链（启用→附着→监控→绑定→回执）覆盖。
+
+**首轮与抖动轮处理。** 首轮final-v1暴露上述25个Transport状态机字段失败（已按上文修复）。修复后重跑的两轮final-v1另有旧DisplayPresentationTests.EarlyAck与HostDisplayRequestReaderTests.StopBefore…在整仓并行负载下抖动失败；两者单独复跑、Acceptance整项目复跑、以及排除本片新增测试后的整仓复跑均全绿，本片未改其逻辑。该两轮源码与被修复后的final不同源，且审计history形态仅支持构建门禁失败（无TRX），故不保留为历史stage，连同首轮缺陷轮一并删除后整体重跑；此事实在此显式记录，不隐藏。
+
+**最终全量/提交。** final-v1于17:11:59–17:16:30 +08:00完成四次Rebuild零警告零错误，六dotnet及worker/launcher完整wait0；Debug/Release各6940 PASS / 0 FAIL / 0 SKIP：Core197 / Security66 / Protocol303 / Integration3 / Transport5229 / Acceptance561 / Capture296 / Sessions285。旧6922项完整四字段身份保留，新增18项，删除0。summary 10626字节 / SHA `1c6094be1365b3c4982edc5be65420ac08a20c6d79ab739589034a62648aff63`。代码`93d72e2027a257157628b31633b3cebc88971038`已提交，13files / +227 / -28（9生产修改、2新增test、1旧test两行受控更新）；推送时origin `https://github.com/Nuyoah-sir/LanRemote.git` 三次均报schannel TLS握手失败，本地提交与远端未核一致，待网络恢复后普通push（见“未完成/阻断”）。
+
+**独立审计。** audit-v1因旧测试逆变换针脚漏写行首16空格缩进，唯一匹配校验失败；原失败报告保留，不覆盖。audit-v2于17:18:28–17:18:33 +08:00原审计进程59376 / 外层 / 主线程exit0；report.json 1001213字节 / SHA `3b8cf265d0db882ea973c59583c0107f87ba90ed63ccd12f50c0141832026f4b`；430源 / 168观察原件 / 39TRX / 27863唯一execution，旧6922完整身份 +18 / -0，前片三份成品（非主屏GDI ZIP/TXT/SHA）摘要保持。身份保持与字节冻结分开表述，上述唯一旧测试两行例外通过固定hash唯一逆变换认证。
+
+**限制与下一步。** 本片只是产品侧接线：真实TLS回环、协调器与窗口已在进程内贯通，但不等同双机TLS联调、物理scanout或真人验收；回执仍是逻辑下界而非承诺实际显示。默认产品未变更公开行为，目录仍每连接单发、无动态刷新，预览settings冻结。下一步为真实Host/Client产品联调、每会话画质与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。
+
+**未完成/阻断。** 代码提交93d72e2仅存在于本地：`git push` 三次均以 `schannel: failed to receive handshake, SSL/TLS connection failed` 失败（含沙箱外重试），非仓库或凭据配置问题；文档提交与打包完成后仍需在可联网环境执行普通push并核对远端一致。
