@@ -2029,6 +2029,20 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 
 **最终验证。** initial-v4/restored-v2定向各35PASS；新增22全部Acceptance，原13默认呈现测试保持。四最终mutation frame-floor/pending-gate/receipt-size/monotonic-id分别1/1/1/2原Assert红恢复。final-v2于19:20:23–19:24:28+08:00四Rebuild零警告错误，六dotnet及worker/launcher完整wait0；Debug/Release各6869PASS/0FAIL/0SKIP（Acceptance543、Transport5229，其它项目不变）。summary10453字节/SHA `aed523d3963a82a861514d7af2420398ffcfd9f080c830e16df12e071859a41b`。
 
-**独立审计与提交。** 19:24:59–19:25:05+08:00原audit进程60052/外层/主线程exit0；report394170字节/SHA `1c5ca69d747b29969c285797a0e116613ef7f52911d475066d84ffdbe63c7993`，426源/285观察原件/61TRX/41361execution，旧6847完整四字段身份+22/-0，前片三成品保持。代码`7757298396686201a272cb61e6f61bbb855d53bc`已普通push并核remote一致，8files/+1731/-5；详HANDOFF§19.64。package交付数字由主线程后置回填，本条不预填。
+**独立审计与提交。** 19:24:59–19:25:05+08:00原audit进程60052/外层/主线程exit0；report394170字节/SHA `1c5ca69d747b29969c285797a0e116613ef7f52911d475066d84ffdbe63c7993`，426源/285观察原件/61TRX/41361execution，旧6847完整四字段身份+22/-0，前片三成品保持。代码`7757298396686201a272cb61e6f61bbb855d53bc`已普通push并核remote一致，8files/+1731/-5；详HANDOFF§19.64。307条目验证包及验收TXT/SHA三成品已交付，原件保持。
 
-**下一片。** 不是仅按钮：GdiScreenCaptureBackend当前仅主屏，须补实际非主屏枚举/采集及Sessions目标准备到App的接缝；Host启用session writer/prepare，Client在认证交付后attach前enable并使用三参Presenter，窗口补请求/忙状态/停止解绑。目录仍每连接单发、无动态刷新。随后Host/Client联调、每会话画质和M6真机双端验收；当前无需人工前置，不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧包。
+### ADR-109 — 复用原GDI核心的内部显式多屏采集
+
+**2026-10-21；内部显式多屏GDI采集已验证，默认App仍旧。** 不暗改M5主屏行为。GdiScreenCaptureBackend新增两个internal CreateMultiDisplay工厂；原public无参及internal(native)仍primary-only，App默认未启用多屏。GdiDisplayCatalog提取只读完整DisplayObservation稳定快照，public目录返回及两遍校验合同不变，不扩大IGdiNative/PInvoke。
+
+**准备与交付。** 每帧先完整双遍枚举，仅从附着非镜像原始索引选目标，无匹配即拒不回退。目录可含超预算屏，只目标在任何DC/DIB/租用前受8192宽高、16,777,216像素预算限制。目标DeviceName创建设备DC，BitBlt源仍设备本地0,0，负坐标仅元数据。原单飞/原Task/取消/像素复制/alpha/清理/归还链共用，所有native成功清理后再完整双遍枚举并比较采前采后所有有序Observation字段，变化拒帧且清零归还。
+
+**边界。** 快照仅历史观察，不能保证原子性、检测ABA或跨prepare/捕获的持久硬件身份；不改DPI awareness、桌面、网络或权限。真实离屏DIB证明生产BitBlt等核心在选择后的合成源上工作，不是真实副屏/混合DPI/热插拔/双机验收。下一片再接Host prepare/写者和Client产品交互，默认App不在本片打开，M4/M5不重验、M7不启动。
+
+**唯一旧测试同步例外。** final-v1 Debug6922PASS，Release旧HostDisplayRequestReaderTests.IdleReadAheadHasNoTimerAndStopJoinsItsOriginalRead在line277原Assert.Single因Requests为空失败：独立handler与heldEntered无happens-before，held预读绕过BeforeIdleEof，Reached不保证派发入队。仅在原断言前补`await f.Dispatched.Task.WaitAsync(Guard);`这54字节，原断言及身份保留、Transport生产不改；固定hash与完整方法上下文唯一逆变换认证该例外，不笼统声称所有旧test未变。正式Capture生产和测试真正冻结，修正后完整重跑，失败轮原样保留。首次post-snapshot变异因CS8602 warning gate未运行测试，不算kill；仅修正变异replacement为snapshot!.Count，正式使用post-snapshot-final，原告警和收据保留。
+
+**最终验证。** 新53case（45合成native+8真实offscreen），三轮定向各231PASS。四正式mutation target-dc/post-snapshot-final/pre-stability/pixel-budget分别3/21/1/1原Assert红且精确恢复。final-v2于11:22:49–11:26:54+08:00完成四Rebuild零警告错误，六dotnet及worker/launcher完整wait0；Debug/Release各6922PASS/0FAIL/0SKIP（Capture296/Transport5229/Acceptance543，其它原同）。summary10518字节/SHA `fd1d4036b66f7963cb61c6c880ab8003f4c5681120d543dd05edb3f7742b8b71`。
+
+**独立审计与提交。** audit-v1错误地按Gdi substring跨项目匹配，把Acceptance一项用例计入Capture定向，旧失败保留；audit-v2按原argv project/storage边界正确筛选。11:30:13–11:30:17+08:00原进程4552/外层/主线程exit0，report1177362字节/SHA `805e61ef3de63184677a5862d2300825e62cc28368dcbed7d10b7a5624dd06d6`；428源/214原件/55TRX/42151execution，旧6869完整身份+53/-0，旧测试字节差异仅上述固定hash逆变换认证的同步例外。代码`1028888b768b351384e239afd1d6f86b0a4efad5`已普通push并核remote一致，5files/+1389/-19（2production改+2新test+1旧test单同步行）；详HANDOFF§19.65。本次仅文档回填，未重新运行dotnet、未提交。
+
+**下一片。** internal CreateMultiDisplay多屏枚举/采集已实现，不再笼统称GDI无副屏能力；默认primary API及App原主屏路径保留。下一片接App→Capture/Sessions internal friend和固定目标准备；Host每个真实认证会话装配prepare/writer，禁共享lastSessionId或临时Guid假认证身份，若接口缺session须沿内部接缝传递。Client在认证最终交付后、attach/monitor前EnableDisplaySwitching并使用三参RemoteVideoPresenter，窗口补真实请求/busy/停止与请求解绑。冻结settings，目录仍每连接单发、无动态刷新。随后Host/Client联调、每会话画质和M6真机双端验收；真实offscreen不是实际副屏/混合DPI/热插拔验收。当前无需人工前置，不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧包，无M6产品包。
