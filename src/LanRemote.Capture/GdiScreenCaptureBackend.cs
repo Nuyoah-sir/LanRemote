@@ -5,14 +5,17 @@ using LanRemote.Core.Models;
 
 namespace LanRemote.Capture;
 
-/// <summary>使用 GDI 采集当前主显示设备的物理像素，不支持采集其他显示器。</summary>
+/// <summary>默认使用 GDI 采集当前主显示设备的物理像素；多屏采集仅由内部工厂显式启用。</summary>
 /// <remarks>
 /// 实例同一时刻只接受一次采集；忙时拒绝而不排队。取消不会提前结束仍在执行的 native 调用。
-/// 不改变进程 DPI awareness、权限或桌面；此实现不代表已验证混合 DPI 环境。
+/// 多屏路径核对采前采后完整稳定观察，不承诺原子快照、检测 ABA 或未来设备身份。
+/// 负 X/Y 仅作为元数据；源 DC 使用所选设备名称，BitBlt 使用设备本地坐标 (0,0)。
+/// 不改变进程 DPI awareness、网络、权限或桌面；此实现不代表已验证混合 DPI 环境。
 /// </remarks>
 public sealed class GdiScreenCaptureBackend : IScreenCaptureBackend
 {
     private readonly IGdiNative _native;
+    private readonly GdiDisplayCatalog? _multiCatalog;
     private readonly object _captureGate = new();
     private Task<CapturedFrame>? _operation;
     private Task? _originalWorker;
@@ -25,22 +28,33 @@ public sealed class GdiScreenCaptureBackend : IScreenCaptureBackend
     {
     }
 
-    internal GdiScreenCaptureBackend(IGdiNative native)
+    internal GdiScreenCaptureBackend(IGdiNative native) : this(native, false)
+    {
+    }
+
+    private GdiScreenCaptureBackend(IGdiNative native, bool multi)
     {
         ArgumentNullException.ThrowIfNull(native);
         _native = native;
+        _multiCatalog = multi ? new GdiDisplayCatalog(native) : null;
     }
 
-    /// <summary>返回当前主显示器，标识取实际 EnumDisplayDevicesW 设备枚举索引。</summary>
-    /// <remarks>只返回主屏，不把过滤后的列表位置当成设备标识。</remarks>
-    /// <returns>只包含当前主显示器的只读列表。</returns>
-    public IReadOnlyList<DisplayInfo> GetDisplays() => new[] { ReadPrimaryDisplay().Info };
+    /// <summary>内部显式创建多屏 GDI 后端；构造不枚举设备或执行 native I/O。</summary>
+    internal static GdiScreenCaptureBackend CreateMultiDisplay() => new(new GdiNative(), true);
+
+    /// <summary>内部显式创建使用指定 native 的多屏后端；构造仅检查空值并保存依赖。</summary>
+    internal static GdiScreenCaptureBackend CreateMultiDisplay(IGdiNative native) => new(native, true);
+
+    /// <summary>默认返回当前主显示器；内部显式多屏实例返回稳定观察到的附着非镜像设备。</summary>
+    /// <remarks>标识取实际 EnumDisplayDevicesW 设备枚举索引，不把过滤后的列表位置当成设备标识。</remarks>
+    /// <returns>默认仅包含主屏；多屏列表只读，列出的设备仍须在采集时检查像素预算。</returns>
+    public IReadOnlyList<DisplayInfo> GetDisplays() => _multiCatalog?.GetDisplays() ?? new[] { ReadPrimaryDisplay().Info };
 
     /// <summary>在线程池中采集一帧 top-down BGRA32，alpha 固定为 255。</summary>
-    /// <param name="displayId">当前主显示设备的枚举索引。</param>
+    /// <param name="displayId">默认仅接受当前主屏索引；内部多屏实例接受本次稳定观察中的设备原始枚举索引。</param>
     /// <param name="cancellationToken">取消令牌；操作结束及资源清理后才报告取消。</param>
     /// <returns>调用方负责释放的帧。</returns>
-    /// <exception cref="NotSupportedException">指定设备不是当前主显示器，或没有可用主显示器。</exception>
+    /// <exception cref="NotSupportedException">默认路径没有匹配的主屏，或多屏目标缺失、镜像、脱离；不回退其他设备。</exception>
     /// <exception cref="InvalidOperationException">实例正忙、显示配置变化或 GDI 清理失败。</exception>
     /// <exception cref="AggregateException">原始操作和清理、或多个清理步骤同时失败。</exception>
     public ValueTask<CapturedFrame> CaptureAsync(DisplayId displayId, CancellationToken cancellationToken)
@@ -86,10 +100,31 @@ public sealed class GdiScreenCaptureBackend : IScreenCaptureBackend
     private CapturedFrame CaptureCore(DisplayId displayId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        GdiPrimaryDisplay display = ReadPrimaryDisplay();
-        if (display.Info.Id != displayId)
+        IReadOnlyList<GdiDisplayCatalog.DisplayObservation>? snapshot = _multiCatalog?.ReadStableSnapshot();
+        GdiPrimaryDisplay display;
+        if (snapshot is null)
         {
-            throw new NotSupportedException("GDI 后端只支持当前主显示设备的标识。");
+            display = ReadPrimaryDisplay();
+            if (display.Info.Id != displayId)
+            {
+                throw new NotSupportedException("GDI 后端只支持当前主显示设备的标识。");
+            }
+        }
+        else
+        {
+            GdiDisplayCatalog.DisplayObservation observation = snapshot.SingleOrDefault(item => item.Info.Id == displayId)
+                ?? throw new NotSupportedException("指定标识不是当前桌面的附着非镜像显示设备；不回退其他设备。");
+            if (observation.Info.Width is < 1 or > FrameLimits.MaxDimension ||
+                observation.Info.Height is < 1 or > FrameLimits.MaxDimension ||
+                (long)observation.Info.Width * observation.Info.Height > FrameLimits.MaxDecodedPixels)
+            {
+                throw new ArgumentOutOfRangeException(nameof(displayId),
+                    "所选屏幕尺寸超过M5宽高或像素预算；未分配GDI像素，不静默缩小实屏。");
+            }
+
+            display = new GdiPrimaryDisplay(observation.Info, observation.DeviceName, observation.DeviceId,
+                observation.DeviceKey, observation.Orientation, observation.FixedOutput, observation.BitsPerPixel,
+                observation.Frequency, observation.Flags);
         }
 
         int stride = checked(display.Info.Width * 4);
@@ -177,9 +212,16 @@ public sealed class GdiScreenCaptureBackend : IScreenCaptureBackend
 
             cancellationToken.ThrowIfCancellationRequested();
             // 成功交付前 native 资源必须全部清理，并重新核对设备身份和物理几何。
-            if (display != ReadPrimaryDisplay())
+            if (_multiCatalog is null)
             {
-                throw new InvalidOperationException("采集期间主显示设备或物理模式发生变化；未交付帧。");
+                if (display != ReadPrimaryDisplay())
+                {
+                    throw new InvalidOperationException("采集期间主显示设备或物理模式发生变化；未交付帧。");
+                }
+            }
+            else if (!snapshot!.SequenceEqual(_multiCatalog.ReadStableSnapshot()))
+            {
+                throw new InvalidOperationException("采集期间附着显示设备或物理模式发生变化；未交付帧。");
             }
 
             cancellationToken.ThrowIfCancellationRequested();

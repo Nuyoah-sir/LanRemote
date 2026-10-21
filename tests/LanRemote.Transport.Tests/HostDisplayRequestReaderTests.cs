@@ -274,6 +274,7 @@ public sealed class HostDisplayRequestReaderTests
         {
             Task completion = f.Start();
             await held.Reached.Task.WaitAsync(Guard);
+            await f.Dispatched.Task.WaitAsync(Guard);
             Assert.Single(f.Requests);
             Assert.Equal(1, f.Stream.Reads.Last().Length);
             Assert.Equal(0, f.Clock.TimerCount);

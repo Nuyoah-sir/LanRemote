@@ -4,9 +4,9 @@ namespace LanRemote.Capture;
 
 /// <summary>只读枚举当前桌面附着显示设备的物理几何；不提供采集或远端切屏能力。</summary>
 /// <remarks>
-/// 独立于 M5 主屏采集后端。设备 ID 是本次 EnumDisplayDevicesW 的原始索引，
+/// 独立于默认主屏采集路径，也供内部显式多屏采集使用。设备 ID 是本次 EnumDisplayDevicesW 的原始索引，
 /// 不是 HMONITOR、持久身份或未来切屏授权。两遍一致仅检测观察到的变化，
-/// 不承诺原子拓扑快照、之后不热插拔或真实混合 DPI 已验证。
+/// 不承诺原子拓扑快照、检测 ABA、之后不热插拔或真实混合 DPI 已验证；不改变 DPI、网络或权限。
 /// </remarks>
 public sealed class GdiDisplayCatalog
 {
@@ -31,7 +31,12 @@ public sealed class GdiDisplayCatalog
     /// <returns>只读列表；大屏元数据可列出，但不代表它符合现有帧采集/解码预算。</returns>
     /// <exception cref="NotSupportedException">当前桌面没有附着显示设备。</exception>
     /// <exception cref="InvalidOperationException">身份、主屏、几何无效，枚举超限或两次观察不一致。</exception>
-    public IReadOnlyList<DisplayInfo> GetDisplays()
+    public IReadOnlyList<DisplayInfo> GetDisplays() =>
+        Array.AsReadOnly(ReadStableSnapshot().Select(item => item.Info).ToArray());
+
+    /// <summary>两遍完整观察一致后返回只读快照，保留完整身份、状态、模式和枚举顺序。</summary>
+    /// <remarks>不暴露底层数组；观察一致不承诺原子性、检测 ABA 或未来设备身份。</remarks>
+    internal IReadOnlyList<DisplayObservation> ReadStableSnapshot()
     {
         DisplayObservation[] first = ReadSnapshot();
         DisplayObservation[] second = ReadSnapshot();
@@ -40,7 +45,7 @@ public sealed class GdiDisplayCatalog
             throw new InvalidOperationException("两次只读枚举的显示设备或物理模式不一致；未交付列表，请重新枚举。");
         }
 
-        return Array.AsReadOnly(first.Select(item => item.Info).ToArray());
+        return Array.AsReadOnly(first);
     }
 
     private DisplayObservation[] ReadSnapshot()
@@ -93,7 +98,7 @@ public sealed class GdiDisplayCatalog
         return displays.ToArray();
     }
 
-    private sealed record DisplayObservation(DisplayInfo Info, string DeviceName, string DeviceId,
+    internal sealed record DisplayObservation(DisplayInfo Info, string DeviceName, string DeviceId,
         string DeviceKey, string FriendlyName, uint StateFlags, uint ModeFields, uint Orientation,
         uint FixedOutput, uint BitsPerPixel, uint Frequency, uint Flags, uint PanningWidth, uint PanningHeight);
 }
