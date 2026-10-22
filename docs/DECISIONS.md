@@ -2066,3 +2066,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **独立审计与提交。** 17:18:28–17:18:33+08:00原审计进程59376/外层/主线程exit0；report.json 1001213字节/SHA `3b8cf265d0db882ea973c59583c0107f87ba90ed63ccd12f50c0141832026f4b`，430源/168观察原件/39TRX/27863execution，前片三成品摘要保持。代码`93d72e2027a257157628b31633b3cebc88971038`已本地提交，13files/+227/-28（9生产改+2新test+1旧test两行受控更新）；`git push`三次均schannel TLS握手失败，未核远端一致，须在可联网环境补推；详HANDOFF§19.66。
 
 **下一片。** 产品侧仅完成进程内接线：真实TLS回环、协调器装配与窗口交互已贯通，但不等于双机TLS联调、物理scanout或真人验收；回执仍是逻辑下界。下一步真实Host/Client产品联调、每会话画质与M6真机双端验收，当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。
+
+### ADR-111 — 每会话画质底座（Sessions层）
+
+**2026-10-22；画质仍默认主机级，但底座已可按会话指定。** 93d72e2/6940起。M6 DoD要求“每个Session画质独立”，此前画质只在工厂构造时给定、运行中禁止更换，所有会话共用同一设置。本片只补Sessions底座：新增两个internal按会话画质入口，画质只作用于本会话管线、不改工厂默认、不影响其他会话；不改协议、不改App/Host默认行为。
+
+**入口形态。** 不为既有CreateAsync/CreateForDisplayAsync增加重载——重载会让旧测试的反射形态断言出现AmbiguousMatchException，旧测试不可改；改为独立命名CreateWithSessionQualityAsync与CreateForDisplayWithSessionQualityAsync，形态契约与既有反射断言都不受影响。该缺陷轮不保留，改名后完整重跑定向/变异/恢复/双配置全量。
+
+**校验前置。** 画质在任何委托、显示器枚举与像素预算之前校验（旧路径是先建编码器再在管线构造里校验、靠catch清理）：非法档位同步拒绝，不创建采集后端或编码器。空会话标识先于画质，空画质按参数空值拒绝。
+
+**验证。** 新增11项，三轮定向各296PASS；四变异quality-ignored / quality-late-check / display-ignored / null-quality各1 / 5 / 1 / 1原Assert红恢复。final-v1于10:11:29–10:15:50+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6951PASS/0FAIL/0SKIP（Sessions296、Acceptance561、Transport5229等）。旧6940身份+11/-0；本片未改任何旧测试，无同步修正桥。audit-v3 10:18:34–10:18:39+08:00原42944/外层/主线程exit0，report906345字节/SHA `a4f2cd1d8199cbcf80c8dba94c89f1a84baba7693541878639b088026856ae0c`，431源/165原件/39TRX/28678execution。代码`32420e4dce4f1391b545f7198a51af065996a8ee`，2files/+262/-6；详HANDOFF§19.67。
+
+**下一片。** 把Host当前画质快照到每个认证会话（创建时固定、运行中互不影响），再接scale与quality presets、ping RTT、actual FPS与auto quality简单控制器，然后真实Host/Client产品联调与M6真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP，无M6产品包。

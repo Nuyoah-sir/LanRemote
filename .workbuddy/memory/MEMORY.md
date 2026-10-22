@@ -2,34 +2,26 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：只支持新版双方，旧端拒绝并提示两端升级；无legacy单屏兼容/静默降级。产品政策不能冒充实际接线完成。**
-> ADR `docs/DECISIONS.md`（至110：按真实认证会话装配的产品侧切屏接线；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至111：每会话画质底座；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-21，权威详HANDOFF§19.66/ADR110）
+## 当前续作点（2026-10-22，权威详HANDOFF§19.67/ADR111）
 
-**Last code commit：93d72e2027a257157628b31633b3cebc88971038**，13files/+227/-28（9生产改+2新test+1旧test两行受控更新）；2026-10-21 push三次均schannel TLS握手失败；2026-10-22已普通push并核remote一致（HEAD=origin/main=1dceab5）。产品侧切屏接线完成：App经Capture/Sessions友元用多屏GDI目标准备，Host按真实认证会话装配prepare与同一会话写者，Client交付后attach前enable并用三参Presenter，窗口接真实请求/busy/停止与请求解绑。默认公开行为与目录每连接单发不变，非M6收口。
+**Last code commit：32420e4dce4f1391b545f7198a51af065996a8ee**，2files/+262/-6（1生产改+1新test）；每会话画质底座已交付，App/Host仍未按会话分配画质。新增internal CreateWithSessionQualityAsync与CreateForDisplayWithSessionQualityAsync：画质只作用于本会话管线、不改工厂默认、不影响其他会话；校验提到任何依赖创建之前。
 
-**Validation。** 新18（回环2+窗口16），首轮及两次恢复定向各45PASS；四正式session-identity/busy-flag/unbind-flag/client-target各1个原Assert红并精确恢复。final-v1于17:11:59–17:16:30+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6940PASS/0FAIL/0SKIP（Acceptance561/Transport5229/Capture296/Sessions285/Core197/Security66/Protocol303/Integration3）。summary10626字节/SHA `1c6094be1365b3c4982edc5be65420ac08a20c6d79ab739589034a62648aff63`。
+**Validation。** 新11项，三轮定向各296PASS；四变异quality-ignored/quality-late-check/display-ignored/null-quality各1/5/1/1原Assert红恢复。final-v1于10:11:29–10:15:50+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6951PASS/0FAIL/0SKIP（Sessions296/Acceptance561/Transport5229/Capture296/Core197/Security66/Protocol303/Integration3）。audit-v3 10:18:34–10:18:39+08:00原42944/外层/主线程exit0，report906345字节/SHA `a4f2cd1d8199cbcf80c8dba94c89f1a84baba7693541878639b088026856ae0c`；431源/165原件/39TRX/28678execution，旧6940身份+11/-0。audit-v1/v2分别因旧report路径与runner pin失败，原报告保留。
 
-audit-v2于17:18:28–17:18:33+08:00原59376/外层/主线程exit0，report1001213字节/SHA `3b8cf265d0db882ea973c59583c0107f87ba90ed63ccd12f50c0141832026f4b`；430源/168原件/39TRX/27863execution，旧6922完整身份+18/-0。audit-v1因旧测试逆变换针脚漏写16空格缩进失败，原报告保留不覆盖。
+**形态契约坑（必记）。** 给既有internal准备入口加**重载**会让旧测试的反射取方法得到AmbiguousMatchException（Target_display_preparation_remains_internal_without_expanding_public_factory_contract）；旧测试不可改时须改用独立命名入口。另：上片闭包捕获registration使状态机无<registration>5__N字段——凡旧测试用反射读编译器生成成员，新增生产代码都要先想形态影响。
 
-**唯一旧test例外。** 目录状态文本由“只读目录”改为“可请求切换屏幕（回执不等同物理输出）”，旧ProductRealViewOnlyLoopbackTests两条Assert.Contains期望随之更新；仅替换两个期望子串，身份/断言形式/目标表达式不变，完整两行块唯一逆替换逐字恢复固定OLD hash（34204字节 / a62f618a…）。
+**画质现状。** VideoQualitySettings（5/10/15/20/30 FPS、50/67/75/100%、JPEG40..85、Auto现被ValidateSettings拒绝）仍以工厂/主机级settings传给管线；HostRuntimeService的previewSettings运行中禁止更换。M6 DoD要求每个Session独立。
 
-**真实身份与闭包坑（必记）。** 协调器准备闭包只能持登记表SessionId的**快照值**：直接捕获registration会让编译器把该局部提升到闭包类，异步状态机不再有<registration>5__N字段，25个旧Transport反射断言全红；旧测试不可改时改生产，语义上也更贴合“装配时绑定真实身份”。FirstFrameRouter用统一IsCoordinated覆盖两种prepare工厂。
+**§19.66（产品侧切屏，已交付）简记。** App经Capture/Sessions友元用多屏目标准备；Host按真实认证会话装配prepare与同一写者（SessionId快照入闭包）；Client交付后attach前EnableDisplaySwitching+三参Presenter；窗口目录项接真实请求/busy/停止解绑。三轮定向45PASS，四变异1/1/1/1，6940双配置全绿，代码93d72e2已push；唯一旧测试两行目录文本例外（固定hash逆变换）。
 
-**变异纪律补充。** 不能被原Assert杀死的变异不得计入正式：移除EnableDisplaySwitching会由BindDisplayPresentation先抛InvalidOperationException（Guard非Assert）；HostRuntimeService多屏后端在本机单显示下改回主屏无可观测差异、无测试可捕获。整仓并行负载下DisplayPresentationTests.EarlyAck与HostDisplayRequestReaderTests.StopBefore…会抖动（单独/整项目/排除新增后均绿），最终证据以重跑后的全量stage为准。
+**§19.65及更早详HANDOFF。** 多屏GDI internal CreateMultiDisplay、默认primary仍旧；真实视频/JPEG/Source同父gate私有owner/epoch/ulong FrameId，F仅下界；真实sender建pending禁fake Arm，4KiB/10s唯一reader。M5收口见§19.29：Host默认5/50/JPEG60，禁Auto/config热写，停完整再开。
 
-**§19.65（多屏GDI，已交付）简记。** internal CreateMultiDisplay多屏枚举/采集，默认primary仍旧；三轮定向231PASS，四变异3/21/1/1，final-v2 6922双配置全绿，代码1028888已push；唯一旧test同步54字节例外。快照非原子拓扑/ABA保证，真实offscreen非真实副屏/混合DPI/热插拔/双机。
+**M6 V2-only已接、未收口。** TLS/pinning→Hello2→Challenge2→Offer/Accept→clientProofV2→真实审批→serverProofV2→父资格；仅合法V1/未知版声明提示升级且UI标未认证。
 
-**§19.64详HANDOFF。** 真实视频/JPEG/Source同父gate私有owner/epoch/ulong FrameId，单encoded/decoded；F仅下界、核尺寸、回执唤醒、Source前/重入后复检。LastPresented非scanout/授权；先撤销/close/cancel再join原IO/解码/UI，合成parent非TLS/审批/双机。
-
-**§19.53–63详HANDOFF。** 真实sender建pending禁fake Arm；4KiB/10s唯一reader，earlyACK不挡EOF，发送/caller注册退出才父gate发布Latest。prepare互斥handler且需writer；首读不重读、忙槽关闭。原预算/seq不回绕/错误逐槽保树，私有代际预约到reply退出。Router ACK/初装/sender登记后发布，先摘槽再close。
-
-**M5收口见§19.29。** 2026-10-12用户确认稳定、撤回卡顿；不重验/加压测。旧ZIP不覆盖、不含M6。Host默认5/50/JPEG60；显式10/15/20/30用75/JPEG60；scale50/67/75/100、JPEG40..85。禁Auto/config热写，停完整再开；预分配≤16,777,216像素。
-
-**M6 V2-only已接、未收口。** TLS/pinning→Hello2→Challenge2→Offer/Accept→clientProofV2→真实审批→serverProofV2→父资格；同session agreement非授权。仅合法V1/未知版声明提示升级且UI标未认证。VideoHello/ACK protocol1、VIDEO-V1/83字节transcript、第二TLS/LRVF不变。
-
-**Next：产品联调，非再接线。** 真实Host/Client双机TLS联调、每会话画质与M6真机双端验收；当前无需人工前置。回执仍是逻辑下界，不等于物理scanout或真人验收。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
+**Next：把画质接到会话。** Host当前画质快照到每个认证会话（创建时固定、运行中互不影响），再scale/quality presets、ping RTT、actual FPS与auto quality简单控制器，然后真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。回执与画质都非物理scanout或真人验收证明。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 

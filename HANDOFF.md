@@ -3910,3 +3910,21 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 **限制与下一步。** 本片只是产品侧接线：真实TLS回环、协调器与窗口已在进程内贯通，但不等同双机TLS联调、物理scanout或真人验收；回执仍是逻辑下界而非承诺实际显示。默认产品未变更公开行为，目录仍每连接单发、无动态刷新，预览settings冻结。下一步为真实Host/Client产品联调、每会话画质与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。
 
 **推送。** 2026-10-21当次`git push`三次均 `schannel: failed to receive handshake, SSL/TLS connection failed`（含沙箱外重试），非仓库或凭据配置问题；2026-10-22网络恢复后普通push，代码93d72e2与文档1dceab5一并推送，`git fetch`后 `git rev-parse HEAD` 与 `origin/main` 均为 `1dceab5d19b0add184e5d6acbf7de8ed7fc773a1`，远端一致已核对。
+
+### 19.67 M6 每会话画质底座（2026-10-22）
+
+**起点/范围（ADR111）。** 93d72e2/6940继续（网络恢复后已于2026-10-22普通push并核remote一致）。原始任务M6 DoD含“每个Session画质独立”，而当前画质是工厂/主机级单一设置（HostRuntimeService以previewSettings建厂，运行中禁止更换），与DoD不符。本片只补Sessions层底座：仅修改FramePipelineVideoProducerFactory并新增一个Sessions测试类；不改协议、不改App/Host默认行为，冻结settings与目录每连接单发不变。
+
+**按会话画质入口。** 新增两个internal入口CreateWithSessionQualityAsync与CreateForDisplayWithSessionQualityAsync，画质只作用于本会话管线：既不改写工厂默认档位，也不影响其他会话已持有的设置，会话结束后随管线释放。既有两个准备入口（CreateAsync、CreateForDisplayAsync）的形态契约、默认档位与调用方不变。
+
+**为何另立入口而非重载。** 首轮为两个既有入口增加带画质重载，旧测试FramePipelineVideoProducerFactoryTests.Target_display_preparation_remains_internal_without_expanding_public_factory_contract用反射取方法时得到AmbiguousMatchException（重载歧义）。旧测试不可改，因此改为独立命名入口，形态契约与既有反射断言都不受影响；该缺陷轮不保留，改名后完整重跑定向、四项变异、两次恢复定向与双配置全量。
+
+**校验顺序。** 画质在任何委托调用、显示器枚举与像素预算之前由FramePipeline.ValidateSettings校验：非5/10/15/20/30 FPS、非50/67/75/100%缩放、JPEG越界40..85或Auto=true均同步拒绝，不创建采集后端或编码器，也没有需要清理的依赖（旧路径是先创建编码器再在管线构造里校验，靠catch清理）。空会话标识仍先于画质校验，空画质按参数空值拒绝。
+
+**测试与变异。** 新增11项：按会话画质到达本会话管线且不改写工厂默认；两会话各自持有画质并真实编码到各自设置；五类非法画质在创建依赖前被拒；空会话标识与空画质均不创建依赖；固定目标与会话画质同时生效；固定目标配非法画质同样前置拒绝。首轮及两次恢复定向各296 PASS / 0 FAIL / 0 SKIP。四项正式变异quality-ignored（忽略会话画质改用工厂档位）/ quality-late-check（取消前置校验、依赖先创建）/ display-ignored（固定目标被忽略）/ null-quality（取消画质空值拒绝）分别1 / 5 / 1 / 1个原Assert红并精确恢复。
+
+**最终全量/提交。** final-v1于2026-10-22 10:11:29–10:15:50 +08:00完成四次Rebuild零警告零错误，六dotnet及worker/launcher完整wait0；Debug/Release各6951 PASS / 0 FAIL / 0 SKIP：Core197 / Security66 / Protocol303 / Integration3 / Transport5229 / Acceptance561 / Capture296 / Sessions296。旧6940项完整四字段身份保留，新增11项，删除0；本片未修改任何旧测试，无同步修正桥。代码`32420e4dce4f1391b545f7198a51af065996a8ee`已提交，2files / +262 / -6。
+
+**独立审计与打包。** audit-v1旧报告路径误写report-v2.json、audit-v2 runner固定字节仍指向上片runner，两轮原报告保留不覆盖；audit-v3于10:18:34–10:18:39 +08:00原进程42944 / 外层 / 主线程exit0。report.json 906345字节 / SHA `a4f2cd1d8199cbcf80c8dba94c89f1a84baba7693541878639b088026856ae0c`；431源 / 165观察原件 / 39TRX / 28678唯一execution，前片三份成品摘要保持。打包175条目8756470字节 / SHA `e8ba324156aaf37bb5885f34b7bda46ed172d97936f82f8aef60c7061727b305`，全条目SHA/CRC及包外四份原件回读通过。
+
+**限制与下一步。** 本片只是底座：App/Host尚未按会话分配画质，产品默认仍走工厂档位，不等于每会话画质已在产品生效。下一步把Host当前画质快照到每个认证会话（会话创建时固定、运行中互不影响），再接scale/quality presets、ping RTT、actual FPS与auto quality简单控制器，然后真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。
