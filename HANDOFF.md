@@ -3928,3 +3928,19 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 **独立审计与打包。** audit-v1旧报告路径误写report-v2.json、audit-v2 runner固定字节仍指向上片runner，两轮原报告保留不覆盖；audit-v3于10:18:34–10:18:39 +08:00原进程42944 / 外层 / 主线程exit0。report.json 906345字节 / SHA `a4f2cd1d8199cbcf80c8dba94c89f1a84baba7693541878639b088026856ae0c`；431源 / 165观察原件 / 39TRX / 28678唯一execution，前片三份成品摘要保持。打包175条目8756470字节 / SHA `e8ba324156aaf37bb5885f34b7bda46ed172d97936f82f8aef60c7061727b305`，全条目SHA/CRC及包外四份原件回读通过。
 
 **限制与下一步。** 本片只是底座：App/Host尚未按会话分配画质，产品默认仍走工厂档位，不等于每会话画质已在产品生效。下一步把Host当前画质快照到每个认证会话（会话创建时固定、运行中互不影响），再接scale/quality presets、ping RTT、actual FPS与auto quality简单控制器，然后真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。
+
+### 19.68 M6 每会话画质接线（2026-10-22）
+
+**起点/范围（ADR112）。** 32420e4/6951继续。上一片只备好Sessions底座（可按会话指定画质），但Transport只按sessionId调CreateAsync且不带画质，产品仍表现为主机级单一档位。本片把画质按真实认证会话分配：工厂新增可选按会话画质解析回调；App新增SessionQualityResolver做快照与清理；不改协议、不改既有准备入口的形态契约与默认档位。
+
+**解析与校验顺序。** 回调返回值非空时该会话用它、为空时回退工厂默认；回调本身与画质都在任何委托调用、显示器枚举与像素预算之前处理：回调抛出或返回非法档位都同步拒绝，不创建采集后端或编码器。回调只读主机当前档位属性，不捕获StartAsync的启动参数局部——上片已证明捕获局部会让编译器把该局部提升到闭包类、破坏旧测试对状态机字段的反射读取。
+
+**快照而非现读。** 会话首次解析时把主机当前档位快照入表，之后主机换档不影响该会话；显式设定（Set）优先级更高，非法档位与空会话标识都拒绝且不改写该会话已持有值；主机停止（CompleteDrainAsync）时整体清空，不跨主机生命周期保留。主机未指定档位时返回null并回退工厂默认，也不落表，避免把“无独立档位”记成“有档位”。
+
+**测试与变异。** 新增10项：工厂回调4项（只作用于本会话、null回退工厂默认、非法回调画质与回调异常都在创建依赖前被拒、无回调时默认不变）；解析器6项（首次快照且后续主机换档不影响、两会话各自独立、当前为null时不落表、Set覆盖与非法/空输入拒绝、Clear后重新快照）。首轮及两次恢复定向各35 PASS / 0 FAIL / 0 SKIP。四项正式变异callback-ignored / callback-late-check / resolver-no-snapshot / resolver-set-no-validate分别1 / 2 / 1 / 1个原Assert红并精确恢复。
+
+**最终全量/提交。** final-v1于2026-10-22 10:49:39–10:53:49 +08:00完成四次Rebuild零警告零错误，六dotnet及worker/launcher完整wait0；Debug/Release各6961 PASS / 0 FAIL / 0 SKIP：Core197 / Security66 / Protocol303 / Integration3 / Transport5229 / Acceptance571 / Capture296 / Sessions296。旧6951项完整四字段身份保留，新增10项，删除0；本片未修改任何旧测试，无同步修正桥。代码`e250ca2c26872c89c0002d79cdb30518fa02a38d`已提交，4files / +286 / -4。
+
+**独立审计与打包。** audit-v1于10:54:46–10:54:50 +08:00原进程43708 / 外层 / 主线程exit0；report.json 909769字节 / SHA `849184bad9a6075481c0686324e9fd37adf1c052e79524ce366fac5006adab3e`；433源 / 166观察原件 / 39TRX / 27934唯一execution，前片三份成品摘要保持。打包177条目8593357字节 / SHA `534da7bcd2bd2c189052f70c7fa70fdc03130128b6f726701ea1357b02344a68`，全条目SHA/CRC及包外四份原件回读通过。
+
+**限制与下一步。** 画质已可按会话分配，但产品侧尚无UI或协议来源为特定会话改档，当前仍表现为主机档位；未接scale/quality presets、ping RTT、actual FPS与auto quality简单控制器。定向只覆盖Acceptance.Tests，Sessions.Tests既有工厂/管线测试由双配置全量覆盖；未对固定目标路径的回调解析单设变异。下一步接scale与quality presets、ping RTT、actual FPS与auto quality简单控制器，然后真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP。

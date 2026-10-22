@@ -2,26 +2,26 @@
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记的规则、实测事实与停点。
 > **2026-10-10用户选B：只支持新版双方，旧端拒绝并提示两端升级；无legacy单屏兼容/静默降级。产品政策不能冒充实际接线完成。**
-> ADR `docs/DECISIONS.md`（至111：每会话画质底座；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至112：按真实认证会话分配画质；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 记忆上限10000字符，更新先验长度。
 
-## 当前续作点（2026-10-22，权威详HANDOFF§19.67/ADR111）
+## 当前续作点（2026-10-22，权威详HANDOFF§19.68/ADR112）
 
-**Last code commit：32420e4dce4f1391b545f7198a51af065996a8ee**，2files/+262/-6（1生产改+1新test）；每会话画质底座已交付，App/Host仍未按会话分配画质。新增internal CreateWithSessionQualityAsync与CreateForDisplayWithSessionQualityAsync：画质只作用于本会话管线、不改工厂默认、不影响其他会话；校验提到任何依赖创建之前。
+**Last code commit：e250ca2c26872c89c0002d79cdb30518fa02a38d**，4files/+286/-4；画质已按真实认证会话分配（工厂sessionQuality回调 + App SessionQualityResolver首次快照、主机停止清空），但改档来源仍只有主机档位。
 
-**Validation。** 新11项，三轮定向各296PASS；四变异quality-ignored/quality-late-check/display-ignored/null-quality各1/5/1/1原Assert红恢复。final-v1于10:11:29–10:15:50+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6951PASS/0FAIL/0SKIP（Sessions296/Acceptance561/Transport5229/Capture296/Core197/Security66/Protocol303/Integration3）。audit-v3 10:18:34–10:18:39+08:00原42944/外层/主线程exit0，report906345字节/SHA `a4f2cd1d8199cbcf80c8dba94c89f1a84baba7693541878639b088026856ae0c`；431源/165原件/39TRX/28678execution，旧6940身份+11/-0。audit-v1/v2分别因旧report路径与runner pin失败，原报告保留。
+**Validation。** 新10项（回调4+解析器6），三轮定向各35PASS；四变异callback-ignored/callback-late-check/resolver-no-snapshot/resolver-set-no-validate各1/2/1/1原Assert红恢复。final-v1于10:49:39–10:53:49+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6961PASS/0FAIL/0SKIP（Acceptance571/Sessions296/Transport5229/Capture296/Core197/Security66/Protocol303/Integration3）。audit-v1 10:54:46–10:54:50+08:00原43708/外层/主线程exit0，report909769字节/SHA `849184bad9a6075481c0686324e9fd37adf1c052e79524ce366fac5006adab3e`；433源/166原件/39TRX/27934execution，旧6951身份+10/-0。
 
-**形态契约坑（必记）。** 给既有internal准备入口加**重载**会让旧测试的反射取方法得到AmbiguousMatchException（Target_display_preparation_remains_internal_without_expanding_public_factory_contract）；旧测试不可改时须改用独立命名入口。另：上片闭包捕获registration使状态机无<registration>5__N字段——凡旧测试用反射读编译器生成成员，新增生产代码都要先想形态影响。
+**画质接线要点。** Transport只按sessionId调CreateAsync不带画质 → 按会话分配只能靠工厂解析回调；回调与画质都在依赖创建之前校验。回调只读ActivePreviewSettings属性、绝不捕获StartAsync的启动参数局部（捕获会让编译器把局部提升到闭包类，破坏旧测试反射的状态机字段）。会话首次解析即快照，主机换档不影响已运行会话。
 
-**画质现状。** VideoQualitySettings（5/10/15/20/30 FPS、50/67/75/100%、JPEG40..85、Auto现被ValidateSettings拒绝）仍以工厂/主机级settings传给管线；HostRuntimeService的previewSettings运行中禁止更换。M6 DoD要求每个Session独立。
+**形态契约坑（延续）。** 给既有internal入口加**重载**会让旧测试反射取方法AmbiguousMatchException；旧测试不可改时改用独立命名入口。凡旧测试用反射读编译器生成成员，新增生产代码都要先想形态影响。
 
-**§19.66（产品侧切屏，已交付）简记。** App经Capture/Sessions友元用多屏目标准备；Host按真实认证会话装配prepare与同一写者（SessionId快照入闭包）；Client交付后attach前EnableDisplaySwitching+三参Presenter；窗口目录项接真实请求/busy/停止解绑。三轮定向45PASS，四变异1/1/1/1，6940双配置全绿，代码93d72e2已push；唯一旧测试两行目录文本例外（固定hash逆变换）。
+**§19.67（画质底座）简记。** 工厂新增CreateWithSessionQualityAsync与CreateForDisplayWithSessionQualityAsync，画质只作用于本会话管线、校验前置；11项、四变异1/5/1/1，6951双配置全绿，代码32420e4已push。
 
-**§19.65及更早详HANDOFF。** 多屏GDI internal CreateMultiDisplay、默认primary仍旧；真实视频/JPEG/Source同父gate私有owner/epoch/ulong FrameId，F仅下界；真实sender建pending禁fake Arm，4KiB/10s唯一reader。M5收口见§19.29：Host默认5/50/JPEG60，禁Auto/config热写，停完整再开。
+**§19.66（产品侧切屏）简记。** Host按真实认证会话装配prepare与同一写者（SessionId快照入闭包）；Client交付后attach前EnableDisplaySwitching+三参Presenter；窗口目录项接真实请求/busy/停止解绑；6940双配置全绿，唯一旧测试两行目录文本例外。
 
 **M6 V2-only已接、未收口。** TLS/pinning→Hello2→Challenge2→Offer/Accept→clientProofV2→真实审批→serverProofV2→父资格；仅合法V1/未知版声明提示升级且UI标未认证。
 
-**Next：把画质接到会话。** Host当前画质快照到每个认证会话（创建时固定、运行中互不影响），再scale/quality presets、ping RTT、actual FPS与auto quality简单控制器，然后真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。回执与画质都非物理scanout或真人验收证明。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
+**Next：画质调控与联调。** scale与quality presets、ping RTT、actual FPS、auto quality简单控制器（届时才有按会话改档的真实来源），再真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。回执与画质都非物理scanout或真人验收证明。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 M4详§18.25，不翻绿/重跑；pin仅顺序关联、SAC非产品功能。§19.16–18：先发布后Start，父等raw+投影/子仅raw，不吞close错；敏感wire等原IO退出清零，不保证TLS副本擦除。
 

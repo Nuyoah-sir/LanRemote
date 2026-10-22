@@ -2078,3 +2078,13 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **验证。** 新增11项，三轮定向各296PASS；四变异quality-ignored / quality-late-check / display-ignored / null-quality各1 / 5 / 1 / 1原Assert红恢复。final-v1于10:11:29–10:15:50+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6951PASS/0FAIL/0SKIP（Sessions296、Acceptance561、Transport5229等）。旧6940身份+11/-0；本片未改任何旧测试，无同步修正桥。audit-v3 10:18:34–10:18:39+08:00原42944/外层/主线程exit0，report906345字节/SHA `a4f2cd1d8199cbcf80c8dba94c89f1a84baba7693541878639b088026856ae0c`，431源/165原件/39TRX/28678execution。代码`32420e4dce4f1391b545f7198a51af065996a8ee`，2files/+262/-6；详HANDOFF§19.67。
 
 **下一片。** 把Host当前画质快照到每个认证会话（创建时固定、运行中互不影响），再接scale与quality presets、ping RTT、actual FPS与auto quality简单控制器，然后真实Host/Client产品联调与M6真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP，无M6产品包。
+
+### ADR-112 — 按真实认证会话分配画质
+
+**2026-10-22；画质已可按会话分配，但改档来源仍只有主机档位。** 32420e4/6951起。Transport只按sessionId调CreateAsync且不带画质，所以按会话分配必须由工厂侧解析回调完成，不能靠共享字段或启动参数局部冒充会话身份。工厂新增可选sessionQuality回调：非空即用、为空回退工厂默认，且在任何依赖创建之前校验；App新增SessionQualityResolver做首次快照与主机停止清理。
+
+**快照而非现读。** 会话首次解析时快照主机当前档位，之后主机换档不影响该会话；Set优先级更高且拒绝非法/空输入；主机未指定档位时返回null、不落表；CompleteDrainAsync时整体清空。回调只读ActivePreviewSettings属性、不捕获启动局部——避免上片闭包提升破坏旧测试反射的同类问题。
+
+**验证。** 新增10项（回调4+解析器6），三轮定向各35PASS；四变异callback-ignored / callback-late-check / resolver-no-snapshot / resolver-set-no-validate各1 / 2 / 1 / 1原Assert红恢复。final-v1于10:49:39–10:53:49+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6961PASS/0FAIL/0SKIP（Acceptance571、Sessions296、Transport5229等）。旧6951身份+10/-0；本片未改任何旧测试，无同步修正桥。audit-v1 10:54:46–10:54:50+08:00原43708/外层/主线程exit0，report909769字节/SHA `849184bad9a6075481c0686324e9fd37adf1c052e79524ce366fac5006adab3e`，433源/166原件/39TRX/27934execution。代码`e250ca2c26872c89c0002d79cdb30518fa02a38d`，4files/+286/-4；详HANDOFF§19.68。
+
+**下一片。** 接scale与quality presets、ping RTT、actual FPS与auto quality简单控制器（届时才有按会话改档的真实来源），再真实Host/Client产品联调与M6真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP，无M6产品包。
