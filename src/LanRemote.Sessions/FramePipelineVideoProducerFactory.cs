@@ -51,30 +51,56 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
 
     /// <inheritdoc />
     public ValueTask<IVideoFrameProducer> CreateAsync(Guid sessionId, CancellationToken cancellationToken) =>
-        ScheduleCreate(sessionId, null, cancellationToken);
+        ScheduleCreate(sessionId, null, null, cancellationToken);
+
+    /// <summary>按该会话自己的画质准备尚未启动的生产者；不代表认证。</summary>
+    /// <remarks>
+    /// 画质只作用于本会话管线，既不改动工厂默认档位，也不影响其他会话已持有的设置；
+    /// 非法档位在创建采集后端、编码器或原始帧之前同步拒绝，不产生需要清理的依赖。
+    /// 与既有两个准备入口同名不同义会破坏其形态契约，因此按会话画质另立独立入口。
+    /// </remarks>
+    internal ValueTask<IVideoFrameProducer> CreateWithSessionQualityAsync(
+        Guid sessionId, VideoQualitySettings quality, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(quality);
+        return ScheduleCreate(sessionId, null, quality, cancellationToken);
+    }
 
     /// <summary>为固定目标准备尚未启动的生产者；不代表认证或运行中切屏能力。</summary>
     internal ValueTask<IVideoFrameProducer> CreateForDisplayAsync(
         Guid sessionId, DisplayInfo expectedDisplay, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(expectedDisplay);
-        return ScheduleCreate(sessionId, expectedDisplay, cancellationToken);
+        return ScheduleCreate(sessionId, expectedDisplay, null, cancellationToken);
+    }
+
+    /// <summary>按该会话自己的画质为固定目标准备尚未启动的生产者；不代表认证或运行中切屏能力。</summary>
+    /// <remarks>画质与目标同属本会话的一次准备：非法档位同样在任何依赖创建之前同步拒绝。</remarks>
+    internal ValueTask<IVideoFrameProducer> CreateForDisplayWithSessionQualityAsync(
+        Guid sessionId, DisplayInfo expectedDisplay, VideoQualitySettings quality, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(expectedDisplay);
+        ArgumentNullException.ThrowIfNull(quality);
+        return ScheduleCreate(sessionId, expectedDisplay, quality, cancellationToken);
     }
 
     private ValueTask<IVideoFrameProducer> ScheduleCreate(
-        Guid sessionId, DisplayInfo? expectedDisplay, CancellationToken cancellationToken)
+        Guid sessionId, DisplayInfo? expectedDisplay, VideoQualitySettings? quality, CancellationToken cancellationToken)
     {
         if (sessionId == Guid.Empty)
         {
             throw new ArgumentException("会话关联标识不能为空。", nameof(sessionId));
         }
 
+        // 会话画质在任何委托、显示器枚举或像素预算之前校验：非法档位不得创建采集后端或编码器。
+        if (quality is not null) FramePipeline.ValidateSettings(quality);
+
         // 包括委托和显示器枚举的全部同步前缀都在后台；不传调度取消，也不以取消代理替代原任务。
-        return new ValueTask<IVideoFrameProducer>(Task.Run(() => CreateCoreAsync(sessionId, expectedDisplay, cancellationToken)));
+        return new ValueTask<IVideoFrameProducer>(Task.Run(() => CreateCoreAsync(sessionId, expectedDisplay, quality, cancellationToken)));
     }
 
     private async Task<IVideoFrameProducer> CreateCoreAsync(
-        Guid sessionId, DisplayInfo? expectedDisplay, CancellationToken cancellationToken)
+        Guid sessionId, DisplayInfo? expectedDisplay, VideoQualitySettings? quality, CancellationToken cancellationToken)
     {
         IScreenCaptureBackend? capture = null;
         IFrameEncoder? encoder = null;
@@ -103,7 +129,7 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
             encoder = _createEncoder() ?? throw new InvalidOperationException("编码器工厂返回了 null。");
             cancellationToken.ThrowIfCancellationRequested();
             pipeline = new FramePipeline(capture, encoder, selected.Id, _rawCapacity, _encodedCapacity, _timeProvider,
-                _settings);
+                quality ?? _settings);
             cancellationToken.ThrowIfCancellationRequested();
 
             // 最后一次取消检查前一直由局部变量拥有；成功构造 adapter 后一次性交付，不再后置取消。
