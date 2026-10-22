@@ -96,6 +96,7 @@ accept→同子网→准入→TLS不可换；pre-auth≤4KiB；M4以ControlPreAu
 - **黄金向量**：期望来自独立第二实现`scripts/reference/gen-auth-golden-vectors.py`；NUL写`\u0000`，C#的`\0`接数字会成八进制；变异须触实现，常量自证是假绿。
 - 长base64用`Convert.ToBase64String`/`B64(int)`现造；手抄长度错会被错误拒绝路径救活。
 - **夹具拆线竞速**：出结局立刻cancel+dispose会抢掉客户端快速失败终帧；先`await Task.WhenAny(clientTask, Task.Delay(3s))`。迟到决定延时不绑stall令牌，避免夹具取消吞掉目标。
+- **FramePipeline 禁止新增时钟调用**：既有测试断言构造/创建阶段 `TimestampCalls==0`，并有注入时钟失败场景（Clock_failures_preserve_original_exception_and_ownership，7 项）。实际帧率一类指标不能在 Start/构造里取 `TimeProvider.GetTimestamp()`；要测帧率须走不新增时钟调用的方案（如 Stopwatch，或只在首次编码成功后取一次并先验证旧断言不受影响）。
 
 ## 网络 / lab
 
