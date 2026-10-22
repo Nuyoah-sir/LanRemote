@@ -18,15 +18,21 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
     private readonly int _encodedCapacity;
     private readonly TimeProvider? _timeProvider;
     private readonly VideoQualitySettings? _settings;
+    private readonly Func<Guid, VideoQualitySettings?>? _sessionQuality;
 
     /// <summary>只验证并保存参数，不调用委托；队列容量均只能为 1 或 2。</summary>
+    /// <param name="sessionQuality">
+    /// 可选的按会话画质解析回调：返回非空时该会话使用返回值，返回 null 时回退 <paramref name="settings"/>；
+    /// 回调在校验与任何依赖创建之前调用，抛出或返回非法档位都同步拒绝，不创建采集后端或编码器。
+    /// </param>
     public FramePipelineVideoProducerFactory(
         Func<IScreenCaptureBackend> createCapture,
         Func<IFrameEncoder> createEncoder,
         int rawCapacity = 2,
         int encodedCapacity = 2,
         TimeProvider? timeProvider = null,
-        VideoQualitySettings? settings = null)
+        VideoQualitySettings? settings = null,
+        Func<Guid, VideoQualitySettings?>? sessionQuality = null)
     {
         ArgumentNullException.ThrowIfNull(createCapture);
         ArgumentNullException.ThrowIfNull(createEncoder);
@@ -47,11 +53,12 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
         _encodedCapacity = encodedCapacity;
         _timeProvider = timeProvider;
         _settings = settings;
+        _sessionQuality = sessionQuality;
     }
 
     /// <inheritdoc />
     public ValueTask<IVideoFrameProducer> CreateAsync(Guid sessionId, CancellationToken cancellationToken) =>
-        ScheduleCreate(sessionId, null, null, cancellationToken);
+        ScheduleCreate(sessionId, null, ResolveSessionQuality(sessionId), cancellationToken);
 
     /// <summary>按该会话自己的画质准备尚未启动的生产者；不代表认证。</summary>
     /// <remarks>
@@ -71,7 +78,7 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
         Guid sessionId, DisplayInfo expectedDisplay, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(expectedDisplay);
-        return ScheduleCreate(sessionId, expectedDisplay, null, cancellationToken);
+        return ScheduleCreate(sessionId, expectedDisplay, ResolveSessionQuality(sessionId), cancellationToken);
     }
 
     /// <summary>按该会话自己的画质为固定目标准备尚未启动的生产者；不代表认证或运行中切屏能力。</summary>
@@ -83,6 +90,9 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
         ArgumentNullException.ThrowIfNull(quality);
         return ScheduleCreate(sessionId, expectedDisplay, quality, cancellationToken);
     }
+
+    // 按会话解析先于空会话标识之外的任何工作：回调返回 null 表示本会话没有独立档位、回退工厂默认。
+    private VideoQualitySettings? ResolveSessionQuality(Guid sessionId) => _sessionQuality?.Invoke(sessionId);
 
     private ValueTask<IVideoFrameProducer> ScheduleCreate(
         Guid sessionId, DisplayInfo? expectedDisplay, VideoQualitySettings? quality, CancellationToken cancellationToken)

@@ -38,6 +38,8 @@ public sealed class HostRuntimeService
     private readonly SemaphoreSlim _lifetime = new(1, 1);
     private readonly object _drainGate = new();
     private readonly object _intentGate = new();
+    // 按真实认证会话保存画质；回调只读当前主机档位属性，不捕获启动参数局部。
+    private readonly SessionQualityResolver _sessionQuality;
     private TransportHost? _host;
     private TransportHostStartResult? _startResult;
     private VideoQualitySettings? _activePreviewSettings;
@@ -91,6 +93,8 @@ public sealed class HostRuntimeService
         _subnetPolicy = subnetPolicy;
         _approvalGate = approvalGate;
         _logger = logger;
+        // 回调只读当前主机档位属性，不捕获启动参数局部，也不在构造之外持有可变态。
+        _sessionQuality = new SessionQualityResolver(() => ActivePreviewSettings);
     }
 
     /// <summary>只读、严格解析；没有文件/损坏/查看权限未明确写出均不视为授权。</summary>
@@ -305,10 +309,12 @@ public sealed class HostRuntimeService
                 () => ValueTask.FromResult<IReadOnlyList<DisplayInfo>>(new GdiDisplayCatalog().GetDisplays()),
                 TimeSpan.FromSeconds(10));
             // 多屏采集后端：初始主屏与切屏目标共用实际设备枚举标识；预览档位仍由本轮冻结。
+            // 每个真实认证会话按自己的画质准备：会话首次解析时快照主机当前档位，之后主机换档不影响该会话。
             FramePipelineVideoProducerFactory factory = new(
                 () => GdiScreenCaptureBackend.CreateMultiDisplay(),
                 () => new WpfJpegFrameEncoder(),
-                settings: previewSettings);
+                settings: previewSettings,
+                sessionQuality: _sessionQuality.Resolve);
             // 自动切屏协调：目录与回执共用同一会话写者；每个真实认证会话按目标 DisplayInfo 准备生产者，
             // 会话标识由 Transport 从登记表原样传入，不共享字段也不伪造；目录仍每连接单发、无动态刷新。
             context = context.WithSessionDisplayRequestPrepare(
@@ -416,6 +422,8 @@ public sealed class HostRuntimeService
         {
             Task hostDrain = DrainHostAsync();
             await Task.WhenAll(hostDrain, approvalJoin).ConfigureAwait(false);
+            // 会话画质随主机生命周期结束整体清空，不跨主机保留任何会话条目。
+            _sessionQuality.Clear();
             completion.TrySetResult();
         }
         catch (Exception error)
