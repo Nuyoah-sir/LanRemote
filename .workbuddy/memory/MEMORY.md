@@ -7,7 +7,7 @@
 
 ## 当前续作点（2026-10-21，权威详HANDOFF§19.66/ADR110）
 
-**Last code commit：93d72e2027a257157628b31633b3cebc88971038**，13files/+227/-28（9生产改+2新test+1旧test两行受控更新）；本地已提交，push三次均schannel TLS握手失败，未核remote一致，须在可联网环境补推。产品侧切屏接线完成：App经Capture/Sessions友元用多屏GDI目标准备，Host按真实认证会话装配prepare与同一会话写者，Client交付后attach前enable并用三参Presenter，窗口接真实请求/busy/停止与请求解绑。默认公开行为与目录每连接单发不变，非M6收口。
+**Last code commit：93d72e2027a257157628b31633b3cebc88971038**，13files/+227/-28（9生产改+2新test+1旧test两行受控更新）；2026-10-21 push三次均schannel TLS握手失败；2026-10-22已普通push并核remote一致（HEAD=origin/main=1dceab5）。产品侧切屏接线完成：App经Capture/Sessions友元用多屏GDI目标准备，Host按真实认证会话装配prepare与同一会话写者，Client交付后attach前enable并用三参Presenter，窗口接真实请求/busy/停止与请求解绑。默认公开行为与目录每连接单发不变，非M6收口。
 
 **Validation。** 新18（回环2+窗口16），首轮及两次恢复定向各45PASS；四正式session-identity/busy-flag/unbind-flag/client-target各1个原Assert红并精确恢复。final-v1于17:11:59–17:16:30+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6940PASS/0FAIL/0SKIP（Acceptance561/Transport5229/Capture296/Sessions285/Core197/Security66/Protocol303/Integration3）。summary10626字节/SHA `1c6094be1365b3c4982edc5be65420ac08a20c6d79ab739589034a62648aff63`。
 
