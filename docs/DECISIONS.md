@@ -2100,3 +2100,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **两处计量教训。** ①变异若让私有字段只剩`Interlocked.Read`引用，编译器会报CS0649并被零警告门禁拦下——告警门禁不是测试红，不能算kill，变异须保持字段被赋值。②xunit v3的`Assert.True(cond,message)`在TRX只上报自定义消息，原`"Assert." in message`判定会误拒真kill；改由「消息含Assert.或堆栈落在新增测试类」双重认证。
 
 **下一片。** 接scale与quality presets、ping RTT，再让auto quality控制器消费本指标（届时才有按会话降档的真实依据），随后真实Host/Client产品联调与M6真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
+
+### ADR-114 — 命名画质预设：严格解析，不静默回落
+
+**2026-10-23；只补「预设名→档位」这一层，界面与控制器未接。** dcd5eea/6965起。M6清单的 `scale` 已真正落地（编码器按 `settings.Scale` 缩放）、`actual FPS` 上一片已完成；`quality presets` 此前只有 VideoQualitySettings 上三个零散静态属性，没有按名选档的入口。新增 App 层 internal `VideoQualityPresets`，并把 `SessionQualityResolver` 扩出 `SetPreset(Guid, string)` 复用既有 `Set`。
+
+**严格而非宽松。** 预设解析与 `VideoQualitySettings.Clamp` 是两套语义：Clamp 用于把任意输入钳制回合法范围，保持原行为；预设解析则要求未知名、空、空白、大小写不符、前后带空白一律拒绝，**绝不静默回落到其他预设**——静默回落会让「我要高画质」变成「拿到均衡」，属于无声降级。名称按 `StringComparison.Ordinal` 精确匹配；`Resolve` 返回前仍走 `FramePipeline.ValidateSettings`。
+
+**单一事实来源。** 档位数值直接引用 `VideoQualitySettings.LowLatency / Balanced / HighQuality`，预设表不重复定义数值；`NameOf` 反查预设名，不属于任何预设的手工档位返回 null，供界面显示与控制器判断「当前是否就是某档」。
+
+**验证。** 新增19项，三轮定向各19PASS；五变异 preset-name-mismatch / resolve-fallback-unknown / try-resolve-always-true / nameof-never-null / set-preset-fallback 分别1 / 7 / 1 / 3 / 1个原Assert红并精确恢复。final-v1于17:04:38–17:08:53+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6984PASS/0FAIL/0SKIP（Acceptance590、Sessions300、Transport5229等）。旧6965身份+19/-0；未改任何旧测试，无同步修正桥。audit-v1 17:09:18–17:09:23+08:00原20792/外层/主线程exit0，report1025903字节/SHA `ffc87cd91faf3211fa2821bbe9fcdfc79df62960765cd1293f8573ee7abf2497`，436源/180原件/40TRX/27968execution。代码`ebd5e3d71f7104f73e6b47060cb38b90a9099052`，3files/+219/-0；详HANDOFF§19.70。首轮全量曾出现既有 HostDisplayRequestReaderTests.StopBefore… 的整仓并行抖动（§19.66同款），单独复跑全绿、本片未触及Transport，缺陷轮删除后整体重跑。
+
+**下一片。** ping RTT，然后 auto quality 简单控制器消费 RTT 与 EncodedFrames/ActualFps，通过本片预设名执行降档（届时才有真实改档来源），再真实 Host/Client 产品联调与 M6 真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
