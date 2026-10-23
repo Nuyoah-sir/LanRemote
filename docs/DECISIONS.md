@@ -2088,3 +2088,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **验证。** 新增10项（回调4+解析器6），三轮定向各35PASS；四变异callback-ignored / callback-late-check / resolver-no-snapshot / resolver-set-no-validate各1 / 2 / 1 / 1原Assert红恢复。final-v1于10:49:39–10:53:49+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6961PASS/0FAIL/0SKIP（Acceptance571、Sessions296、Transport5229等）。旧6951身份+10/-0；本片未改任何旧测试，无同步修正桥。audit-v1 10:54:46–10:54:50+08:00原43708/外层/主线程exit0，report909769字节/SHA `849184bad9a6075481c0686324e9fd37adf1c052e79524ce366fac5006adab3e`，433源/166原件/39TRX/27934execution。代码`e250ca2c26872c89c0002d79cdb30518fa02a38d`，4files/+286/-4；详HANDOFF§19.68。
 
 **下一片。** 接scale与quality presets、ping RTT、actual FPS与auto quality简单控制器（届时才有按会话改档的真实来源），再真实Host/Client产品联调与M6真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网络/防护/权限/Undo或旧ZIP，无M6产品包。
+
+### ADR-113 — 实际帧率指标用 Stopwatch，不用注入时钟
+
+**2026-10-23；只暴露指标，尚未接自动画质控制器。** e250ca2/6961起。M6清单把actual FPS列为auto quality的输入，但FramePipeline此前没有任何实际帧数/帧率出口。约束是既有7项测试断言构造与创建阶段`TimestampCalls==0`，且注入时钟失败场景须保留原异常，所以在构造或`Start()`里新增`TimeProvider.GetTimestamp()`会直接破坏旧测试。结论：计数与起点都用`Stopwatch`——`_startedTicks`只在真实`Start()`取一次，`EncodedFrames`只对真正进入编码队列的帧自增，`ActualFps`=帧数/经过秒数，未启动或零帧为0，读取不清空历史。
+
+**断言口径。** `EncodedFrames`精确断言；`ActualFps`只写弱断言（0帧为0、有帧后>0、重复读取不清空），不把不可确定的比值写成精确期望。另有一条两条管线各自计数的用例，确认指标按管线独立而非静态共享。指标不等于目标帧率、显示帧率或网络发送帧率。
+
+**验证。** 新增4项，三轮定向各4PASS；五变异counter-not-incremented / fps-always-zero / start-tick-not-recorded / fps-resets-history / producer-passthrough-zero各1个原Assert红并精确恢复。final-v1于13:59:07–14:03:30+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6965PASS/0FAIL/0SKIP（Sessions300、Acceptance571、Transport5229等）。旧6961身份+4/-0；未改任何旧测试，无同步修正桥。audit-v1 14:03:55–14:04:00+08:00原46908/外层/主线程exit0，report994301字节/SHA `ecd067530ce4d7a04415e169e022ae5b0c431d3e78ce02608d5fdb5b2152cc65`，434源/180原件/40TRX/27869execution。代码`dcd5eea58fb6cde4390f1dc3c0735f5ad4f70db8`，3files/+205/-0；详HANDOFF§19.69。
+
+**两处计量教训。** ①变异若让私有字段只剩`Interlocked.Read`引用，编译器会报CS0649并被零警告门禁拦下——告警门禁不是测试红，不能算kill，变异须保持字段被赋值。②xunit v3的`Assert.True(cond,message)`在TRX只上报自定义消息，原`"Assert." in message`判定会误拒真kill；改由「消息含Assert.或堆栈落在新增测试类」双重认证。
+
+**下一片。** 接scale与quality presets、ping RTT，再让auto quality控制器消费本指标（届时才有按会话降档的真实依据），随后真实Host/Client产品联调与M6真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
