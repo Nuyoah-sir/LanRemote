@@ -49,5 +49,12 @@ internal sealed class SessionQualityResolver
         _bySession[sessionId] = quality;
     }
 
+    /// <summary>按预设名为会话显式设定画质；未知名一律拒绝，不回落到其他预设，不改变其他会话。</summary>
+    internal void SetPreset(Guid sessionId, string presetName)
+    {
+        VideoQualitySettings quality = VideoQualityPresets.Resolve(presetName);
+        Set(sessionId, quality);
+    }
+
     internal void Clear() => _bySession.Clear();
 }
