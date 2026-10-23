@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using LanRemote.Core;
 using LanRemote.Core.Abstractions;
 using LanRemote.Core.Models;
@@ -28,6 +29,9 @@ public sealed class FramePipeline : IAsyncDisposable
 
     private Task _captureLoop = Task.CompletedTask;
     private Task _encodeLoop = Task.CompletedTask;
+    // 实际帧率指标：计数与起点都用 Stopwatch，不新增 TimeProvider 调用。
+    private long _encodedFrames;
+    private long _startedTicks;
     private Exception? _startError;
     private int _state;
     private int _reading;
@@ -90,6 +94,28 @@ public sealed class FramePipeline : IAsyncDisposable
     internal bool StopWonBeforeStart =>
         (Volatile.Read(ref _state) & (Started | StopRequested)) == StopRequested;
 
+    /// <summary>真实启动以来成功编码并进入编码队列的帧数；不代表已被读取或已显示。</summary>
+    internal long EncodedFrames => Interlocked.Read(ref _encodedFrames);
+
+    /// <summary>
+    /// 真实启动以来的实际帧率（帧数 / 经过秒数）；未启动或尚未经过时间一律为 0，
+    /// 不是目标帧率，也不因读取而清空历史计数。
+    /// </summary>
+    internal double ActualFps
+    {
+        get
+        {
+            long started = Interlocked.Read(ref _startedTicks);
+            if (started == 0)
+            {
+                return 0d;
+            }
+
+            double seconds = Stopwatch.GetElapsedTime(started).TotalSeconds;
+            return seconds <= 0d ? 0d : Interlocked.Read(ref _encodedFrames) / seconds;
+        }
+    }
+
     /// <summary>仅能启动一次；已经请求停止的管线不能启动。</summary>
     public void Start()
     {
@@ -100,6 +126,8 @@ public sealed class FramePipeline : IAsyncDisposable
 
         try
         {
+            // 实际帧率只从真实启动时刻起算；用 Stopwatch 而非注入时钟，不增加 TimeProvider 调用。
+            Interlocked.Exchange(ref _startedTicks, Stopwatch.GetTimestamp());
             // 不传取消令牌，确保调度成功的循环及其清理一定执行；同步前缀也在后台。
             _captureLoop = Task.Run(CaptureLoopAsync);
             _afterCaptureLoopCreated?.Invoke();
@@ -317,6 +345,8 @@ public sealed class FramePipeline : IAsyncDisposable
                 bool accepted = _encodedQueue.TryWrite(encoded, out Exception? disposalError);
                 if (accepted)
                 {
+                    // 只统计真正进入编码队列的帧；丢弃旧帧的容量行为不改变计数口径。
+                    Interlocked.Increment(ref _encodedFrames);
                     encoded = null;
                 }
 
