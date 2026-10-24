@@ -2112,3 +2112,15 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **验证。** 新增19项，三轮定向各19PASS；五变异 preset-name-mismatch / resolve-fallback-unknown / try-resolve-always-true / nameof-never-null / set-preset-fallback 分别1 / 7 / 1 / 3 / 1个原Assert红并精确恢复。final-v1于17:04:38–17:08:53+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6984PASS/0FAIL/0SKIP（Acceptance590、Sessions300、Transport5229等）。旧6965身份+19/-0；未改任何旧测试，无同步修正桥。audit-v1 17:09:18–17:09:23+08:00原20792/外层/主线程exit0，report1025903字节/SHA `ffc87cd91faf3211fa2821bbe9fcdfc79df62960765cd1293f8573ee7abf2497`，436源/180原件/40TRX/27968execution。代码`ebd5e3d71f7104f73e6b47060cb38b90a9099052`，3files/+219/-0；详HANDOFF§19.70。首轮全量曾出现既有 HostDisplayRequestReaderTests.StopBefore… 的整仓并行抖动（§19.66同款），单独复跑全绿、本片未触及Transport，缺陷轮删除后整体重跑。
 
 **下一片。** ping RTT，然后 auto quality 简单控制器消费 RTT 与 EncodedFrames/ActualFps，通过本片预设名执行降档（届时才有真实改档来源），再真实 Host/Client 产品联调与 M6 真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
+
+### ADR-115 — ping/pong 与往返时延计量：有界、对端数据不抛异常
+
+**2026-10-24；只有合同与计量内核，尚未接定时 ping loop。** ebd5e3d/6984起。规格 04 章第 11 节要求 Control 消息至少含 `ping`/`pong`，而代码里此前完全没有。本片新增 PingFrame、PongFrame 与 PingRttMeter 三个 internal 类型；不接定时发送、不收发字节、不改既有认证或视频路径，因此**协议上还没有真正发出过一个 ping**。
+
+**严格形态。** 沿用既有 Control 帧合同：4 KiB 预算、固定字段集、重复字段与非整数拒绝、非法 UTF-8 与残缺 JSON 拒绝、sessionId 必须等于预期会话；ping 与 pong 类型互不相认。pong 的 `seq` 与 `echoedSeq` 是两回事：前者是本消息序号，后者才用于结算往返时延，这一区分由专用变异守护。
+
+**计量四条硬约束。** ①待确认样本有界（MaxPending = 32），超出拒绝登记，绝不无界增长；②重复或未知回显不结算、不改写最近值；③回显序号属于对端数据，负数或异常值只返回 false，**不让本进程抛异常**；④`Prune` 清理超期未确认，对端不回时不堆积。无样本时 `LatestRtt` 为 null，不虚构 0。时钟可注入，便于确定性测量。
+
+**验证。** 新增23项，三轮定向各23PASS；五变异 pong-echo-ignored / meter-settle-any / meter-duplicate-settle / meter-unbounded / meter-no-prune 各1个原Assert红并精确恢复。final-v1于10:21:34–10:26:23+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各7007PASS/0FAIL/0SKIP（Transport5252、Acceptance590、Sessions300等）。旧6984身份+23/-0；未改任何旧测试，无同步修正桥。audit-v1 10:26:38–10:26:43+08:00原52524/外层/主线程exit0，report1034539字节/SHA `f0b228485e7567b7c7c036a0722ff886697c7d0c8e146a5c0cd5d4ed783c5a44`，441源/180原件/40TRX/28056execution。代码`0ffc111256a80edd9bbbdb350e41937e0eff94e1`，5files/+714/-0；详HANDOFF§19.71。
+
+**下一片。** auto quality 简单控制器：消费本片 RTT 与 §19.69 的实际帧率，通过 §19.70 的预设名执行降档（同时把 ping 真正接到会话读写路径），再真实 Host/Client 产品联调与 M6 真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。

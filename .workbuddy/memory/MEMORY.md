@@ -4,17 +4,17 @@
 > ADR `docs/DECISIONS.md`（至113：实际帧率指标用Stopwatch；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 2026-10-10用户选B：只支持新版双方，旧端拒绝并提示升级；无legacy单屏兼容/静默降级。
 
-## 当前续作点（2026-10-23 下午，权威详HANDOFF§19.70/ADR114）
+## 当前续作点（2026-10-24，权威详HANDOFF§19.71/ADR115）
 
-**Last code commit：`ebd5e3d71f7104f73e6b47060cb38b90a9099052`**，3files/+219/-0；命名画质预设（App internal VideoQualityPresets：按名严格解析 + NameOf 反查）+ SessionQualityResolver.SetPreset。产品仍表现为主机档位：无界面预设选择、Host 未对外暴露改档入口、auto quality 未接。
+**Last code commit：`0ffc111256a80edd9bbbdb350e41937e0eff94e1`**，5files/+714/-0；ping/pong 帧合同 + PingRttMeter 往返时延计量内核。**尚未接定时 ping loop、未接到任何会话读写路径**，协议上还没真正发出过一个 ping；RTT 也未被画质逻辑消费。
 
-**Validation（§19.70）。** 新19项，三轮定向各19PASS；五变异preset-name-mismatch/resolve-fallback-unknown/try-resolve-always-true/nameof-never-null/set-preset-fallback 分别1/7/1/3/1原Assert红恢复。final-v1 17:04:38–17:08:53+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各6984PASS/0FAIL/0SKIP（Acceptance590/Sessions300/Transport5229/Capture296/Core197/Security66/Protocol303/Integration3）。audit-v1 17:09:18–17:09:23+08:00原20792/外层/主线程exit0，report1025903字节/SHA `ffc87cd91faf3211fa2821bbe9fcdfc79df62960765cd1293f8573ee7abf2497`；436源/180原件/40TRX/27968execution，旧6965身份+19/-0。
+**Validation（§19.71）。** 新23项，三轮定向各23PASS；五变异pong-echo-ignored/meter-settle-any/meter-duplicate-settle/meter-unbounded/meter-no-prune各1原Assert红恢复。final-v1 10:21:34–10:26:23+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各7007PASS/0FAIL/0SKIP（Transport5252/Acceptance590/Sessions300/Capture296/Core197/Security66/Protocol303/Integration3）。audit-v1 10:26:38–10:26:43+08:00原52524/外层/主线程exit0，report1034539字节/SHA `f0b228485e7567b7c7c036a0722ff886697c7d0c8e146a5c0cd5d4ed783c5a44`；441源/180原件/40TRX/28056execution，旧6984身份+23/-0。
 
-**预设语义（别搞混）。** 预设解析严格：未知名/空/空白/大小写不符/前后空白一律拒绝，**绝不静默回落**；`VideoQualitySettings.Clamp` 是另一套宽松钳制语义，保持原样。档位数值以 Core 三个静态预设为唯一事实来源，预设表不重复定义。M6清单里 `scale` 早已落地（编码器按 settings.Scale 缩放），`actual FPS` 见 §19.69（dcd5eea/6965，Stopwatch、禁在构造/Start 加 TimeProvider 调用）。
+**ping/RTT 语义。** pong 的 `seq` 是本消息序号、`echoedSeq` 才用于结算。计量四条硬约束：待确认有界(MaxPending=32)、重复/未知回显不结算、**对端数据不抛异常**（负数只返回 false）、Prune 可清超期。无样本 LatestRtt 为 null 不虚构 0。测试用现成的 ManualDeadlineClock.Advance 做确定性 RTT。
 
-**前片简记。** §19.69帧率指标dcd5eea/6965；§19.68画质接线e250ca2/6961；§19.67画质底座32420e4/6951；§19.66产品侧切屏93d72e2/6940；§19.65非主屏GDI 1028888/6922。均已push核remote一致。
+**前片简记。** §19.70命名画质预设ebd5e3d/6984（App VideoQualityPresets严格解析+SetPreset；与 Clamp 的宽松语义是两套）；§19.69帧率指标dcd5eea/6965（Stopwatch、禁在构造/Start加TimeProvider调用）；§19.68画质接线e250ca2/6961；§19.67底座32420e4/6951；§19.66产品侧切屏93d72e2/6940。均已push核remote一致。
 
-**Next（M6余项）。** ping RTT → auto quality 简单控制器（消费 RTT + 帧率指标，通过预设名降档）→ 真实 Host/Client 产品联调与 M6 真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
+**Next（M6余项）。** auto quality 简单控制器：消费本片 RTT 与 §19.69 帧率、通过 §19.70 预设名降档（同时把 ping 真正接线），再真实 Host/Client 产品联调与 M6 真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 ## 定位与硬约束
 
@@ -69,6 +69,8 @@ origin为public；gh无需；勿裸跑helper-selector（含--help），会弹GUI
 - MemoryStream派生+重写`Read(Span)`/`ReadAsync(Memory)` → 一次读被数两遍；`"""..."""`里`\n`非转义；取消断言只写`is OperationCanceledException`。
 - 禁止「失败即PASS」：连不上抛`SocketException`/`IOException`永不是`AuthenticationException`；TLS 1.3幽灵行判定写区间`3..4`；`ReadAsync==0`写「有序EOF」。
 - 裸后台线程未处理异常=进程瞬死；未观察faulted Task=静默存活 → 两个handler都要挂。
+- `ArgumentOutOfRangeException.ThrowIfNegative` **不支持TimeSpan**（CS0315，TimeSpan不是INumberBase）；时限类参数要手写 `< TimeSpan.Zero` 比较。
+- 测试里 lambda 参数名 `_` 与 `out _` 同处一个作用域会冲突（CS1503 out int），换掉lambda参数名。
 - `dotnet test`全量计数须看全部项目结果，禁用tail截断。长base64用`Convert.ToBase64String`现造。
 - **夹具拆线竞速**：出结局先`await Task.WhenAny(clientTask, Task.Delay(3s))`再cancel+dispose。
 - **整仓并行抖动**：`HostDisplayRequestReaderTests.StopBeforeOriginalContinuationExitNotifiesButNeverDispatches` 在整仓并行负载下偶发 Expected 1 / Actual 2（§19.66、§19.70 各出现一次），单独复跑恒绿。遇到它先单独复跑并确认未触及 Transport，再决定是缺陷轮重跑还是真回归。
