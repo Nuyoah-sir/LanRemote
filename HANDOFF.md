@@ -70,4 +70,4 @@ audit-v1 exit 0，454 源 / 180 原件 / 40 TRX / 28144 execution，旧 7031 身
 **局限**：开关只解决「是否被管理」，不解决「是否真的换代生效」——换代需要连续同向样本与真实帧率，
 本片未断言；真实会话仍是本机回环与真实本机审批窗口，不是两机或真人操作。
 
-打包成品见 `outputs/M6-自动画质开关-SHA256-20261028.txt` 与本目录 `package-verification.json`。
+打包与推送：证据包 `outputs/LanRemote-M6-自动画质开关-验证证据-20261028.zip` 196 条目 / 8610785 字节 / SHA `6d1e67f6d595cbecbcabe924547ec416c2bdd02f9272d894324c7ea71636ee3b`，`package-verification.json` 回读通过，成品清单见 `outputs/M6-自动画质开关-SHA256-20261028.txt`。文档提交 `ad485d0` 已普通 push，`git ls-remote` 与本地完整号一致，工作树干净。
