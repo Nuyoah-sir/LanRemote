@@ -2152,3 +2152,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **工程教训。** 证据链要求正式定向覆盖全部新增身份：新增测试跨项目时不要改成解决方案级定向或放宽审计，而应让新增测试同处一个目标程序集（本片为此开放测试友元/引用，不改公开 API）。变异替换串必须唯一可逆，升降档两支的同形代码要带上下文区分。
 
 **下一片。** HostRuntimeService 周期换代接线：读 active 生产者与 Display、按会话 RTT 与决策目标，显式画质创建候选并换代，成功后才 SetPreset；当前不接 UI、不改协议。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
+
+### ADR-118 — 自动画质周期换代：先登记来源，换代成功才写档位
+
+**2026-10-28；产品Host接线，不改协议/UI。** 4fd4099/7024起。自动画质此前只有遥测接缝与决策核心。本片新增视频来源登记接缝与 `HostAutoQualityLoop`：产品 Host 监听发布后按会话读取 active 遥测与按会话 RTT，决策后用显式画质创建候选并换代，**换代任务正常返回后才 `SetPreset`**。
+
+**为什么先登记来源。** SessionRegistry 的 internal 方法清单被旧形态测试钉死，不能新增查询入口；改为在来源发布/摘槽时回调产品登记，产品只保存引用，不接管来源或生产者。回调失败不破坏视频收尾；发布回调失败则令该连接停止，避免“产品以为能换代、来源其实没发布”。
+
+**换代契约。** 只认 `ActiveProducer` 且它实现 `IVideoProducerTelemetry`、Display 非空；换代在途或来源终态跳过；候选由 `CreateForDisplayWithSessionQualityAsync` 沿用当前 Display 创建且尚未 Start；`ReplaceAsync` 同步拒绝时候选仍归本循环并自行 `DisposeAsync`，移交后异步失败由来源退休槽负责。档位写入发生在换代成功之后，避免“档位已降、实际仍跑旧档”。
+
+**验证。** 新增4项，三轮定向各4PASS；五变异 loop-ignores-source-termination / loop-ignores-missing-display / loop-ignores-round-trip / loop-keeps-current-preset / loop-invents-current-preset 各1个原Assert红恢复。final-v1 13:48:29–13:52:21+08:00 四 Rebuild 零警告错误、Debug/Release 各 7028PASS/0FAIL/0SKIP（Acceptance608、Transport5255、Sessions300 等）。audit-v1 exit0，report 1039622 字节/SHA `32e70e61fabce8c5709864229af9d7883665982aab500cf4cb32a4127dc911fb`，452源/179原件/40TRX/28121execution。代码 `be022d549d119e4cc122db2d3ee4cae8c1f33b78`，8files/+447/-5；详 HANDOFF §19.74。
+
+**教训。** internal 接口成员隐式实现需 public，但 internal 类不构成公开 API；skip 用例必须让“唯一跳过原因”成立（含 RTT 样本），否则变异不会被杀死。
+
+**下一片。** M6 代码清单已全部完成（scale / quality presets / ping RTT / actual FPS / auto quality简单控制器）；下一步是真实 Host/Client 产品联调与 M6 真机双端验收，不再新增清单项。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。

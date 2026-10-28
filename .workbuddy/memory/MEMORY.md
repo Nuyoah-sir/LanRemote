@@ -1,18 +1,18 @@
 # MEMORY
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记规则、实测事实与停点，上限10000字符。
-> ADR `docs/DECISIONS.md`（至117：自动画质只认active代际与连续样本；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至118：自动画质周期换代成功才写档位；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 2026-10-10用户选B：只支持新版双方，旧端拒绝并提示升级；无legacy单屏兼容/静默降级。
 
-## 当前续作点（2026-10-28，权威详HANDOFF§19.73/ADR117）
+## 当前续作点（2026-10-28，权威详HANDOFF§19.74/ADR118）
 
-**Last code commit：`4fd40993bc798c4a9e1be8ea4130ed187295d50c`**，9files/+450/-1；自动画质遥测接缝与决策核心：active代际生产者+当前Display、换代在途可见、按会话RTT/实际帧率连续样本升降档。**仍无周期换代、画质调控没在产品会话生效。**
+**Last code commit：`be022d549d119e4cc122db2d3ee4cae8c1f33b78`**，8files/+447/-5；Host自动画质周期换代已接线：产品Host登记/注销每会话视频来源，监听发布后启动`HostAutoQualityLoop`，读active遥测+按会话RTT→决策目标→显式画质创建候选→`ReplaceAsync`→**换代成功才SetPreset**。M6代码清单已完成。
 
-**Validation（§19.73）。** 新14项（Acceptance10决策+2当前代际接缝+2工厂目标显示器），三轮定向各14PASS；五变异controller-single-sample-switch/controller-bad-becomes-upgrade/controller-good-becomes-downgrade/controller-zero-fps-counts/controller-keeps-unknown-state分别2/2/2/1/1原Assert红恢复。final-v1 12:15:43–12:19:42+08:00四Rebuild零警告错误、双配置各7024PASS/0FAIL/0SKIP。audit-v1 exit0，report1046041字节/SHA `d30670d174b64035b422b4b91a40949ee09419604f18add566f9ebd70761d3d3`；旧7010身份+14/-0。
+**Validation（§19.74）。** 新4项（Acceptance），三轮定向各4PASS；五变异loop-ignores-source-termination/loop-ignores-missing-display/loop-ignores-round-trip/loop-keeps-current-preset/loop-invents-current-preset各1原Assert红恢复。final-v1 13:48:29–13:52:21+08:00四Rebuild零警告错误、双配置各7028PASS/0FAIL/0SKIP。audit-v1 exit0，report1039622字节/SHA `32e70e61fabce8c5709864229af9d7883665982aab500cf4cb32a4127dc911fb`；旧7024身份+4/-0。
 
-**语义。** ActiveProducer只返回已发布active代际（空窗null，不冒充候选）；Display是本次selected，换代必须沿用。决策连续3个同向样本才升降一档，滞回区间清零；无RTT/帧率0/未知或手工档位不改档。前片§19.72真实ping/pong与RTT 9fb249f/7010、§19.70预设ebd5e3d/6984、§19.69帧率dcd5eea/6965。
+**语义。** 换代在途/来源终态/无当前档位/无Display跳过；同步拒绝时候选自己DisposeAsync，移交后异步失败由来源退休槽负责。停机先停止并join worker再清档位。前片§19.73遥测与决策核心4fd4099/7024、§19.72真实ping/pong与RTT 9fb249f/7010。
 
-**Next（M6余项）。** HostRuntimeService周期换代接线：读active生产者与Display、按会话RTT+决策目标，显式画质创建候选并走`ReplaceableVideoFrameSource`换代，成功后才SetPreset，再真实Host/Client联调与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
+**Next。** 真实Host/Client产品联调与M6真机双端验收（多屏切换后鼠标坐标准确、每会话画质独立）；不再新增代码清单项。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 ## 定位与硬约束
 
