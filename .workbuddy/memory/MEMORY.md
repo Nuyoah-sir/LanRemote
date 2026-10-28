@@ -1,20 +1,22 @@
 # MEMORY
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记规则、实测事实与停点，上限10000字符。
-> ADR `docs/DECISIONS.md`（至119：自动画质先证产品装配再谈真机；118换代成功才写档位；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至120：自动画质须显式开关启用；119先证产品装配再谈真机；118换代成功才写档位；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 2026-10-10用户选B：只支持新版双方，旧端拒绝并提示升级；无legacy单屏兼容/静默降级。
 
-## 当前续作点（2026-10-28，权威详HANDOFF§19.75/ADR119）
+## 当前续作点（2026-10-28，权威详HANDOFF§19.76/ADR120）
 
-**Last code commit：`d42d65b77a14bd1bc168bc8af6d529b8c04df4d9`**，1file/+364/-0（仅新增产品接线测试，未改生产）。产品装配层已证明：HostRuntimeService 真装了 ControlPing + 来源观察 + 周期worker，真实回环会话按 sessionId 结算到真实 ping/pong RTT。**换代生效仍未端到端证明；真机验收待人工。**
+**Last code commit：`77aca974a65e7bf1ceb84dd649eea4d3161827dc`**，9files/+403/-15。自动画质改为**显式开关**：关闭时不建worker、会话起点不回退（逐字等于开关前）；开启时起点回退balanced并启动周期worker，停机join并复位。UI 新增「本次自动画质」勾选（本次生效，不写配置）。
 
-**Validation（§19.75）。** 新3项（Acceptance 产品接线），三轮定向各3PASS；五变异 wiring-ping-telemetry-not-wired/wiring-observer-not-installed/wiring-loop-not-started/wiring-forget-not-wired/wiring-worker-kept 各1原Assert红恢复。final-v1 14:18:07–14:22:07+08:00 双配置各7031PASS/0FAIL/0SKIP（Acceptance611）。audit-v1 exit0，report1050220字节/SHA `d63016a312f992403e5b3b6c92f728bc4d94a38e9b4b363420d60a9799e2d1dc`；453源/179原件/40TRX/28132 execution，旧7028身份+3/-0。
+**为何加开关（探针实测，别再猜）**：默认配置下 `_sessionQuality.Resolve(sessionId)==null`，`HostAutoQualityLoop` 首道闸直接跳过，自适应永不生效；只有预览帧率恰好20FPS（==balanced预设）或手动画质命中命名预设时才接管。
 
-**语义。** 产品Host装配后可断言：context.ControlPing与VideoSourcePublished/Withdrawn非空、worker Completion已启动、来源按sessionId登记/摘槽注销、停机join并清空。带Control monitor的会话Dispose必然抛「会话已排空，但存在操作或清理错误」，真实产品保留为诊断，测试只吞这一类。
+**Validation（§19.76）。** 新3项（Acceptance开关），三轮定向各3PASS；五变异 switch-always-on/switch-always-off/switch-start-preset-not-balanced/switch-quality-not-applied/switch-enabled-kept-on-stop 各1原Assert红恢复。final-v1 15:27:37–15:31:36+08:00 双配置各7034PASS/0FAIL/0SKIP（Acceptance614）。audit-v1 exit0，report1058173字节/SHA `d816217ae1af680ab46c5b8b41874f0cc4d159590c597dd4c1345e5336034b65`；454源/180原件/40TRX/28144 execution，旧7031身份+3/-0。
 
-**前片。** §19.74周期换代接线be022d5/7028；§19.73遥测接缝与决策核心4fd4099/7024；§19.72真实ping/pong与RTT 9fb249f/7010；§19.70预设ebd5e3d/6984；§19.69帧率dcd5eea/6965。
+**语义。** 会话起点回退只发生在开关开启且主机无显式档位时；显式档位优先。新增遥测 `IVideoProducerTelemetry.Quality`/`FramePipeline.Settings` 可断言本代际实际档位。旧测试一处受控同步（旧接线用例改显式开启）。
 
-**Next。** 真实Host/Client产品联调与M6真机双端验收（多屏切换后鼠标坐标准确、每会话画质独立）；需真人/真机/实屏，不能自行判定。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
+**前片。** §19.75产品装配联调d42d65b/7031；§19.74周期换代接线be022d5/7028；§19.73决策核心4fd4099/7024；§19.72真实ping/pong 9fb249f/7010。
+
+**Next。** 真机双端验收：勾选「本次自动画质」后两台真机上观察画质是否真的随网络劣化降档（多屏切换后鼠标坐标准确、每会话画质独立）；需真人/真机/实屏。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 ## 定位与硬约束
 
