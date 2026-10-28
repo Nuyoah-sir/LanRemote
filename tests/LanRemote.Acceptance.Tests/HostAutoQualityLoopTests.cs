@@ -175,11 +175,13 @@ public sealed class HostAutoQualityLoopTests
     private sealed class MeasuredProducer : IVideoFrameProducer, IVideoProducerTelemetry
     {
         private int _stopCalls, _startCalls;
-        internal MeasuredProducer(DisplayInfo? display, double fps = 30, long frames = 10)
+        internal MeasuredProducer(DisplayInfo? display, double fps = 30, long frames = 10,
+            VideoQualitySettings? quality = null)
         {
             Display = display;
             ActualFps = fps;
             EncodedFrames = frames;
+            Quality = quality ?? VideoQualitySettings.Balanced;
         }
         internal int StopCalls => Volatile.Read(ref _stopCalls);
         internal int StartCalls => Volatile.Read(ref _startCalls);
@@ -187,6 +189,8 @@ public sealed class HostAutoQualityLoopTests
         public long EncodedFrames { get; }
         public double ActualFps { get; }
         public DisplayInfo? Display { get; }
+        // 本片新增的只读档位接缝：桩固定为构造时给定值，不影响原有换代/跳过的断言。
+        public VideoQualitySettings Quality { get; }
         public void Start() => Interlocked.Increment(ref _startCalls);
         public ValueTask<EncodedFrame?> ReadNextAsync(CancellationToken cancellationToken = default) => new((EncodedFrame?)null);
         public Task StopAsync()

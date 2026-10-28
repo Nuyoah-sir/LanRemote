@@ -74,6 +74,9 @@ public sealed class FramePipeline : IAsyncDisposable
         _completion = Task.Run(CoordinateStopAsync);
     }
 
+    /// <summary>本次管线实际采用的画质档位；只供产品自动画质读取当前代际，不改变只读语义。</summary>
+    internal VideoQualitySettings Settings => _settings;
+
     public static TimeSpan ValidateSettings(VideoQualitySettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);

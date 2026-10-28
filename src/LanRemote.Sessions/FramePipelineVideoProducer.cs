@@ -36,6 +36,9 @@ internal sealed class FramePipelineVideoProducer : IVideoFrameProducer, IVideoFr
     /// <summary>本次准备实际选中的显示器；工厂未显式传递时为 null，不是运行中切屏授权。</summary>
     public DisplayInfo? Display { get; init; }
 
+    /// <summary>本代际管线实际采用的画质档位；未显式指定时为工厂/管线默认，不是目标帧率或网络质量证明。</summary>
+    public VideoQualitySettings Quality => _pipeline.Settings;
+
     public void Start()
     {
         try { _pipeline.Start(); }

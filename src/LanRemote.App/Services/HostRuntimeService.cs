@@ -49,6 +49,7 @@ public sealed class HostRuntimeService
     private TransportHost? _host;
     private TransportHostStartResult? _startResult;
     private VideoQualitySettings? _activePreviewSettings;
+    private bool _autoQualityEnabled;
     private Task? _drainTask;
     private TransportHost? _drainingHost;
     private Task<TransportHostStopReport>? _hostStopTask;
@@ -99,8 +100,10 @@ public sealed class HostRuntimeService
         _subnetPolicy = subnetPolicy;
         _approvalGate = approvalGate;
         _logger = logger;
-        // 回调只读当前主机档位属性，不捕获启动参数局部，也不在构造之外持有可变态。
-        _sessionQuality = new SessionQualityResolver(() => ActivePreviewSettings);
+        // 回调只读当前主机档位与开关状态，不捕获启动参数局部，也不在构造之外持有可变态。
+        // 自动画质开关关闭时没有受管起点：会话沿用工厂默认，自动画质不接管（与开关前行为完全一致）。
+        _sessionQuality = new SessionQualityResolver(() =>
+            ActivePreviewSettings ?? (Volatile.Read(ref _autoQualityEnabled) ? VideoQualitySettings.Balanced : null));
     }
 
     /// <summary>只读、严格解析；没有文件/损坏/查看权限未明确写出均不视为授权。</summary>
@@ -208,8 +211,12 @@ public sealed class HostRuntimeService
         BlockApprovals();
     }
 
+    /// <param name="autoQuality">
+    /// 仅本次显式开启：为会话提供命名起点（未指定档位时取 balanced）并启动周期换代 worker。
+    /// 关闭时不启动 worker、不改变起点，行为与引入开关前完全一致。
+    /// </param>
     public async Task<TransportHostStartResult> StartAsync(CancellationToken cancellationToken = default,
-        VideoQualitySettings? previewSettings = null)
+        VideoQualitySettings? previewSettings = null, bool autoQuality = false)
     {
         // 首道门禁在取身份/网卡/密钥前拒非法画质，不把M6自动预设悄悄启用。
         if (previewSettings is not null) FramePipeline.ValidateSettings(previewSettings);
@@ -360,14 +367,19 @@ public sealed class HostRuntimeService
                     EnsureStartAllowed();
                     cancellationToken.ThrowIfCancellationRequested();
                     _activePreviewSettings = previewSettings;
+                    _autoQualityEnabled = autoQuality;
                     _startResult = result;
                     _host = host;
                     // 监听发布之后才启动：只按已发布来源换代，不参与启动期初始生产者。
-                    _autoQualityLoop = new(_autoQuality, _controlPingTelemetry, _sessionQuality,
-                        (sessionId, display, settings, token) =>
-                            factory.CreateForDisplayWithSessionQualityAsync(sessionId, display, settings, token),
-                        SnapshotVideoSources, TimeProvider.System, TimeSpan.FromSeconds(2), _logger);
-                    _autoQualityLoop.Start();
+                    // 开关关闭时不建 worker：即使主机档位恰好等于某个命名预设也不自动改档。
+                    if (autoQuality)
+                    {
+                        _autoQualityLoop = new(_autoQuality, _controlPingTelemetry, _sessionQuality,
+                            (sessionId, display, settings, token) =>
+                                factory.CreateForDisplayWithSessionQualityAsync(sessionId, display, settings, token),
+                            SnapshotVideoSources, TimeProvider.System, TimeSpan.FromSeconds(2), _logger);
+                        _autoQualityLoop.Start();
+                    }
                 }
                 // 日志提供者可能同步阻塞/抛错；发布之后的日志不是事务的一部分。
                 // 不能在本轮因日志故障而重复释放已经交给 _host 的实例。
@@ -484,6 +496,7 @@ public sealed class HostRuntimeService
             }
         }
         lock (_sessionVideoGate) _sessionVideoSources.Clear();
+        _autoQualityEnabled = false;
         _autoQuality.Clear();
         _videoFactory = null;
     }

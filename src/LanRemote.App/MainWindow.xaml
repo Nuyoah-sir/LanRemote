@@ -143,6 +143,10 @@
                               IsChecked="{Binding UseThirtyFpsPreview, Mode=TwoWay}"
                               ToolTip="与10/15/20 FPS档互斥；停止共享并完整排空后再显式开启才生效。目标帧率不保证实机达到；CPU、内存与带宽可能增加。"
                               Margin="0,0,0,8" />
+                    <CheckBox Content="本次自动画质：按网络往返与实际帧率自动升降档"
+                              IsChecked="{Binding AutoQuality, Mode=TwoWay}"
+                              ToolTip="勾选后本次共享的会话以 balanced 起点，Host 每 2 秒按真实 ping 往返与实测帧率在 low-latency / balanced / high-quality 间最多升降一档；不勾选时完全不自动改档。仅下一次开启共享时生效。"
+                              Margin="0,0,0,8" />
                     <CheckBox Content="本次手动缩放 / JPEG 质量（实验）"
                               IsChecked="{Binding UseManualVideoQuality, Mode=TwoWay}"
                               ToolTip="须勾选才覆盖原5FPS/50%或实验档75%与JPEG60；仅下一次显式开启有效，不写入配置。100%与高JPEG质量可能增加内存和带宽。"

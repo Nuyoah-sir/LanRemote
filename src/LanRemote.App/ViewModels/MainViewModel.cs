@@ -57,6 +57,7 @@ public sealed class MainViewModel : ViewModelBase
     private double _manualPreviewScale = 0.75;
     private int _manualJpegQuality = 60;
     private bool _useManualVideoQuality;
+    private bool _autoQuality;
     private bool _isExiting;
     private string _hostStatusText = "主机未监听：正在验证配置与身份。";
     private string _hostProtocolStatusText = string.Empty;
@@ -294,6 +295,19 @@ public sealed class MainViewModel : ViewModelBase
         set
         {
             if (SetProperty(ref _useManualVideoQuality, value)) ReportPendingVideoSelection();
+        }
+    }
+
+    /// <summary>
+    /// 自动画质须本机显式勾选：开启后本次共享的会话以命名预设 balanced 为起点，
+    /// 并按真实 RTT 与实际帧率在三个命名预设间升降；关闭时行为与引入开关前完全一致。
+    /// </summary>
+    public bool AutoQuality
+    {
+        get => _autoQuality;
+        set
+        {
+            if (SetProperty(ref _autoQuality, value)) ReportPendingVideoSelection();
         }
     }
 
@@ -806,7 +820,8 @@ public sealed class MainViewModel : ViewModelBase
     /// <summary>仅由本机明确点击“开启仅查看共享”时调用；历史配置和勾选设置不授权监听。</summary>
     public async Task EnableViewOnlySharingAsync(CancellationToken token = default, bool useClearerPreview = false,
         bool useSmootherPreview = false, bool useFastPreview = false, bool useThirtyFpsPreview = false,
-        bool useManualVideoQuality = false, double manualScale = 0.75, int manualJpegQuality = 60)
+        bool useManualVideoQuality = false, double manualScale = 0.75, int manualJpegQuality = 60,
+        bool autoQuality = false)
     {
         if (_isExiting) return;
         if ((useClearerPreview ? 1 : 0) + (useSmootherPreview ? 1 : 0) +
@@ -900,7 +915,7 @@ public sealed class MainViewModel : ViewModelBase
             }
 
             _hostRuntime.AllowListening();
-            started = await StartHostAsync(token, intent, previewSettings).ConfigureAwait(true);
+            started = await StartHostAsync(token, intent, previewSettings, autoQuality).ConfigureAwait(true);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -1038,12 +1053,13 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     private async Task<bool> StartHostAsync(CancellationToken cancellationToken, long intent,
-        VideoQualitySettings? previewSettings)
+        VideoQualitySettings? previewSettings, bool autoQuality)
     {
         RefreshHostProtocolStatus();
         try
         {
-            TransportHostStartResult result = await _hostRuntime.StartAsync(cancellationToken, previewSettings)
+            TransportHostStartResult result = await _hostRuntime.StartAsync(cancellationToken, previewSettings,
+                autoQuality)
                 .ConfigureAwait(true);
             if (result.IsListening && _hostRuntime.IsListening && !cancellationToken.IsCancellationRequested &&
                 CanEnableViewOnlySharing(intent))

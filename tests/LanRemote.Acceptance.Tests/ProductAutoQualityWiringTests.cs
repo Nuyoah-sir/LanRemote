@@ -144,7 +144,7 @@ public sealed class ProductAutoQualityWiringTests
         {
             Assert.True(runtime.OpenApprovals());
             runtime.AllowListening();
-            TransportHostStartResult started = await runtime.StartAsync(budget.Token).WaitAsync(Guard);
+            TransportHostStartResult started = await runtime.StartAsync(budget.Token, null, true).WaitAsync(Guard);
             Assert.True(started.IsListening, "固定协议端口必须可在回环地址监听；测试不修改端口或系统网络配置。");
             Assert.Empty(started.Failures);
             TransportHost host = ReadField<TransportHost>(runtime, "_host");
