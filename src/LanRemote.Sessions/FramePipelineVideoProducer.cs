@@ -32,6 +32,9 @@ internal sealed class FramePipelineVideoProducer : IVideoFrameProducer, IVideoFr
     /// <summary>本会话真实启动以来的实际帧率；未启动为 0，不因读取而清空历史。</summary>
     internal double ActualFps => _pipeline.ActualFps;
 
+    /// <summary>本次准备实际选中的显示器；工厂未显式传递时为 null，不是运行中切屏授权。</summary>
+    internal DisplayInfo? Display { get; init; }
+
     public void Start()
     {
         try { _pipeline.Start(); }

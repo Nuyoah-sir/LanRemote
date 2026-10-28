@@ -143,7 +143,8 @@ public sealed class FramePipelineVideoProducerFactory : IVideoFrameProducerFacto
             cancellationToken.ThrowIfCancellationRequested();
 
             // 最后一次取消检查前一直由局部变量拥有；成功构造 adapter 后一次性交付，不再后置取消。
-            var producer = new FramePipelineVideoProducer(sessionId, pipeline, capture, encoder);
+            // 目标随生产者一并交付：后续自动画质换代必须沿用当前显示器，不能悄悄回到主屏。
+            var producer = new FramePipelineVideoProducer(sessionId, pipeline, capture, encoder) { Display = selected };
             pipeline = null;
             capture = null;
             encoder = null;

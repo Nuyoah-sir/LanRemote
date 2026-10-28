@@ -24,6 +24,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\tools\LanRemote.Acceptance\LanRemote.Acceptance.csproj" />
     <ProjectReference Include="..\..\src\LanRemote.App\LanRemote.App.csproj" />
+    <!-- 自动画质遥测接缝与决策测试同在本项目：仅测试引用，不改变产品公开面。 -->
+    <ProjectReference Include="..\..\src\LanRemote.Sessions\LanRemote.Sessions.csproj" />
+    <ProjectReference Include="..\..\src\LanRemote.Transport\LanRemote.Transport.csproj" />
   </ItemGroup>
 
 </Project>

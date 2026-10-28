@@ -35,6 +35,13 @@ internal sealed class ReplaceableVideoFrameSource : IVideoFrameSource, IAsyncDis
     }
 
     internal Guid SessionId => _sessionId;
+
+    /// <summary>当前已发布的 active 代际生产者快照；换代在途时为 null，绝不返回尚未发布的候选。</summary>
+    internal IVideoFrameProducer? ActiveProducer { get { lock (_gate) return _active?.Producer; } }
+
+    /// <summary>是否有换代在途；控制器不得在换代未退出时再提交一次。</summary>
+    internal bool HasReplacementInFlight { get { lock (_gate) return _replace is { IsCompleted: false }; } }
+
     internal Task Completion => _completion;
     // 封口即通知监督者；不等待可能仍阻塞的 Start/Read/Stop/Completion。
     internal Task Termination => _closingSignal.Task;
