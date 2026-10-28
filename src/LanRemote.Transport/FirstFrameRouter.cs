@@ -542,7 +542,15 @@ internal sealed class FirstFrameRouter
                             new VideoFrameWriter(connection.CreateVideoStream(videoLifetime.Withdraw)), source,
                             _context.TimeProvider, _options.FrameWriteTimeout, lifetime.Token).ConfigureAwait(false);
                     });
-                    try { videoLifetime.Publication = _context.SessionRegistry.PublishVideoSource(lease, source); }
+                    try
+                    {
+                        IDisposable publication = _context.SessionRegistry.PublishVideoSource(lease, source);
+                        Action<Guid>? withdrawn = _context.DisplayCatalogSend?.VideoSourceWithdrawn;
+                        videoLifetime.Publication = withdrawn is null
+                            ? publication : new ObservedPublication(publication, withdrawn, lease.SessionId);
+                        try { _context.DisplayCatalogSend?.VideoSourcePublished?.Invoke(lease.SessionId, source); }
+                        catch (Exception) { videoLifetime.Stopping = true; }
+                    }
                     catch (InvalidOperationException) { videoLifetime.Stopping = true; }
                 }
             }
@@ -607,6 +615,20 @@ internal sealed class FirstFrameRouter
             lifetime.Token.ThrowIfCancellationRequested();
             if (videoLifetime.Stopping || lease.Revoked.IsCompleted || peer.IsCompleted || stopped.Task.IsCompleted)
                 throw new OperationCanceledException("视频连接已撤销或关闭。", lifetime.Token);
+        }
+    }
+
+    private sealed class ObservedPublication(IDisposable inner, Action<Guid> withdrawn, Guid sessionId) : IDisposable
+    {
+        public void Dispose()
+        {
+            try { inner.Dispose(); }
+            finally
+            {
+                // 观察回调不得影响原摘槽；产品侧只做登记注销，异常不能反向破坏视频收尾。
+                try { withdrawn(sessionId); }
+                catch { /* 观察回调失败不作为视频连接故障。 */ }
+            }
         }
     }
 

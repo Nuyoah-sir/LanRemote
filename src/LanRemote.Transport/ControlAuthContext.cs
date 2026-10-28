@@ -140,6 +140,28 @@ public sealed record ControlAuthContext
         return this with { ControlPing = new(telemetry, interval, pendingTimeout) };
     }
 
+    /// <summary>观察每会话视频来源的发布与摘槽；仅供产品 Host 登记/注销，不改变来源生命周期。</summary>
+    internal ControlAuthContext WithVideoSourceObserver(
+        Action<Guid, ReplaceableVideoFrameSource> published, Action<Guid> withdrawn)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        ArgumentNullException.ThrowIfNull(withdrawn);
+        HostDisplayCatalogSendOptions options = DisplayCatalogSend
+            ?? throw new InvalidOperationException("必须先装配显示目录来源，才能观察视频来源。");
+        if (options.VideoSourcePublished is not null || options.VideoSourceWithdrawn is not null)
+            throw new InvalidOperationException("视频来源观察只能装配一次。");
+        HostDisplayCatalogSendOptions observed = new(options.Source, options.Budget)
+        {
+            UseSessionWriter = options.UseSessionWriter,
+            DisplayRequestPrepare = options.DisplayRequestPrepare,
+            SessionDisplayRequestPrepare = options.SessionDisplayRequestPrepare,
+            DisplayRequestHandler = options.DisplayRequestHandler,
+            VideoSourcePublished = published,
+            VideoSourceWithdrawn = withdrawn,
+        };
+        return this with { DisplayCatalogSend = observed };
+    }
+
     /// <summary>本机设备号（进 challenge 的 <c>serverDeviceId</c>，同时是 transcript 素材）。</summary>
     public required Guid ServerDeviceId { get; init; }
 

@@ -27,6 +27,9 @@ internal sealed class HostDisplayCatalogSendOptions
     // 显式请求接缝；返回原处理任务，必须覆盖业务操作/回执的完整生命周期，不可反等reader。
     internal Func<SessionRegistry.SessionRegistration, HostControlWriter, DisplayCatalogFrame,
         DisplaySwitchRequestFrame, CancellationToken, Task>? DisplayRequestHandler { get; init; }
+    // 视频来源发布/摘槽观察接缝：只做登记与注销，不得等待或执行网络 I/O。
+    internal Action<Guid, ReplaceableVideoFrameSource>? VideoSourcePublished { get; init; }
+    internal Action<Guid>? VideoSourceWithdrawn { get; init; }
 }
 
 /// <summary>认证后单次目录发送与原 holding 的固定生命周期所有者；不读、不关流、不拥有会话登记。</summary>

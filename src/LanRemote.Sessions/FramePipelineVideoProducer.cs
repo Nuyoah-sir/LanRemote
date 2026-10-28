@@ -4,7 +4,8 @@ using LanRemote.Core.Models;
 namespace LanRemote.Sessions;
 
 /// <summary>拥有专用依赖的内部适配器；成功构造时接管所有权，不改变原管线的启动及停止语义。</summary>
-internal sealed class FramePipelineVideoProducer : IVideoFrameProducer, IVideoFrameProducerStartRejection
+internal sealed class FramePipelineVideoProducer : IVideoFrameProducer, IVideoFrameProducerStartRejection,
+    IVideoProducerTelemetry
 {
     private readonly Guid _sessionId;
     private readonly FramePipeline _pipeline;
@@ -27,13 +28,13 @@ internal sealed class FramePipelineVideoProducer : IVideoFrameProducer, IVideoFr
     public Task Completion => _completion;
 
     /// <summary>本会话真实编码并进入编码队列的帧数；供实际帧率与后续画质调控读取，不是目标帧率或显示证明。</summary>
-    internal long EncodedFrames => _pipeline.EncodedFrames;
+    public long EncodedFrames => _pipeline.EncodedFrames;
 
     /// <summary>本会话真实启动以来的实际帧率；未启动为 0，不因读取而清空历史。</summary>
-    internal double ActualFps => _pipeline.ActualFps;
+    public double ActualFps => _pipeline.ActualFps;
 
     /// <summary>本次准备实际选中的显示器；工厂未显式传递时为 null，不是运行中切屏授权。</summary>
-    internal DisplayInfo? Display { get; init; }
+    public DisplayInfo? Display { get; init; }
 
     public void Start()
     {

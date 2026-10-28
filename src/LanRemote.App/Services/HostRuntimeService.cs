@@ -41,6 +41,11 @@ public sealed class HostRuntimeService
     // 按真实认证会话保存画质；回调只读当前主机档位属性，不捕获启动参数局部。
     private readonly SessionQualityResolver _sessionQuality;
     private readonly ControlPingTelemetry _controlPingTelemetry = new();
+    private readonly AutoQualityController _autoQuality = new();
+    private readonly object _sessionVideoGate = new();
+    private readonly Dictionary<Guid, ReplaceableVideoFrameSource> _sessionVideoSources = [];
+    private FramePipelineVideoProducerFactory? _videoFactory;
+    private HostAutoQualityLoop? _autoQualityLoop;
     private TransportHost? _host;
     private TransportHostStartResult? _startResult;
     private VideoQualitySettings? _activePreviewSettings;
@@ -324,6 +329,9 @@ public sealed class HostRuntimeService
             // 仅产品 Host 显式启用；复用目录/回执写者，RTT 按真实会话登记，旧调用方不多发帧。
             context = context.WithControlPing(_controlPingTelemetry,
                 TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5));
+            // 自动画质需要知道每个真实会话的视频来源；只登记引用，不接管来源或生产者。
+            context = context.WithVideoSourceObserver(ObserveVideoSource, ForgetVideoSource);
+            _videoFactory = factory;
             TransportHost host = TransportHost.CreateWithVideo(
                 addresses, _subnetPolicy, certificate.Certificate, context, factory);
             Task? startupDispose = null;
@@ -354,6 +362,12 @@ public sealed class HostRuntimeService
                     _activePreviewSettings = previewSettings;
                     _startResult = result;
                     _host = host;
+                    // 监听发布之后才启动：只按已发布来源换代，不参与启动期初始生产者。
+                    _autoQualityLoop = new(_autoQuality, _controlPingTelemetry, _sessionQuality,
+                        (sessionId, display, settings, token) =>
+                            factory.CreateForDisplayWithSessionQualityAsync(sessionId, display, settings, token),
+                        SnapshotVideoSources, TimeProvider.System, TimeSpan.FromSeconds(2), _logger);
+                    _autoQualityLoop.Start();
                 }
                 // 日志提供者可能同步阻塞/抛错；发布之后的日志不是事务的一部分。
                 // 不能在本轮因日志故障而重复释放已经交给 _host 的实例。
@@ -424,6 +438,7 @@ public sealed class HostRuntimeService
     {
         try
         {
+            await StopAutoQualityAsync().ConfigureAwait(false);
             Task hostDrain = DrainHostAsync();
             await Task.WhenAll(hostDrain, approvalJoin).ConfigureAwait(false);
             // 会话画质随主机生命周期结束整体清空，不跨主机保留任何会话条目。
@@ -434,6 +449,43 @@ public sealed class HostRuntimeService
         {
             completion.TrySetException(error);
         }
+    }
+
+    private void ObserveVideoSource(Guid sessionId, ReplaceableVideoFrameSource source)
+    {
+        lock (_sessionVideoGate) _sessionVideoSources[sessionId] = source;
+    }
+
+    private void ForgetVideoSource(Guid sessionId)
+    {
+        lock (_sessionVideoGate) _sessionVideoSources.Remove(sessionId);
+    }
+
+    private IReadOnlyList<KeyValuePair<Guid, ReplaceableVideoFrameSource>> SnapshotVideoSources()
+    {
+        lock (_sessionVideoGate) return new List<KeyValuePair<Guid, ReplaceableVideoFrameSource>>(_sessionVideoSources);
+    }
+
+    private async Task StopAutoQualityAsync()
+    {
+        HostAutoQualityLoop? loop;
+        lock (_intentGate)
+        {
+            loop = _autoQualityLoop;
+            _autoQualityLoop = null;
+        }
+        if (loop is not null)
+        {
+            loop.RequestStop();
+            if (loop.Completion is { } completion)
+            {
+                try { await completion.ConfigureAwait(false); }
+                catch (Exception error) { _logger.LogWarning(error, "自动画质worker停止时报告了错误；主机停机继续。"); }
+            }
+        }
+        lock (_sessionVideoGate) _sessionVideoSources.Clear();
+        _autoQuality.Clear();
+        _videoFactory = null;
     }
 
     private void RetainFailedStartupCleanup(TransportHost host, Task disposeTask)
