@@ -4052,7 +4052,7 @@ StopAsync/DisposeAsync/Completion共享完整join：两个原循环及raw.Stop�
 
 **最终全量/提交。** final-v1 于 13:48:29–13:52:21 +08:00 完成四次 Rebuild 零警告零错误，六 dotnet 及 worker/launcher 完整 wait0；Debug/Release 各 7028 PASS / 0 FAIL / 0 SKIP（Integration3 / Core197 / Security66 / Sessions300 / Capture296 / Protocol303 / Acceptance608 / Transport5255）。旧 7024 项完整四字段身份保留，新增 4 项，删除 0；未修改任何旧测试，无同步修正桥。代码 `be022d549d119e4cc122db2d3ee4cae8c1f33b78` 已提交，8files / +447 / -5（2 新增生产 + 5 生产改 + 1 新增 Acceptance 测试类）。
 
-**独立审计与打包。** audit-v1 原进程 / 外层 / 主线程 exit0；report.json 1039622 字节 / SHA `32e70e61fabce8c5709864229af9d7883665982aab500cf4cb32a4127dc911fb`；452 源 / 179 观察原件 / 40 TRX / 28121 唯一 execution，旧 7024 完整身份 +4 / -0，前片三份成品（自动画质决策与遥测接缝 ZIP/TXT/SHA）摘要保持。打包成品见 `outputs/M6-自动画质周期换代接线-SHA256-20261028.txt` 与本目录 `package-verification.json`。
+**独立审计与打包。** audit-v1 原进程 / 外层 / 主线程 exit0；report.json 1039622 字节 / SHA `32e70e61fabce8c5709864229af9d7883665982aab500cf4cb32a4127dc911fb`；452 源 / 179 观察原件 / 40 TRX / 28121 唯一 execution，旧 7024 完整身份 +4 / -0，前片三份成品（自动画质决策与遥测接缝 ZIP/TXT/SHA）摘要保持。打包成品见 `outputs/M6-自动画质周期换代接线-SHA256-20261028.txt` 与本目录 `package-verification.json`：195条目，ZIP 8844773字节 / SHA `ebd8404e3f33e87162177e900cd40bb55c8b1950ca15b24fbaee73e333e1a580`，全条目SHA/CRC及包外四份原件回读通过；验收TXT 3954字节 / SHA `52665ec5e39e9a2749561f6dc7306029183d095f767dd3dc7b993ccfa17fdf25`。当日普通push并 `git ls-remote` 实读完整号核对一致（此处不写 HEAD hash）。
 
 **本轮过程教训（显式记录）。** ①`IVideoProducerTelemetry` 的成员必须 public 才能隐式实现；`FramePipelineVideoProducer` 本身是 internal，因此这不构成公开 API。②skip 用例一开始没注册 RTT，导致“缺显示器”变异没被杀死——决策根本没走到 display 分支；补上坏 RTT 后才让跳过原因唯一，测试源码改变后整轮重跑，未留旧 initial。
 
