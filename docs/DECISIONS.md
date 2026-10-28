@@ -2124,3 +2124,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **验证。** 新增23项，三轮定向各23PASS；五变异 pong-echo-ignored / meter-settle-any / meter-duplicate-settle / meter-unbounded / meter-no-prune 各1个原Assert红并精确恢复。final-v1于10:21:34–10:26:23+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各7007PASS/0FAIL/0SKIP（Transport5252、Acceptance590、Sessions300等）。旧6984身份+23/-0；未改任何旧测试，无同步修正桥。audit-v1 10:26:38–10:26:43+08:00原52524/外层/主线程exit0，report1034539字节/SHA `f0b228485e7567b7c7c036a0722ff886697c7d0c8e146a5c0cd5d4ed783c5a44`，441源/180原件/40TRX/28056execution。代码`0ffc111256a80edd9bbbdb350e41937e0eff94e1`，5files/+714/-0；详HANDOFF§19.71。
 
 **下一片。** auto quality 简单控制器：消费本片 RTT 与 §19.69 的实际帧率，通过 §19.70 的预设名执行降档（同时把 ping 真正接到会话读写路径），再真实 Host/Client 产品联调与 M6 真机双端验收。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
+
+### ADR-116 — 真实 ping/pong 复用唯一读写槽，按会话登记 RTT
+
+**2026-10-28；只测量，不调档。** 0ffc111/7007起。上一片已完成帧合同与计量内核，但协议上未真正发过 ping。本片把它接入真实认证会话：Host 复用目录/回显的唯一写者发 ping，Client 唯一 monitor 读 ping 并由无队列 pong 单槽回 `echoedSeq`，Host 唯一 reader 按回显序号结算，并按真实 sessionId 登记/注销遥测。不新增第二个 Control 读者或写者，不新增公开 API。
+
+**为什么复用而不是另起。** Control 是一个 TLS 流、一个写槽：任何新增 ping/pong 写入若绕过 `HostControlWriter` 或 Client 的既有发送路径，都会在真实切屏请求上引入并发写。故 ping 走唯一写者的 `TryWritePingAsync`（忙则跳过、不排队），pong 与切屏请求共用同一 Control 写槽；切屏请求可等当前 pong 的原写入退出，但原 attempt 仍完整 join。只有被写槽接纳的序号才 Arm，避免未发出却挂着 pending。
+
+**按会话与生命周期。** `ControlPingTelemetry` 只按真实 sessionId 暴露快照，注销必须传入同一实例；ping worker 由 `HostControlWriterLifetime` 停止并 join，pong worker 进入 Client `CloseAndJoinAsync`、错误与释放证据。产品 Host 经 `WithControlPing` 显式启用（默认 2s 探测 / 5s 清理），未配置的旧调用方/夹具不多发帧。
+
+**验证。** 新增3项（含真实字节路径集成），三轮定向各3PASS；五变异 writer-ping-not-armed / reader-settles-own-sequence / client-echoes-own-sequence / client-never-pongs / telemetry-forgets-instance 各1个原Assert红并精确恢复。final-v1 11:17:19–11:21:19+08:00 四 Rebuild 零警告错误、Debug/Release 各 7010PASS/0FAIL/0SKIP（Transport5255、Acceptance590、Sessions300 等）。audit-v1 exit0，report 1041813 字节/SHA `43f88ae2ebd4e3e4a984b92bbcdcbb2d6c01b7dcb70df4110c19a7d7ecc9d436`，445源/183原件/40TRX/28048execution。代码 `9fb249fef37e46768013fe66922fd74df3b097dd`，15files/+756/-22；详 HANDOFF §19.72。
+
+**教训。** 不要在装配路径重复校验“配置时已经约束过”的条件（本次导致产品连接被关、三项验收测试立即失败，且不是抖动）；runner 因本机 NuGet 还原不可用改用 `--no-restore`，仍保持完整 Rebuild 与零警告零错误要求。
+
+**下一片。** auto quality 简单控制器：消费本片 RTT 与 §19.69 实际帧率，按 §19.70 预设名创建候选并走 `ReplaceableVideoFrameSource` 换代；当前不接 UI、不改协议。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。

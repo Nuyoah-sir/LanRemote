@@ -1,20 +1,20 @@
 # MEMORY
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记规则、实测事实与停点，上限10000字符。
-> ADR `docs/DECISIONS.md`（至113：实际帧率指标用Stopwatch；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至116：真实ping/pong复用唯一读写槽+按会话RTT；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 2026-10-10用户选B：只支持新版双方，旧端拒绝并提示升级；无legacy单屏兼容/静默降级。
 
-## 当前续作点（2026-10-24，权威详HANDOFF§19.71/ADR115）
+## 当前续作点（2026-10-28，权威详HANDOFF§19.72/ADR116）
 
-**Last code commit：`0ffc111256a80edd9bbbdb350e41937e0eff94e1`**，5files/+714/-0；ping/pong 帧合同 + PingRttMeter 往返时延计量内核。**尚未接定时 ping loop、未接到任何会话读写路径**，协议上还没真正发出过一个 ping；RTT 也未被画质逻辑消费。
+**Last code commit：`9fb249fef37e46768013fe66922fd74df3b097dd`**，15files/+756/-22；真实Control ping/pong与按会话RTT已接线：Host唯一写者发ping→Client唯一monitor回pong→Host按echoedSeq结算→按sessionId登记/注销遥测；产品Host经`WithControlPing(telemetry,2s,5s)`显式启用。**RTT仍未被画质逻辑消费，控制器未接。**
 
-**Validation（§19.71）。** 新23项，三轮定向各23PASS；五变异pong-echo-ignored/meter-settle-any/meter-duplicate-settle/meter-unbounded/meter-no-prune各1原Assert红恢复。final-v1 10:21:34–10:26:23+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，Debug/Release各7007PASS/0FAIL/0SKIP（Transport5252/Acceptance590/Sessions300/Capture296/Core197/Security66/Protocol303/Integration3）。audit-v1 10:26:38–10:26:43+08:00原52524/外层/主线程exit0，report1034539字节/SHA `f0b228485e7567b7c7c036a0722ff886697c7d0c8e146a5c0cd5d4ed783c5a44`；441源/180原件/40TRX/28056execution，旧6984身份+23/-0。
+**Validation（§19.72）。** 新3项（含真实字节路径集成：本机回环TCP裸流，不冒充TLS；Host起始序号41、Client pong从0起），三轮定向各3PASS；五变异writer-ping-not-armed/reader-settles-own-sequence/client-echoes-own-sequence/client-never-pongs/telemetry-forgets-instance各1原Assert红恢复。final-v1 11:17:19–11:21:19+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，双配置各7010PASS/0FAIL/0SKIP。audit-v1 exit0，report1041813字节/SHA `43f88ae2ebd4e3e4a984b92bbcdcbb2d6c01b7dcb70df4110c19a7d7ecc9d436`；旧7007身份+3/-0，前片三成品保持。
 
-**ping/RTT 语义。** pong 的 `seq` 是本消息序号、`echoedSeq` 才用于结算。计量四条硬约束：待确认有界(MaxPending=32)、重复/未知回显不结算、**对端数据不抛异常**（负数只返回 false）、Prune 可清超期。无样本 LatestRtt 为 null 不虚构 0。测试用现成的 ManualDeadlineClock.Advance 做确定性 RTT。
+**接线语义。** ping复用HostControlWriter写槽（忙则跳过、不排队，只有被接纳序号才Arm）；pong是无队列单槽，与切屏请求共用Control写槽，切屏可等当前pong原写入退出但原attempt仍完整join；未知/重复回显不结算、不抛异常；遥测注销须同一实例。
 
-**前片简记。** §19.70命名画质预设ebd5e3d/6984（App VideoQualityPresets严格解析+SetPreset；与 Clamp 的宽松语义是两套）；§19.69帧率指标dcd5eea/6965（Stopwatch、禁在构造/Start加TimeProvider调用）；§19.68画质接线e250ca2/6961；§19.67底座32420e4/6951；§19.66产品侧切屏93d72e2/6940。均已push核remote一致。
+**前片简记。** §19.71帧合同与计量内核0ffc111/7007；§19.70命名画质预设ebd5e3d/6984（严格解析+SetPreset；与Clamp是两套语义）；§19.69帧率指标dcd5eea/6965（Stopwatch、禁构造/Start加TimeProvider）。更早片均push核remote一致。
 
-**Next（M6余项）。** auto quality 简单控制器：消费本片 RTT 与 §19.69 帧率、通过 §19.70 预设名降档（同时把 ping 真正接线），再真实 Host/Client 产品联调与 M6 真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
+**Next（M6余项）。** auto quality 简单控制器：消费本片RTT与§19.69帧率，按§19.70预设名创建候选并走`ReplaceableVideoFrameSource`换代（SetPreset只影响之后创建的生产者，运行中调档必须换代），再真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 ## 定位与硬约束
 
@@ -44,8 +44,7 @@ M4包沿用 `scripts/acceptance/make-m3-package.py`，仅M4且 `--output-dir <�
 
 ## 里程碑（2026-10-23）
 
-M0–M5完成、M6进行中、M7–M11未开始。M4详§18.25不翻绿/重跑；pin仅顺序关联、SAC非产品功能。
-origin为public；gh无需；勿裸跑helper-selector（含--help），会弹GUI/改配置。M5已于2026-10-12按用户确认收口。
+M0–M5完成、M6进行中、M7–M11未开始；M4历史不翻绿，M5已按用户确认收口。origin为public；勿裸跑helper-selector（含--help）。
 
 ## 实测事实（别再猜）
 
@@ -65,15 +64,18 @@ origin为public；gh无需；勿裸跑helper-selector（含--help），会弹GUI
 - **构建告警门禁不算kill**：变异不能让私有字段只剩`Interlocked.Read`引用（会CS0649被零警告门禁拦下），须保持字段被赋值。
 - **xunit v3 的 `Assert.True(cond, message)` 在TRX只上报自定义消息、不含"Assert."前缀**；原Assert由「消息含Assert.或堆栈落在新增测试类」双重认证，禁用Timeout/Guard/Watchdog/超时替代。
 - **FramePipeline 禁止新增时钟调用**：既有测试断言构造/创建阶段`TimestampCalls==0`，并有7项注入时钟失败场景（须保留原异常）。实际帧率一类指标用Stopwatch，不在构造/Start取`TimeProvider.GetTimestamp()`。
-- **形态契约坑**：给既有internal入口加**重载**会让旧测试反射取方法AmbiguousMatchException；旧测试不可改时改用独立命名入口。凡旧测试用反射读编译器生成成员，新增生产代码都要先想形态影响（含闭包捕获局部会被提升到闭包类）。
+- **形态契约坑**：给既有internal入口加**重载**会让旧测试反射取方法AmbiguousMatchException；旧测试不可改时改用独立命名入口。新增生产代码要先想反射形态影响。
 - MemoryStream派生+重写`Read(Span)`/`ReadAsync(Memory)` → 一次读被数两遍；`"""..."""`里`\n`非转义；取消断言只写`is OperationCanceledException`。
 - 禁止「失败即PASS」：连不上抛`SocketException`/`IOException`永不是`AuthenticationException`；TLS 1.3幽灵行判定写区间`3..4`；`ReadAsync==0`写「有序EOF」。
 - 裸后台线程未处理异常=进程瞬死；未观察faulted Task=静默存活 → 两个handler都要挂。
 - `ArgumentOutOfRangeException.ThrowIfNegative` **不支持TimeSpan**（CS0315，TimeSpan不是INumberBase）；时限类参数要手写 `< TimeSpan.Zero` 比较。
 - 测试里 lambda 参数名 `_` 与 `out _` 同处一个作用域会冲突（CS1503 out int），换掉lambda参数名。
+- **本机NuGet还原可能整会话坏掉**（`dotnet restore`/`nuget locals`报`Value cannot be null (path1)`）：用 `build -t:Rebuild --no-restore`；审计比对argv要按旧/新runner区分。
+- **别在装配路径重复校验配置期已约束的条件**：曾因ping+UseSessionWriter重复校验关掉真实产品连接，三项验收测试312ms即失败；改生产校验后整轮重跑，不留旧stage。
+- Control周期/pong worker必须挂既有停止与join（Host ping loop由writer lifetime join；Client pong进CloseAndJoin/错误/释放证据）；写槽冲突跳过不排队。
 - `dotnet test`全量计数须看全部项目结果，禁用tail截断。长base64用`Convert.ToBase64String`现造。
 - **夹具拆线竞速**：出结局先`await Task.WhenAny(clientTask, Task.Delay(3s))`再cancel+dispose。
-- **整仓并行抖动**：`HostDisplayRequestReaderTests.StopBeforeOriginalContinuationExitNotifiesButNeverDispatches` 在整仓并行负载下偶发 Expected 1 / Actual 2（§19.66、§19.70 各出现一次），单独复跑恒绿。遇到它先单独复跑并确认未触及 Transport，再决定是缺陷轮重跑还是真回归。
+- **整仓并行抖动**：`HostDisplayRequestReaderTests.StopBeforeOriginalContinuationExitNotifiesButNeverDispatches` 在整仓并行负载下偶发 Expected 1 / Actual 2，单独复跑恒绿；先单独复跑并确认未触及Transport，再决定缺陷轮重跑或真回归。
 
 ## 网络 / lab
 
@@ -83,7 +85,7 @@ origin为public；gh无需；勿裸跑helper-selector（含--help），会弹GUI
 
 ## 产品形态（ADR-024/025/026/035/036）
 
-ADR-045优先：只读网络诊断保留；旧改IP计划取消，主进程不提权。不得按旧M10安排重加改网功能。M3不插队做024/025/026。
+ADR-045优先：只读网络诊断保留；主进程不提权，不得重加改网功能。
 
 ## 残留
 
