@@ -4087,4 +4087,4 @@ wiring-forget-not-wired、wiring-worker-kept）。final-v1 14:18:07–14:22:07 +
 本片不证明画质换代已在产品会话中生效（换代需连续同向样本与真实帧率，未在此断言），
 也不证明对端显示成功。真机双端验收仍待人工条件。
 
-打包成品见 `outputs/M6-自动画质产品联调-SHA256-20261028.txt` 与本目录 `package-verification.json`。
+打包与推送：证据包 `outputs/LanRemote-M6-自动画质产品联调-验证证据-20261028.zip` 189 条目 / 8838575 字节 / SHA `1c9409ddc5feb398b9071976ea6fda100e643823b529f22a952cfe646be4d0f2`，`package-verification.json` 回读通过，成品清单见 `outputs/M6-自动画质产品联调-SHA256-20261028.txt`。文档提交 `ed28209` 已普通 push，`git ls-remote` 与本地完整号一致，工作树干净。
