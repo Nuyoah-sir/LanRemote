@@ -71,3 +71,21 @@ audit-v1 exit 0，454 源 / 180 原件 / 40 TRX / 28144 execution，旧 7031 身
 本片未断言；真实会话仍是本机回环与真实本机审批窗口，不是两机或真人操作。
 
 打包与推送：证据包 `outputs/LanRemote-M6-自动画质开关-验证证据-20261028.zip` 196 条目 / 8610785 字节 / SHA `6d1e67f6d595cbecbcabe924547ec416c2bdd02f9272d894324c7ea71636ee3b`，`package-verification.json` 回读通过，成品清单见 `outputs/M6-自动画质开关-SHA256-20261028.txt`。文档提交 `ad485d0` 已普通 push，`git ls-remote` 与本地完整号一致，工作树干净。
+
+
+---
+
+## 19.77 真机验收包（非验证片，只交付可运行产物）
+
+- 产物：`outputs/LanRemote-M6-自动画质真机验收-20261028-win-x64.zip`，63,847,961 字节 /
+  SHA `8d208a162d35f31aa7f96d9f3134ebc06be0050d530657089089afe19b3a3964`（433 条目，自包含 win-x64）。
+- **组成方式**：本会话 NuGet 还原不可用（`dotnet restore` 报 `Value cannot be null (path1)`；
+  根因是子进程缺少 ProgramData / ProgramFiles / LOCALAPPDATA，`NuGet.Configuration.ConfigurationDefaults`
+  静态构造里 `Path.Combine` 拿到 null；补齐环境变量、改用桌面会话、关闭沙箱均无效，
+  系统 dotnet（C:\Program Files\dotnet）无 SDK）。故本包 = 2026-10-08 自包含产物（运行时 10.0.12）
+  + 本日 M6 Release 构建覆盖 8 个 `LanRemote.*.dll`（net10.0，兼容）。未改任何源码，只替换程序集。
+- **冒烟**：本机启动 `LanRemote.App.exe` 存活至超时被杀，未崩溃；**未做 GUI 交互与两机验证**。
+- 一键原生 publish 脚本：`scripts/publish-m6-realdevice.ps1`（NuGet 可用时一条命令出包）。
+- 复测说明：`outputs/M6-真机双端验收复测说明-20261028.txt`（验什么、怎么勾自动画质、要记录哪些数据）。
+- 旧包现状：根目录 `LanRemote-0.1.0-m2-win-x64.zip`（9-20）、`LanRemote-0.1.0-m2-m3-acceptance-win-x64.zip`（9-21）
+  与 `artifacts/m5-manual-quality-20261008` 均**不含 M6 代码**，不能用于 M6 验收。
