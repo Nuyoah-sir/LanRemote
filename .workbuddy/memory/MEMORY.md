@@ -1,20 +1,18 @@
 # MEMORY
 
 > 唯一真实进度 = 仓库根 `HANDOFF.md`；本文件只放跨会话必记规则、实测事实与停点，上限10000字符。
-> ADR `docs/DECISIONS.md`（至116：真实ping/pong复用唯一读写槽+按会话RTT；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
+> ADR `docs/DECISIONS.md`（至117：自动画质只认active代际与连续样本；045现网只读）；原始规格 `LanRemote_Implementation_Package/` 不回写。
 > 2026-10-10用户选B：只支持新版双方，旧端拒绝并提示升级；无legacy单屏兼容/静默降级。
 
-## 当前续作点（2026-10-28，权威详HANDOFF§19.72/ADR116）
+## 当前续作点（2026-10-28，权威详HANDOFF§19.73/ADR117）
 
-**Last code commit：`9fb249fef37e46768013fe66922fd74df3b097dd`**，15files/+756/-22；真实Control ping/pong与按会话RTT已接线：Host唯一写者发ping→Client唯一monitor回pong→Host按echoedSeq结算→按sessionId登记/注销遥测；产品Host经`WithControlPing(telemetry,2s,5s)`显式启用。**RTT仍未被画质逻辑消费，控制器未接。**
+**Last code commit：`4fd40993bc798c4a9e1be8ea4130ed187295d50c`**，9files/+450/-1；自动画质遥测接缝与决策核心：active代际生产者+当前Display、换代在途可见、按会话RTT/实际帧率连续样本升降档。**仍无周期换代、画质调控没在产品会话生效。**
 
-**Validation（§19.72）。** 新3项（含真实字节路径集成：本机回环TCP裸流，不冒充TLS；Host起始序号41、Client pong从0起），三轮定向各3PASS；五变异writer-ping-not-armed/reader-settles-own-sequence/client-echoes-own-sequence/client-never-pongs/telemetry-forgets-instance各1原Assert红恢复。final-v1 11:17:19–11:21:19+08:00四Rebuild零警告错误、六dotnet/worker/launcher完整wait0，双配置各7010PASS/0FAIL/0SKIP。audit-v1 exit0，report1041813字节/SHA `43f88ae2ebd4e3e4a984b92bbcdcbb2d6c01b7dcb70df4110c19a7d7ecc9d436`；旧7007身份+3/-0，前片三成品保持。
+**Validation（§19.73）。** 新14项（Acceptance10决策+2当前代际接缝+2工厂目标显示器），三轮定向各14PASS；五变异controller-single-sample-switch/controller-bad-becomes-upgrade/controller-good-becomes-downgrade/controller-zero-fps-counts/controller-keeps-unknown-state分别2/2/2/1/1原Assert红恢复。final-v1 12:15:43–12:19:42+08:00四Rebuild零警告错误、双配置各7024PASS/0FAIL/0SKIP。audit-v1 exit0，report1046041字节/SHA `d30670d174b64035b422b4b91a40949ee09419604f18add566f9ebd70761d3d3`；旧7010身份+14/-0。
 
-**接线语义。** ping复用HostControlWriter写槽（忙则跳过、不排队，只有被接纳序号才Arm）；pong是无队列单槽，与切屏请求共用Control写槽，切屏可等当前pong原写入退出但原attempt仍完整join；未知/重复回显不结算、不抛异常；遥测注销须同一实例。
+**语义。** ActiveProducer只返回已发布active代际（空窗null，不冒充候选）；Display是本次selected，换代必须沿用。决策连续3个同向样本才升降一档，滞回区间清零；无RTT/帧率0/未知或手工档位不改档。前片§19.72真实ping/pong与RTT 9fb249f/7010、§19.70预设ebd5e3d/6984、§19.69帧率dcd5eea/6965。
 
-**前片简记。** §19.71帧合同与计量内核0ffc111/7007；§19.70命名画质预设ebd5e3d/6984（严格解析+SetPreset；与Clamp是两套语义）；§19.69帧率指标dcd5eea/6965（Stopwatch、禁构造/Start加TimeProvider）。更早片均push核remote一致。
-
-**Next（M6余项）。** auto quality 简单控制器：消费本片RTT与§19.69帧率，按§19.70预设名创建候选并走`ReplaceableVideoFrameSource`换代（SetPreset只影响之后创建的生产者，运行中调档必须换代），再真实Host/Client产品联调与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
+**Next（M6余项）。** HostRuntimeService周期换代接线：读active生产者与Display、按会话RTT+决策目标，显式画质创建候选并走`ReplaceableVideoFrameSource`换代，成功后才SetPreset，再真实Host/Client联调与M6真机双端验收；当前无需人工前置。无M6产品包；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP。
 
 ## 定位与硬约束
 
@@ -73,6 +71,8 @@ M0–M5完成、M6进行中、M7–M11未开始；M4历史不翻绿，M5已按�
 - **本机NuGet还原可能整会话坏掉**（`dotnet restore`/`nuget locals`报`Value cannot be null (path1)`）：用 `build -t:Rebuild --no-restore`；审计比对argv要按旧/新runner区分。
 - **别在装配路径重复校验配置期已约束的条件**：曾因ping+UseSessionWriter重复校验关掉真实产品连接，三项验收测试312ms即失败；改生产校验后整轮重跑，不留旧stage。
 - Control周期/pong worker必须挂既有停止与join（Host ping loop由writer lifetime join；Client pong进CloseAndJoin/错误/释放证据）；写槽冲突跳过不排队。
+- 新增测试跨多个项目会破坏证据链“定向Counter覆盖全部新增身份”；不要用解决方案级定向或放宽审计，应让新测试同处一个目标程序集（必要时只加测试友元/引用）。
+- 变异替换串要唯一可逆：升降档两支的同形代码（如`index±1`）必须带上下文/注释区分，否则逆替换校验会拦下。
 - `dotnet test`全量计数须看全部项目结果，禁用tail截断。长base64用`Convert.ToBase64String`现造。
 - **夹具拆线竞速**：出结局先`await Task.WhenAny(clientTask, Task.Delay(3s))`再cancel+dispose。
 - **整仓并行抖动**：`HostDisplayRequestReaderTests.StopBeforeOriginalContinuationExitNotifiesButNeverDispatches` 在整仓并行负载下偶发 Expected 1 / Actual 2，单独复跑恒绿；先单独复跑并确认未触及Transport，再决定缺陷轮重跑或真回归。

@@ -2138,3 +2138,17 @@ Host `StopAsync`维持显式预算：accept和连接未完成按真实结果报�
 **教训。** 不要在装配路径重复校验“配置时已经约束过”的条件（本次导致产品连接被关、三项验收测试立即失败，且不是抖动）；runner 因本机 NuGet 还原不可用改用 `--no-restore`，仍保持完整 Rebuild 与零警告零错误要求。
 
 **下一片。** auto quality 简单控制器：消费本片 RTT 与 §19.69 实际帧率，按 §19.70 预设名创建候选并走 `ReplaceableVideoFrameSource` 换代；当前不接 UI、不改协议。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
+
+### ADR-117 — 自动画质只认 active 代际与连续样本，不凭单帧抖动改档
+
+**2026-10-28；输入与决策，不改运行中管线。** 9fb249f/7010起。自动画质要在运行中换代，必须知道当前 active 生产者和当前显示器，否则候选会悄悄回到主屏；决策也不能因单帧抖动乱跳。本片只补输入与决策：不改运行中管线、不创建/换代生产者、不接周期循环。
+
+**只认 active 代际。** `ReplaceableVideoFrameSource.ActiveProducer` 只返回已发布的 active 代际，换代空窗为 null，绝不把尚未发布的候选或最近创建对象冒充当前代；`HasReplacementInFlight` 让后续控制器不在换代未退出时再提交。`FramePipelineVideoProducer.Display` 由工厂交付本次实际 `selected`，换代沿用当前显示器。
+
+**连续样本与滞回。** `AutoQualityController` 按会话累积 RTT 与实际帧率，连续 3 个同向样本才在 `low-latency / balanced / high-quality` 之间升降一档，切换后清零；滞回区间的混合样本清零计数。无 RTT、帧率 0/非有限、未知/手工档位不改档，未知/手工档位清空计数。坏/好判据用当前档位目标帧率的比例，而不是写死的绝对值。
+
+**验证。** 新增14项，三轮定向各14PASS；五变异 controller-single-sample-switch / controller-bad-becomes-upgrade / controller-good-becomes-downgrade / controller-zero-fps-counts / controller-keeps-unknown-state 分别 2/2/2/1/1 个原Assert红恢复。final-v1 12:15:43–12:19:42+08:00 四 Rebuild 零警告错误、Debug/Release 各 7024PASS/0FAIL/0SKIP（Acceptance604、Transport5255、Sessions300 等）。audit-v1 exit0，report 1046041 字节/SHA `d30670d174b64035b422b4b91a40949ee09419604f18add566f9ebd70761d3d3`，449源/179原件/40TRX/28118execution。代码 `4fd40993bc798c4a9e1be8ea4130ed187295d50c`，9files/+450/-1；详 HANDOFF §19.73。
+
+**工程教训。** 证据链要求正式定向覆盖全部新增身份：新增测试跨项目时不要改成解决方案级定向或放宽审计，而应让新增测试同处一个目标程序集（本片为此开放测试友元/引用，不改公开 API）。变异替换串必须唯一可逆，升降档两支的同形代码要带上下文区分。
+
+**下一片。** HostRuntimeService 周期换代接线：读 active 生产者与 Display、按会话 RTT 与决策目标，显式画质创建候选并换代，成功后才 SetPreset；当前不接 UI、不改协议。当前无需人工前置；不重验M4/M5、不启M7、不改网/防护/权限/Undo/旧ZIP，无M6产品包。
