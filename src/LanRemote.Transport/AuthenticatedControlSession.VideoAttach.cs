@@ -70,6 +70,7 @@ public sealed partial class AuthenticatedControlSession
             // 与成功的 child 登记同锁；任何重复或 clock 重入输家都不能替赢家启动 monitor。
             if (monitorControl)
             {
+                _controlPong = new ClientControlPongState(this);
                 _controlMonitor = new ControlDisconnectMonitor(this);
                 _controlMonitor.StartUnderGate();
             }

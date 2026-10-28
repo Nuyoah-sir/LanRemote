@@ -114,11 +114,13 @@ public sealed partial class AuthenticatedControlSession
                 && (_publicAttachTask is null || _publicAttachTask.IsCompleted)
                 && (_controlMonitor is null || _controlMonitor.Worker is { IsCompleted: true })
                 && (_displaySwitch is null || _displaySwitch.Completion.IsCompleted)
+                && (_controlPong is null || _controlPong.Completion.IsCompleted)
                 && (video?.OriginalOperationsFinished ?? true);
             return new ClientDisposalEvidence(operationsFinished, operationsFinished
                 && _ownedConnection.AllOwnedRootsReleased && (video?.AllOwnedRootsReleased ?? true)
                 && (_controlMonitor?.AllOwnedCatalogRootsReleased ?? true)
-                && (_displaySwitch?.AllOwnedRootsReleased ?? true));
+                && (_displaySwitch?.AllOwnedRootsReleased ?? true)
+                && (_controlPong?.AllOwnedRootsReleased ?? true));
         }
     }
 

@@ -59,6 +59,27 @@ internal sealed class HostControlWriter : IAsyncDisposable
         return Start(null, frame, cancellationToken);
     }
 
+    /// <summary>尝试在本写者发送 ping；忙碌、停止、取消或 pending 已满时返回 null，不排队。</summary>
+    /// <remarks>只有在此接纳的序号才 Arm；目录与回执仍共用同一非回绕序号。</remarks>
+    internal Task<WriteResult>? TryWritePingAsync(PingRttMeter meter, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(meter);
+        lock (_gate)
+        {
+            if (_stopping || _active is { IsCompleted: false } || cancellationToken.IsCancellationRequested || _exhausted)
+                return null;
+            long sequence = _next;
+            if (!meter.Arm(sequence)) return null;
+            if (sequence == long.MaxValue) _exhausted = true;
+            else _next++;
+            HostDisplayCatalogSendAttempt attempt = HostDisplayCatalogSendAttempt.CreatePayload(_stream,
+                () => ValueTask.FromResult(new PingFrame(_sessionId, sequence, Timestamp()).Serialize()),
+                PingFrame.MaxPayloadByteLength, _clock, _budget);
+            _attempt = attempt;
+            return _active = Task.Run(() => WriteAsync(attempt, sequence, () => null, cancellationToken));
+        }
+    }
+
     private long Timestamp() => _clock.GetUtcNow().ToUnixTimeMilliseconds();
 
     private Task<WriteResult> Start(Func<ValueTask<DisplayCatalogFrame>>? source, DisplayChangedFrame? reply, CancellationToken caller)
@@ -179,6 +200,7 @@ internal sealed class HostControlWriterLifetime
     { _writer = writer; _catalogSource = catalogSource; _holding = holding; _hostToken = hostToken; }
     private static readonly Task NoInputStop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task;
     internal Task InputStopRequired { get; init; } = NoInputStop;
+    internal HostControlPingLoop? PingLoop { get; init; }
     internal Task StopRequired => _stop.Task;
     internal Task<HostControlWriter?> Ready => _ready.Task;
     private readonly object _gate = new();
@@ -212,18 +234,25 @@ internal sealed class HostControlWriterLifetime
             if (!sending.IsCompletedSuccessfully || _holding.IsCompleted || _hostToken.IsCancellationRequested || _writer.StopRequired.IsCompleted || InputStopRequired.IsCompleted) return;
             Catalog = sending.Result.Catalog;
             _ready.TrySetResult(_writer);
+            PingLoop?.Start();
             await Task.WhenAny(_holding, hostStop.Task, _writer.StopRequired, InputStopRequired).ConfigureAwait(false);
         }
         catch (Exception caught) { errors.Add(caught); }
         finally
         {
             _ready.TrySetResult(null);
+            PingLoop?.RequestStop();
             _writer.RequestStop();
             _stop.TrySetResult(); // 父先撤销/关线，之后才join不合作的原holding/IO。
             if (sending is not null)
             {
                 try { await sending.ConfigureAwait(false); }
                 catch (Exception) { /* 此写入原错误只由writer.Completion报告；本处补原Task join，不重复收集。 */ }
+            }
+            if (PingLoop?.Completion is { } pingCompletion)
+            {
+                try { await pingCompletion.ConfigureAwait(false); }
+                catch (Exception caught) { errors.Add(OriginalError(pingCompletion, caught)); }
             }
             try { await _writer.Completion.ConfigureAwait(false); }
             catch (Exception caught) { errors.Add(OriginalError(_writer.Completion, caught)); }

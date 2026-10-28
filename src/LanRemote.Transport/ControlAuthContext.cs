@@ -64,6 +64,9 @@ public sealed record ControlAuthContext
     // 未配置仍为原认证保持路径；显式来源由 Router 在认证后生命周期内启动。
     internal HostDisplayCatalogSendOptions? DisplayCatalogSend { get; init; }
 
+    // 产品 Host 显式启用后才发送 ping；普通认证/旧夹具保持原有帧序列。
+    internal ControlPingOptions? ControlPing { get; init; }
+
     /// <summary>返回装配单次只读显示器目录来源的副本；保留本 Host 的所有共享守卫。</summary>
     /// <remarks>
     /// 配置时不调用来源、时钟或 I/O。来源仅由已完成认证/审批/登记及秘密清理的连接调用，
@@ -125,6 +128,16 @@ public sealed record ControlAuthContext
             SessionDisplayRequestPrepare = prepare,
         };
         return this with { DisplayCatalogSend = coordinated };
+    }
+
+    /// <summary>在既有会话写者上启用 Host ping 与按会话 RTT；不新增写者或公开 API。</summary>
+    internal ControlAuthContext WithControlPing(ControlPingTelemetry telemetry, TimeSpan interval, TimeSpan pendingTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(telemetry);
+        if (DisplayCatalogSend?.UseSessionWriter != true)
+            throw new InvalidOperationException("ping 必须装配在既有会话写者与请求读者上。");
+        if (ControlPing is not null) throw new InvalidOperationException("Control ping 只能装配一次。");
+        return this with { ControlPing = new(telemetry, interval, pendingTimeout) };
     }
 
     /// <summary>本机设备号（进 challenge 的 <c>serverDeviceId</c>，同时是 transcript 素材）。</summary>

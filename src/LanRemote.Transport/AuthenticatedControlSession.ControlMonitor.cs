@@ -125,6 +125,8 @@ public sealed partial class AuthenticatedControlSession
                         }
                         else if (message.Change is { } change && parent._displaySwitch is { } switching)
                             switching.AcceptUnderGate(change); // 只关联真实登记，绝不等发送而挡住EOF。
+                        else if (message.Ping is { } ping && parent._controlPong is { } pong)
+                            _ = pong.TryStartUnderGate(ping); // 写槽忙则跳过，不排队，也不挡住下一帧/EOF。
                         else throw new FrameProtocolException("control-unexpected-data");
                     }
                 }
@@ -152,7 +154,7 @@ public sealed partial class AuthenticatedControlSession
             child?.RequestStop();
         }
 
-        private sealed record ControlMessage(DisplayCatalogFrame? Catalog, DisplayChangedFrame? Change);
+        private sealed record ControlMessage(DisplayCatalogFrame? Catalog, DisplayChangedFrame? Change, PingFrame? Ping);
 
         private async Task<ControlMessage?> ReadCatalogAsync(Stream stream, byte firstByte)
         {
@@ -201,10 +203,13 @@ public sealed partial class AuthenticatedControlSession
                 }
                 bool parsed = DisplayCatalogFrame.TryParse(payload, out DisplayCatalogFrame? catalog, out _);
                 DisplayChangedFrame? change = null;
+                PingFrame? ping = null;
                 bool switchingEnabled;
                 lock (parent._gate) switchingEnabled = parent._displaySwitch is not null;
                 if (!parsed && switchingEnabled)
                     parsed = DisplayChangedFrame.TryParse(payload, parent.SessionId, out change, out _);
+                if (!parsed)
+                    parsed = PingFrame.TryParse(payload, parent.SessionId, out ping, out _);
                 // 原组合成功不是未来消费许可；合法/非法载荷都先按原观察锚点复核截止。
                 _ = clock.TimestampFrequency;
                 long now = clock.GetTimestamp();
@@ -214,7 +219,7 @@ public sealed partial class AuthenticatedControlSession
                     elapsed * TimeSpan.TicksPerSecond >= (Int128)CatalogReadBudget.Ticks * frequency)
                     throw new TimeoutException("control-catalog-deadline-expired");
                 if (!parsed) throw new FrameProtocolException("control-unexpected-data");
-                return new(catalog, change);
+                return new(catalog, change, ping);
             }
             finally
             {

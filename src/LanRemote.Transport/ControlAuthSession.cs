@@ -106,6 +106,8 @@ public sealed class ControlAuthSession
     private HostControlWriter? _controlWriter;
     private HostDisplayRequestReader? _requestReader;
     private HostDisplayRequestCoordinator? _requestCoordinator;
+    private PingRttMeter? _controlPingMeter;
+    private ControlPingTelemetry? _controlPingTelemetry;
     private Task<byte?>? _requestFirstRead;
     internal HostControlWriterLifetime? ControlWriterLifetime => Volatile.Read(ref _controlWriterLifetime);
     private Task? _catalogHolding;
@@ -460,6 +462,14 @@ public sealed class ControlAuthSession
                     {
                         try
                         {
+                            PingRttMeter? pingMeter = null;
+                            if (Context.ControlPing is { } pingOptions)
+                            {
+                                pingMeter = new(Context.TimeProvider);
+                                pingOptions.Telemetry.Register(SessionId, pingMeter);
+                                _controlPingMeter = pingMeter;
+                                _controlPingTelemetry = pingOptions.Telemetry;
+                            }
                             // 原位置直接进入 holding 的同步前缀，保存原 Task；不搬读线程、不另开读者。
                             var handler = _catalogOptions.DisplayRequestHandler;
                             if (_catalogOptions.DisplayRequestPrepare is not null ||
@@ -482,7 +492,7 @@ public sealed class ControlAuthSession
                                 _requestFirstRead = TakeRequestFirstByteAsync(first);
                                 _requestReader = new(_stream, _requestFirstRead, SessionId, Context.TimeProvider,
                                     TimeSpan.FromSeconds(10), CreateRequestDispatch(registration!, handler),
-                                    _catalogCloseRequired!, cancellationToken);
+                                    _catalogCloseRequired!, cancellationToken) { PongMeter = pingMeter };
                                 _catalogHolding = _requestReader.Start();
                             }
                             else _catalogHolding = HoldUntilDisconnectAsync(pendingRead, _stream, cancellationToken);
@@ -490,9 +500,14 @@ public sealed class ControlAuthSession
                             {
                                 _controlWriter = new(_stream, SessionId, Context.TimeProvider,
                                     _catalogOptions.Budget, _catalogCloseRequired!);
+                                HostControlPingLoop? pingLoop = Context.ControlPing is { } ping && pingMeter is not null
+                                    ? new(_controlWriter, pingMeter, Context.TimeProvider, ping.Interval, ping.PendingTimeout)
+                                    : null;
                                 HostControlWriterLifetime lifetime = _requestReader is { } reader
-                                    ? new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken) { InputStopRequired = reader.StopRequired }
-                                    : new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken);
+                                    ? new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken)
+                                        { InputStopRequired = reader.StopRequired, PingLoop = pingLoop }
+                                    : new(_controlWriter, _catalogOptions.Source, _catalogHolding, cancellationToken)
+                                        { PingLoop = pingLoop };
                                 Volatile.Write(ref _controlWriterLifetime, lifetime);
                                 _ = lifetime.Start();
                                 await lifetime.StopRequired.ConfigureAwait(false);
@@ -516,6 +531,7 @@ public sealed class ControlAuthSession
                             _requestCoordinator?.RequestStop();
                             _requestReader?.RequestStop();
                             _controlWriter?.RequestStop();
+                            ReleaseControlPing();
                             _catalogCloseRequired!.TrySetResult();
                         }
                     }
@@ -540,6 +556,7 @@ public sealed class ControlAuthSession
         }
         finally
         {
+            ReleaseControlPing();
             clientTranscript?.Clear();
             if (accessKeyBytes is not null)
             {
@@ -551,6 +568,13 @@ public sealed class ControlAuthSession
                 State = ControlSessionState.Closed;
             }
         }
+    }
+
+    private void ReleaseControlPing()
+    {
+        PingRttMeter? meter = Interlocked.Exchange(ref _controlPingMeter, null);
+        ControlPingTelemetry? telemetry = Interlocked.Exchange(ref _controlPingTelemetry, null);
+        if (meter is not null && telemetry is not null) telemetry.Unregister(SessionId, meter);
     }
 
     private Task DispatchCoordinatedRequest(SessionRegistry.SessionRegistration registration,

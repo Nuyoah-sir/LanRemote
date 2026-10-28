@@ -76,6 +76,7 @@ public sealed partial class AuthenticatedControlSession
         private long _lastHostSeq = -1;
         private bool _sequenceExhausted;
         private bool _stopped;
+        private bool _writeSlotHeld;
         private bool _registrationReleased = true;
 
         internal Task Completion { get { lock (parent._gate) return _active ?? Task.CompletedTask; } }
@@ -88,7 +89,7 @@ public sealed partial class AuthenticatedControlSession
                 {
                     // 未创建发送 attempt 时没有发送根；已有 caller 注册仍须证明已排空。
                     if (_attempt is null) return _registrationReleased;
-                    return _active is { IsCompleted: true } && _registrationReleased &&
+                    return _active is { IsCompleted: true } && _registrationReleased && !_writeSlotHeld &&
                         (_original is null || _attempt.Snapshot.AllOwnedRootsReleased);
                 }
             }
@@ -205,11 +206,22 @@ public sealed partial class AuthenticatedControlSession
                         pending.Catalog.Sequence, pending.Id);
                     return new ValueTask<byte[]>(request.Serialize());
                 }, DisplaySwitchRequestFrame.MaxPayloadByteLength, parent._clock, WriteBudget);
-                lock (parent._gate)
+                // pong 是短写；唯一切屏请求可等其原写入退出，但不排第二个切屏请求。
+                while (original is null)
                 {
-                    if (!IsCurrentUnderGate(pending) || caller.IsCancellationRequested) return null;
-                    _attempt = attempt;
-                    original = _original = attempt.Start();
+                    Task? releaseWait = null;
+                    lock (parent._gate)
+                    {
+                        if (!IsCurrentUnderGate(pending) || caller.IsCancellationRequested) return null;
+                        if (parent._controlWriteSlot.TryEnterUnderGate())
+                        {
+                            _writeSlotHeld = true;
+                            _attempt = attempt;
+                            original = _original = attempt.Start();
+                        }
+                        else releaseWait = parent._controlWriteSlot.ReleaseWaitUnderGate;
+                    }
+                    if (original is null) await releaseWait!.ConfigureAwait(false);
                 }
 
                 await Task.WhenAny(original, attempt.AbortRequired, _stop.Task).ConfigureAwait(false);
@@ -223,6 +235,7 @@ public sealed partial class AuthenticatedControlSession
                     Stop();
                     return null;
                 }
+                lock (parent._gate) ReleaseWriteSlotUnderGate(); // 等回执不再占用网络写槽，pong 可继续。
 
                 bool current;
                 lock (parent._gate)
@@ -253,6 +266,7 @@ public sealed partial class AuthenticatedControlSession
                     catch (Exception caught) { RecordError(OriginalError(original, caught)); }
                 }
                 if (attempt is not null && original is not null) RecordAttemptErrors(attempt.Snapshot);
+                lock (parent._gate) ReleaseWriteSlotUnderGate();
 
                 Task? disposeRegistration = null;
                 try
@@ -285,6 +299,13 @@ public sealed partial class AuthenticatedControlSession
                 if (stopAfterCleanup) Stop();
             }
             return result;
+        }
+
+        private void ReleaseWriteSlotUnderGate()
+        {
+            if (!_writeSlotHeld) return;
+            _writeSlotHeld = false;
+            parent._controlWriteSlot.ExitUnderGate();
         }
 
         private void Stop()

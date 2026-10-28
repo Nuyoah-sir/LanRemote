@@ -47,6 +47,7 @@ internal sealed class HostDisplayRequestReader : IAsyncDisposable
         _closeRequired = closeRequired; _hostToken = hostToken;
     }
 
+    internal PingRttMeter? PongMeter { get; init; }
     internal Task? Completion { get { lock (_gate) return _completion; } }
     internal Task StopRequired => _stop.Task;
     internal Exception? Error { get { lock (_gate) return _error; } }
@@ -102,16 +103,24 @@ internal sealed class HostDisplayRequestReader : IAsyncDisposable
                 if (first is null) return;
                 // 4096字节上限的大端长度前缀首字节必为0；0不是EOF。
                 if (first.Value != 0) throw new FrameProtocolException("request-display-invalid-prefix");
-                DisplaySwitchRequestFrame? request = await ReadRequestAsync(first.Value, errors).ConfigureAwait(false);
-                if (request is null) return;
+                HostControlMessage? message = await ReadRequestAsync(first.Value, errors).ConfigureAwait(false);
+                if (message is null) return;
 
-                lock (_gate)
+                if (message.Request is { } request)
                 {
-                    if (_stopping) return;
-                    if (_handlerWorker is { IsCompleted: false })
-                        throw new FrameProtocolException("request-display-handler-busy");
-                    // 仅已完整成功退出的旧槽可被替换。故障worker先Stop，故不会被覆盖而丢失原错误。
-                    _handlerWorker = Task.Run(() => HandleAsync(request));
+                    lock (_gate)
+                    {
+                        if (_stopping) return;
+                        if (_handlerWorker is { IsCompleted: false })
+                            throw new FrameProtocolException("request-display-handler-busy");
+                        // 仅已完整成功退出的旧槽可被替换。故障worker先Stop，故不会被覆盖而丢失原错误。
+                        _handlerWorker = Task.Run(() => HandleAsync(request));
+                    }
+                }
+                else if (message.Pong is { } pong)
+                {
+                    // 未知/重复回显只是对端历史数据，不占用切屏处理槽，也不令本进程抛异常。
+                    PongMeter!.Settle(pong.EchoedSequence, out _);
                 }
                 // handler同步前缀和原Task不能阻塞唯一读者；EOF负责先通知父撤销/关线，再join。
                 ControlReadAhead.ReadResult? result = await ReadNextAsync(errors).ConfigureAwait(false);
@@ -195,7 +204,9 @@ internal sealed class HostDisplayRequestReader : IAsyncDisposable
         finally { lock (_gate) _readAhead = null; }
     }
 
-    private async Task<DisplaySwitchRequestFrame?> ReadRequestAsync(byte first, List<Exception> errors)
+    private sealed record HostControlMessage(DisplaySwitchRequestFrame? Request, PongFrame? Pong);
+
+    private async Task<HostControlMessage?> ReadRequestAsync(byte first, List<Exception> errors)
     {
         if (!CanContinue()) return null;
         long frequency = _clock.TimestampFrequency;
@@ -228,6 +239,9 @@ internal sealed class HostDisplayRequestReader : IAsyncDisposable
             if (result.End != ControlFrameReadAttempt.AttemptEnd.Frame || payload is null)
                 throw new FrameProtocolException("request-display-read-rejected");
             bool parsed = DisplaySwitchRequestFrame.TryParse(payload, _sessionId, out DisplaySwitchRequestFrame? frame, out _);
+            PongFrame? pong = null;
+            if (!parsed && PongMeter is not null)
+                parsed = PongFrame.TryParse(payload, _sessionId, out pong, out _);
             _ = clock.TimestampFrequency;
             long now = clock.GetTimestamp();
             _ = clock.TimestampFrequency;
@@ -236,7 +250,7 @@ internal sealed class HostDisplayRequestReader : IAsyncDisposable
                 elapsed * TimeSpan.TicksPerSecond >= (Int128)_budget.Ticks * frequency)
                 throw new TimeoutException("request-display-deadline-expired");
             if (!parsed) throw new FrameProtocolException("request-display-invalid-payload");
-            return frame;
+            return new(frame, pong);
         }
         finally
         {

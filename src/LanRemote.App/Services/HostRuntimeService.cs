@@ -40,6 +40,7 @@ public sealed class HostRuntimeService
     private readonly object _intentGate = new();
     // 按真实认证会话保存画质；回调只读当前主机档位属性，不捕获启动参数局部。
     private readonly SessionQualityResolver _sessionQuality;
+    private readonly ControlPingTelemetry _controlPingTelemetry = new();
     private TransportHost? _host;
     private TransportHostStartResult? _startResult;
     private VideoQualitySettings? _activePreviewSettings;
@@ -320,6 +321,9 @@ public sealed class HostRuntimeService
             context = context.WithSessionDisplayRequestPrepare(
                 (sessionId, expectedDisplay, token) =>
                     factory.CreateForDisplayAsync(sessionId, expectedDisplay, token).AsTask());
+            // 仅产品 Host 显式启用；复用目录/回执写者，RTT 按真实会话登记，旧调用方不多发帧。
+            context = context.WithControlPing(_controlPingTelemetry,
+                TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5));
             TransportHost host = TransportHost.CreateWithVideo(
                 addresses, _subnetPolicy, certificate.Certificate, context, factory);
             Task? startupDispose = null;

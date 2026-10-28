@@ -75,7 +75,8 @@ public sealed partial class AuthenticatedControlSession
             Task monitor = _controlMonitor?.Worker ?? Task.CompletedTask;
             // 所有分支都必须退出；不能因某项 fault 而跳过另一项原操作的等待。
             Task switching = _displaySwitch?.Completion ?? Task.CompletedTask;
-            return _closeAndJoin = Task.WhenAll(controlClose, videoJoin, monitor, switching);
+            Task pong = _controlPong?.Completion ?? Task.CompletedTask;
+            return _closeAndJoin = Task.WhenAll(controlClose, videoJoin, monitor, switching, pong);
         }
     }
 
@@ -89,6 +90,7 @@ public sealed partial class AuthenticatedControlSession
             {
                 if (_controlMonitor?.Snapshot.Error is { } monitorError) AddErrors(errors, [monitorError]);
                 if (_displaySwitch?.Error is { } switchError) AddErrors(errors, [switchError]);
+                if (_controlPong?.Error is { } pongError) AddErrors(errors, [pongError]);
                 if (_videoLifetime is not null) AddErrors(errors, _videoLifetime.LifetimeErrors);
             }
             return errors.AsReadOnly();
